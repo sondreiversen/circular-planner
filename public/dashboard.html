@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Circular Planner — Dashboard</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body class="app-page">
+  <header class="app-header">
+    <div class="header-left">
+      <svg viewBox="0 0 60 60" width="28" height="28" aria-hidden="true">
+        <circle cx="30" cy="30" r="28" fill="none" stroke="#0052cc" stroke-width="3"/>
+        <circle cx="30" cy="30" r="16" fill="none" stroke="#0052cc" stroke-width="2" opacity="0.5"/>
+        <circle cx="30" cy="30" r="6" fill="#0052cc"/>
+      </svg>
+      <span class="app-name">Circular Planner</span>
+    </div>
+    <div class="header-right">
+      <span id="header-username" class="header-user"></span>
+      <button id="logout-btn" class="btn btn-ghost">Sign Out</button>
+    </div>
+  </header>
+
+  <main class="dashboard-main">
+    <div class="dashboard-title-row">
+      <h2>My Planners</h2>
+      <button id="new-planner-btn" class="btn btn-primary">+ New Planner</button>
+    </div>
+
+    <div id="planners-grid" class="planners-grid">
+      <div class="loading-state">Loading planners…</div>
+    </div>
+  </main>
+
+  <!-- New planner dialog -->
+  <div id="new-planner-overlay" class="overlay hidden">
+    <div class="dialog-card">
+      <h3>New Planner</h3>
+      <div id="new-planner-error" class="form-error hidden"></div>
+      <form id="new-planner-form">
+        <label>
+          Title
+          <input type="text" id="np-title" placeholder="e.g. 2026 Roadmap" required>
+        </label>
+        <div class="form-row">
+          <label>
+            Start date
+            <input type="date" id="np-start" required>
+          </label>
+          <label>
+            End date
+            <input type="date" id="np-end" required>
+          </label>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" id="np-cancel" class="btn btn-ghost">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/js/dashboard-bundle.js"></script>
+</body>
+</html>

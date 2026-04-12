@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Circular Planner</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="/css/circular-planner.css">
+</head>
+<body class="app-page">
+  <header class="app-header">
+    <div class="header-left">
+      <a href="/dashboard.html" class="back-link">← Dashboard</a>
+      <span id="planner-title-header" class="planner-breadcrumb"></span>
+    </div>
+    <div class="header-right">
+      <button id="share-btn" class="btn btn-ghost" title="Share this planner">Share</button>
+      <span id="header-username" class="header-user"></span>
+      <button id="logout-btn" class="btn btn-ghost">Sign Out</button>
+    </div>
+  </header>
+
+  <main class="planner-main">
+    <div id="planner-loading" class="loading-state">Loading planner…</div>
+    <div id="planner-error" class="error-state hidden"></div>
+    <div id="planner-container" class="hidden"></div>
+  </main>
+
+  <!-- Share dialog -->
+  <div id="share-overlay" class="overlay hidden">
+    <div class="dialog-card dialog-card--wide">
+      <h3>Share Planner</h3>
+      <div id="share-error" class="form-error hidden"></div>
+
+      <div id="share-list" class="share-list"></div>
+
+      <form id="share-form" class="share-add-form">
+        <label>
+          Add by email
+          <input type="email" id="share-email" placeholder="user@example.com">
+        </label>
+        <label>
+          Permission
+          <select id="share-permission">
+            <option value="view">View only</option>
+            <option value="edit">Can edit</option>
+          </select>
+        </label>
+        <button type="submit" class="btn btn-primary">Add</button>
+      </form>
+
+      <div class="dialog-actions">
+        <button id="share-close" class="btn btn-ghost">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/planner-bundle.js"></script>
+</body>
+</html>

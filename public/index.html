@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Circular Planner — Sign In</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body class="auth-page">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <svg viewBox="0 0 60 60" width="48" height="48" aria-hidden="true">
+        <circle cx="30" cy="30" r="28" fill="none" stroke="#0052cc" stroke-width="3"/>
+        <circle cx="30" cy="30" r="16" fill="none" stroke="#0052cc" stroke-width="2" opacity="0.5"/>
+        <circle cx="30" cy="30" r="6" fill="#0052cc"/>
+      </svg>
+      <h1>Circular Planner</h1>
+    </div>
+
+    <div class="tab-bar">
+      <button class="tab active" data-tab="login">Sign In</button>
+      <button class="tab" data-tab="register">Register</button>
+    </div>
+
+    <form id="login-form" class="auth-form">
+      <div id="login-error" class="form-error hidden"></div>
+      <label>
+        Email
+        <input type="email" id="login-email" autocomplete="email" required>
+      </label>
+      <label>
+        Password
+        <input type="password" id="login-password" autocomplete="current-password" required>
+      </label>
+      <button type="submit" class="btn btn-primary btn-full">Sign In</button>
+    </form>
+
+    <form id="register-form" class="auth-form hidden">
+      <div id="register-error" class="form-error hidden"></div>
+      <label>
+        Username
+        <input type="text" id="reg-username" autocomplete="username" required>
+      </label>
+      <label>
+        Email
+        <input type="email" id="reg-email" autocomplete="email" required>
+      </label>
+      <label>
+        Password <span class="hint">(min 8 characters)</span>
+        <input type="password" id="reg-password" autocomplete="new-password" required minlength="8">
+      </label>
+      <button type="submit" class="btn btn-primary btn-full">Create Account</button>
+    </form>
+  </div>
+
+  <script src="/js/auth-bundle.js"></script>
+</body>
+</html>
