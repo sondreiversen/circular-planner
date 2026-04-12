@@ -5,7 +5,7 @@
   "scripts": {
     "build": "npm run build:client && npm run build:server",
     "build:client": "webpack --mode production",
-    "build:server": "tsc -p tsconfig.server.json",
+    "build:server": "tsc -p tsconfig.server.json && cp server/migrations/*.sql dist/server/migrations/",
     "dev": "concurrently \"nodemon --watch server -e ts --exec ts-node server/index.ts\" \"webpack --mode development --watch\"",
     "start": "node dist/server/index.js",
     "migrate": "ts-node server/migrations/migrate.ts",
