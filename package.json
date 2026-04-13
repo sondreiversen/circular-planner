@@ -8,6 +8,7 @@
     "build:server": "tsc -p tsconfig.server.json && cp server/migrations/*.sql dist/server/migrations/",
     "dev": "concurrently \"nodemon --watch server -e ts --exec 'ts-node --project tsconfig.server.json server/index.ts'\" \"esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts --bundle --outdir=public/js --entry-names=[name]-bundle --sourcemap=inline --target=es2020 --watch\"",
     "start": "node dist/server/index.js",
+    "dev:client": "esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts --bundle --outdir=public/js --entry-names=[name]-bundle --sourcemap=inline --target=es2020 --watch",
     "start:go": "go run .",
     "build:go": "npm run build:client && go build -o planner .",
     "migrate": "ts-node server/migrations/migrate.ts",

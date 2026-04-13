@@ -1,10 +1,20 @@
-# Circular Planner — Node.js backend
+# Circular Planner — Go backend
 
-A full-stack circular disc planner (Plandisc-style) with user accounts, data persistence, and sharing. Built with TypeScript, D3.js, Node.js, and PostgreSQL.
+A full-stack circular disc planner (Plandisc-style) with user accounts, data persistence, and sharing. This branch uses a **Go backend** that compiles to a single self-contained binary — no Node.js or database server needed in production.
 
 > **Two backends are available:**
-> - **This branch (`main`)** — Node.js + Express + TypeScript + PostgreSQL
-> - **[`go-backend` branch](../../tree/go-backend)** — Go + SQLite (zero-config, single binary). No Postgres required.
+> - **This branch (`go-backend`)** — Go + SQLite (zero-config, single binary). Postgres supported via `DATABASE_URL`.
+> - **[`main` branch](../../tree/main)** — Node.js + Express + TypeScript + PostgreSQL
+
+---
+
+## Why Go?
+
+- **Single binary** — `go build` produces one executable that contains the server, all migrations, and the compiled frontend. Deploy by copying one file.
+- **SQLite by default** — no database server to install or manage. The DB lives in `./data/planner.db`.
+- **Postgres supported** — set `DATABASE_URL=postgres://...` and the binary switches drivers automatically.
+- **No runtime dependencies** — no Node, no npm, no native modules on the host.
+- **Long-term stability** — Go's standard library covers HTTP, crypto, JSON, and TLS. Minimal third-party surface area.
 
 ---
 
@@ -22,72 +32,88 @@ A full-stack circular disc planner (Plandisc-style) with user accounts, data per
 
 ---
 
-## Requirements
-
-- **Node.js 20+** and **npm**
-- **PostgreSQL 14+**
-
----
-
 ## Quick start
 
+### Option A — Build from source
+
+You need **Go 1.22+** and **npm** (to compile the TypeScript frontend).
+
 ```bash
-git clone https://github.com/sondreiversen/circular-planner.git
+git clone -b go-backend https://github.com/sondreiversen/circular-planner.git
 cd circular-planner
+
+# 1. Build the TypeScript frontend
 npm install
-```
+npm run build:client        # outputs bundled JS to public/js/
 
-Create a `.env` file (copy and edit the values below):
+# 2. Build the Go binary (embeds the compiled frontend)
+go build -o planner .
 
-```env
-DATABASE_URL=postgresql://localhost:5432/circular_planner
-JWT_SECRET=change-me-in-production
-PORT=3000
-```
-
-Create the `circular_planner` database in Postgres, then:
-
-```bash
-npm run build   # compile TypeScript + bundle frontend with esbuild
-npm start       # start server — migrations run automatically on first launch
+# 3. Run
+./planner
 ```
 
 Open [http://localhost:3000](http://localhost:3000), register an account, and create your first planner.
 
-### Docker
+The database is created automatically at `./data/planner.db`. No configuration required.
+
+---
+
+### Option B — Postgres instead of SQLite
+
+```bash
+DATABASE_URL=postgresql://user:password@localhost:5432/circular_planner ./planner
+```
+
+The binary detects the driver from the URL prefix and runs all migrations automatically.
+
+---
+
+### Option C — Docker
 
 ```bash
 docker compose up --build
 ```
 
-Starts PostgreSQL and the app together. Set `JWT_SECRET` via `.env` or the environment before running.
+Uses SQLite by default. To use Postgres, set `DATABASE_URL` in `.env` or the environment.
 
 ---
 
-## Development
+## Development (live reload)
+
+To work on the frontend or backend without rebuilding the binary each time:
+
+```bash
+# Terminal 1 — watch the TypeScript frontend
+npm run dev:client          # esbuild watch → public/js/
+
+# Terminal 2 — run the Go server directly
+go run .
+```
+
+Or run both together:
 
 ```bash
 npm run dev
 ```
 
-Starts the Node server (auto-restarting via `nodemon`) and `esbuild` in watch mode concurrently. Changes to server or frontend code reload automatically.
-
-Other commands:
+This starts the Node.js backend (for the Node version) on port 3000. To use the Go backend during development:
 
 ```bash
-npm run build:client   # bundle frontend only (outputs to public/js/)
-npm run build:server   # compile server TypeScript only
-npm test               # Jest frontend unit tests
-npm run migrate        # run database migrations manually
+# Watch frontend + run Go server
+npm run build:client && PORT=4000 go run .
 ```
 
 ---
 
 ## Configuration
 
+All settings are read from environment variables. A `.env` file in the working directory is loaded automatically.
+
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_URL` | `postgresql://localhost:5432/circular_planner` | Postgres connection string |
+| `DATABASE_URL` | `sqlite:./data/planner.db` | Database URL. Use `postgres://...` for Postgres, `sqlite:/path/to/file.db` for SQLite. |
+| `DATA_DIR` | `./data` | Directory for the SQLite database file (ignored when using Postgres) |
 | `JWT_SECRET` | *(insecure default — change this)* | Secret for signing JWT tokens |
 | `PORT` | `3000` | HTTP port |
 | `HTTPS_PORT` | `3443` | HTTPS port (requires TLS config below) |
@@ -101,27 +127,43 @@ npm run migrate        # run database migrations manually
 | `GITLAB_REDIRECT_URI` | — | OAuth2 callback URL |
 | `GITLAB_SCOPES` | `read_user openid email` | OAuth2 scopes to request |
 
+Example `.env`:
+
+```env
+JWT_SECRET=a-long-random-string
+DATA_DIR=./data
+PORT=3000
+```
+
 ---
 
 ## Project structure
 
 ```
-server/              Node.js + Express backend (TypeScript)
-  routes/            auth, planners, shares
-  migrations/        SQL schema (applied automatically on startup)
-  middleware/        JWT auth, access control
-client/src/          Frontend TypeScript (D3.js)
-public/              Static HTML + CSS
-public/js/           Compiled JS bundles (generated, gitignored)
+main.go              Go entry point — HTTP server, routing, embedded assets
+internal/
+  config/            Environment variable loading
+  db/                DB wrapper (SQLite + Postgres), migration runner
+  db/migrations/     SQL schema files (applied automatically on startup)
+  middleware/        JWT auth, access control helpers
+  auth/              /api/auth/* route handlers
+  planners/          /api/planners/* route handlers
+  share/             /api/planners/:id/shares/* route handlers
+client/src/          Frontend TypeScript (D3.js) — shared with main branch
+public/              Static HTML + CSS — embedded into the binary at build time
+public/js/           Compiled JS bundles (generated by npm run build:client, gitignored)
 ```
 
 ---
 
-## Looking for the Go version?
+## Migrating from the Node version
 
-Switch to the [`go-backend` branch](../../tree/go-backend) for a rewrite that:
+If you have an existing PostgreSQL database from the Node backend, the Go server will reuse it without any data loss. Point `DATABASE_URL` at the same Postgres instance — the Go migration runner uses its own `schema_migrations` table and the `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` clauses in each migration make them safe to apply on top of the existing schema.
 
-- Compiles to a **single self-contained binary** (no Node, no npm in production)
-- Uses **SQLite by default** — no Postgres needed to get started
-- Still supports Postgres by setting `DATABASE_URL=postgres://...`
-- Embeds the compiled frontend inside the binary — one file to deploy
+There is no migration path from Postgres to SQLite. If you want to switch to SQLite, start fresh.
+
+---
+
+## Looking for the Node version?
+
+Switch to the [`main` branch](../../tree/main) for the original Node.js + Express + PostgreSQL backend.
