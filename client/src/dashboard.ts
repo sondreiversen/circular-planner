@@ -1,4 +1,5 @@
-import { api, isLoggedIn, clearToken } from './api-client';
+import { api, isLoggedIn, parseJWT, logout } from './api-client';
+import { escapeHtml } from './utils';
 import { PlannerSummary } from './types';
 
 const today = new Date();
@@ -7,17 +8,14 @@ const thisYear = today.getFullYear();
 document.addEventListener('DOMContentLoaded', async () => {
   if (!isLoggedIn()) { window.location.href = '/index.html'; return; }
 
-  // Show username
-  try {
-    const payload = JSON.parse(atob(localStorage.getItem('cp_token')!.split('.')[1]));
+  const token = localStorage.getItem('cp_token');
+  if (token) {
+    const payload = parseJWT(token);
     const el = document.getElementById('header-username');
-    if (el) el.textContent = payload.username;
-  } catch { /* ignore */ }
+    if (el && payload.username) el.textContent = payload.username as string;
+  }
 
-  document.getElementById('logout-btn')?.addEventListener('click', () => {
-    clearToken();
-    window.location.href = '/index.html';
-  });
+  document.getElementById('logout-btn')?.addEventListener('click', logout);
 
   document.getElementById('new-planner-btn')?.addEventListener('click', () => {
     // Set sensible defaults in the dialog
@@ -79,11 +77,11 @@ async function loadPlanners(): Promise<void> {
       const badge = p.isOwner ? 'badge-owner' : (p.permission === 'edit' ? 'badge-edit' : 'badge-view');
       const badgeText = p.isOwner ? 'Owner' : p.permission;
       card.innerHTML = `
-        <div class="planner-card-title">${esc(p.title)}</div>
+        <div class="planner-card-title">${escapeHtml(p.title)}</div>
         <div class="planner-card-dates">${p.startDate} → ${p.endDate}</div>
         <div class="planner-card-meta">
           <span class="badge ${badge}">${badgeText}</span>
-          ${!p.isOwner ? `<span style="font-size:11px;color:#8896a5;">by ${esc(p.ownerName)}</span>` : ''}
+          ${!p.isOwner ? `<span style="font-size:11px;color:#8896a5;">by ${escapeHtml(p.ownerName)}</span>` : ''}
         </div>
       `;
       card.addEventListener('click', () => { window.location.href = `/planner.html?id=${p.id}`; });
@@ -94,6 +92,3 @@ async function loadPlanners(): Promise<void> {
   }
 }
 
-function esc(s: string): string {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}

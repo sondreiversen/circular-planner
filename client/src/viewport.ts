@@ -135,6 +135,7 @@ export function getGridSpec(viewport: Viewport): GridSpec {
   const majorTicks: Date[] = [];
   const minorTicks: Date[] = [];
   const labels: Array<{ date: Date; text: string }> = [];
+  const subLabels: Array<{ date: Date; text: string }> = [];
 
   // Does the viewport span multiple calendar years?
   const spansYears = windowStart.getFullYear() !== windowEnd.getFullYear();
@@ -144,7 +145,7 @@ export function getGridSpec(viewport: Viewport): GridSpec {
       iterateMonths(windowStart, windowEnd, (d) => {
         majorTicks.push(d);
       });
-      // Labels at midpoint of each month — include year suffix if window spans years
+      // Month labels: just the abbreviated month name (day sub-labels provide scale)
       iterateMonths(windowStart, windowEnd, (d) => {
         const mid = new Date(d.getTime());
         mid.setDate(15);
@@ -155,6 +156,20 @@ export function getGridSpec(viewport: Viewport): GridSpec {
           labels.push({ date: mid, text });
         }
       });
+      // Day sub-labels: days 1, 8, 15, 22 as minor ticks + inner numeric labels
+      {
+        const DAY_MARKERS = [1, 8, 15, 22];
+        iterateMonths(windowStart, windowEnd, (d) => {
+          DAY_MARKERS.forEach(day => {
+            const markerDate = new Date(d.getFullYear(), d.getMonth(), day);
+            if (markerDate >= windowStart && markerDate <= windowEnd) {
+              // Skip day 1 — it coincides with the month major tick
+              if (day !== 1) minorTicks.push(markerDate);
+              subLabels.push({ date: markerDate, text: String(day) });
+            }
+          });
+        });
+      }
       break;
 
     case ZoomLevel.Quarter:
@@ -164,7 +179,7 @@ export function getGridSpec(viewport: Viewport): GridSpec {
       iterateWeeks(windowStart, windowEnd, (d) => {
         minorTicks.push(d);
       });
-      // Labels: month name with year suffix
+      // Labels: month name + year suffix when spanning years
       iterateMonths(windowStart, windowEnd, (d) => {
         const mid = new Date(d.getTime());
         mid.setDate(15);
@@ -198,7 +213,7 @@ export function getGridSpec(viewport: Viewport): GridSpec {
       break;
   }
 
-  return { majorTicks, minorTicks, labels };
+  return { majorTicks, minorTicks, labels, subLabels: subLabels.length ? subLabels : undefined };
 }
 
 /** Human-readable label for the current viewport */

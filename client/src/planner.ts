@@ -19,8 +19,14 @@ export class Planner {
   private dataManager: DataManager;
   private container: HTMLElement;
   private toolbar!: HTMLElement;
-  private filterRowVisible = false;
+  private sidebarCollapsed = false;
   private searchDebounce: ReturnType<typeof setTimeout> | null = null;
+
+  // Refs to toolbar elements that change on viewport updates
+  private vpLabelEl!: HTMLSpanElement;
+  private yearSelEl!: HTMLSelectElement;
+  private zoomOutBtnEl!: HTMLButtonElement;
+  private zoomInBtnEl!: HTMLButtonElement;
 
   constructor(container: HTMLElement, config: PlannerConfig, initialData: PlannerData) {
     this.container = container;
@@ -30,22 +36,58 @@ export class Planner {
     this.filterState = { hiddenLaneIds: new Set(), searchTerm: '' };
     this.dataManager = new DataManager(this.config);
 
+    // Restore sidebar collapsed state
+    this.sidebarCollapsed = localStorage.getItem('cp_sidebar_collapsed') === 'true';
+
     this.mount();
   }
 
   private mount(): void {
-    this.container.style.cssText = 'position:relative;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;';
+    this.container.style.cssText = 'position:relative;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;height:100%;';
 
     this.toolbar = document.createElement('div');
     this.toolbar.className = 'cp-toolbar';
     this.buildToolbar();
     this.container.appendChild(this.toolbar);
 
+    // Page body: sidebar + disc
+    const pageBody = document.createElement('div');
+    pageBody.className = 'cp-page-body';
+    this.container.appendChild(pageBody);
+
+    // Sidebar
+    const sidebar = document.createElement('aside');
+    sidebar.className = 'cp-sidebar' + (this.sidebarCollapsed ? ' collapsed' : '');
+    sidebar.id = 'cp-sidebar';
+    pageBody.appendChild(sidebar);
+
+    const sidebarToggle = document.createElement('button');
+    sidebarToggle.className = 'cp-sidebar-toggle';
+    sidebarToggle.title = this.sidebarCollapsed ? 'Expand filters' : 'Collapse filters';
+    sidebarToggle.textContent = this.sidebarCollapsed ? '›' : '‹';
+    sidebarToggle.addEventListener('click', () => {
+      this.sidebarCollapsed = !this.sidebarCollapsed;
+      sidebar.classList.toggle('collapsed', this.sidebarCollapsed);
+      sidebarToggle.textContent = this.sidebarCollapsed ? '›' : '‹';
+      sidebarToggle.title = this.sidebarCollapsed ? 'Expand filters' : 'Collapse filters';
+      localStorage.setItem('cp_sidebar_collapsed', String(this.sidebarCollapsed));
+    });
+    sidebar.appendChild(sidebarToggle);
+
+    const sidebarBody = document.createElement('div');
+    sidebarBody.className = 'cp-sidebar-body';
+    sidebar.appendChild(sidebarBody);
+    this.buildSidebar(sidebarBody);
+
+    // Main disc area
+    const mainArea = document.createElement('div');
+    mainArea.className = 'cp-disc-area';
+    pageBody.appendChild(mainArea);
+
     const svgContainer = document.createElement('div');
     svgContainer.className = 'cp-svg-container';
-    svgContainer.style.cssText = 'width:100%;max-width:800px;outline:none;';
     svgContainer.tabIndex = 0;
-    this.container.appendChild(svgContainer);
+    mainArea.appendChild(svgContainer);
 
     this.renderer = new Renderer(svgContainer, this.config, this.data, this.viewport);
     this.renderer.setHandlers(
@@ -69,20 +111,136 @@ export class Planner {
     });
   }
 
+  private buildSidebar(body: HTMLElement): void {
+    body.innerHTML = '';
+
+    // Section: Search
+    const searchSection = document.createElement('div');
+    searchSection.className = 'cp-sidebar-section';
+
+    const searchLabel = document.createElement('div');
+    searchLabel.className = 'cp-sidebar-label';
+    searchLabel.textContent = 'Search';
+    searchSection.appendChild(searchLabel);
+
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.placeholder = 'Search activities…';
+    searchInput.className = 'cp-filter-input cp-filter-input--full';
+    searchInput.value = this.filterState.searchTerm;
+    searchInput.addEventListener('input', () => {
+      if (this.searchDebounce) clearTimeout(this.searchDebounce);
+      this.searchDebounce = setTimeout(() => {
+        this.filterState.searchTerm = searchInput.value.toLowerCase().trim();
+        this.renderer.update(this.data, this.filterState);
+      }, 200);
+    });
+    searchSection.appendChild(searchInput);
+    body.appendChild(searchSection);
+
+    // Section: Lanes
+    const lanesSection = document.createElement('div');
+    lanesSection.className = 'cp-sidebar-section';
+
+    const lanesLabel = document.createElement('div');
+    lanesLabel.className = 'cp-sidebar-label';
+    lanesLabel.textContent = 'Lanes';
+    lanesSection.appendChild(lanesLabel);
+
+    const sorted = [...this.data.lanes].sort((a, b) => a.order - b.order);
+    sorted.forEach(lane => {
+      const laneRow = document.createElement('div');
+      laneRow.className = 'cp-sidebar-lane-row';
+
+      const toggleLabel = document.createElement('label');
+      toggleLabel.className = 'cp-lane-toggle';
+      toggleLabel.title = `Toggle visibility: ${lane.name}`;
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !this.filterState.hiddenLaneIds.has(lane.id);
+      cb.style.cssText = 'margin:0;cursor:pointer;';
+      cb.addEventListener('change', () => this.handleToggleLane(lane.id));
+
+      const dot = document.createElement('span');
+      dot.style.cssText = `width:10px;height:10px;border-radius:50%;background:${lane.color || '#ccc'};display:inline-block;border:1px solid rgba(0,0,0,0.15);flex-shrink:0;`;
+
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = lane.name;
+      nameSpan.style.cssText = `flex:1;opacity:${this.filterState.hiddenLaneIds.has(lane.id) ? '0.4' : '1'};`;
+
+      toggleLabel.appendChild(cb);
+      toggleLabel.appendChild(dot);
+      toggleLabel.appendChild(nameSpan);
+      laneRow.appendChild(toggleLabel);
+
+      const editBtn = document.createElement('button');
+      editBtn.textContent = '✎';
+      editBtn.title = `Edit lane: ${lane.name}`;
+      editBtn.className = 'cp-btn';
+      editBtn.style.cssText = 'padding:3px 7px;font-size:11px;';
+      editBtn.addEventListener('click', () => this.handleEditLane(lane));
+      laneRow.appendChild(editBtn);
+
+      lanesSection.appendChild(laneRow);
+    });
+
+    const addLaneBtn = document.createElement('button');
+    addLaneBtn.textContent = '+ Add Lane';
+    addLaneBtn.className = 'cp-btn cp-btn-primary';
+    addLaneBtn.style.cssText = 'width:100%;margin-top:8px;';
+    addLaneBtn.addEventListener('click', () => this.handleAddLane());
+    lanesSection.appendChild(addLaneBtn);
+    body.appendChild(lanesSection);
+
+    // Section: Date range
+    const rangeSection = document.createElement('div');
+    rangeSection.className = 'cp-sidebar-section';
+
+    const rangeLabel = document.createElement('div');
+    rangeLabel.className = 'cp-sidebar-label';
+    rangeLabel.textContent = 'Date Range';
+    rangeSection.appendChild(rangeLabel);
+
+    const rangeStart = document.createElement('input');
+    rangeStart.type = 'date';
+    rangeStart.value = formatDate(this.viewport.windowStart);
+    rangeStart.className = 'cp-filter-input cp-filter-input--full';
+    rangeSection.appendChild(rangeStart);
+
+    const rangeTo = document.createElement('div');
+    rangeTo.style.cssText = 'font-size:11px;color:#6b7280;text-align:center;margin:2px 0;';
+    rangeTo.textContent = '→';
+    rangeSection.appendChild(rangeTo);
+
+    const rangeEnd = document.createElement('input');
+    rangeEnd.type = 'date';
+    rangeEnd.value = formatDate(this.viewport.windowEnd);
+    rangeEnd.className = 'cp-filter-input cp-filter-input--full';
+    rangeSection.appendChild(rangeEnd);
+
+    const applyBtn = document.createElement('button');
+    applyBtn.textContent = 'Apply';
+    applyBtn.className = 'cp-btn cp-btn-primary';
+    applyBtn.style.cssText = 'width:100%;margin-top:6px;';
+    applyBtn.addEventListener('click', () => {
+      if (!rangeStart.value || !rangeEnd.value) return;
+      if (rangeStart.value >= rangeEnd.value) { alert('Start must be before end date.'); return; }
+      this.handleCustomRange(parseDate(rangeStart.value), parseDate(rangeEnd.value));
+    });
+    rangeSection.appendChild(applyBtn);
+    body.appendChild(rangeSection);
+  }
+
   private buildToolbar(): void {
     this.toolbar.innerHTML = '';
-    this.toolbar.style.cssText = 'display:flex;flex-direction:column;gap:2px;margin-bottom:10px;';
-
-    // ---- Primary row ----
-    const primary = document.createElement('div');
-    primary.className = 'cp-toolbar-primary';
-    primary.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;';
+    this.toolbar.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 8px;background:white;border-bottom:1px solid #e4e7ed;';
 
     // Title
     const title = document.createElement('span');
     title.style.cssText = 'font-weight:600;font-size:14px;color:#1a2332;margin-right:4px;';
     title.textContent = this.config.title;
-    primary.appendChild(title);
+    this.toolbar.appendChild(title);
 
     // Year selector
     const yearSel = document.createElement('select');
@@ -99,12 +257,13 @@ export class Planner {
       yearSel.appendChild(opt);
     }
     yearSel.addEventListener('change', () => this.handleYearSelect(Number(yearSel.value)));
-    primary.appendChild(yearSel);
+    this.toolbar.appendChild(yearSel);
+    this.yearSelEl = yearSel;
 
     // Spacer
     const spacer = document.createElement('span');
     spacer.style.cssText = 'flex:1;';
-    primary.appendChild(spacer);
+    this.toolbar.appendChild(spacer);
 
     // Navigation + zoom controls
     const zoomControls = document.createElement('div');
@@ -123,6 +282,7 @@ export class Planner {
     vpLabel.title = 'Click to zoom out';
     vpLabel.addEventListener('click', () => this.handleZoomOut());
     zoomControls.appendChild(vpLabel);
+    this.vpLabelEl = vpLabel;
 
     const navRight = document.createElement('button');
     navRight.textContent = '▶';
@@ -138,6 +298,7 @@ export class Planner {
     zoomOutBtn.disabled = !canZoomOut(this.viewport);
     zoomOutBtn.addEventListener('click', () => this.handleZoomOut());
     zoomControls.appendChild(zoomOutBtn);
+    this.zoomOutBtnEl = zoomOutBtn;
 
     const zoomInBtn = document.createElement('button');
     zoomInBtn.textContent = '+';
@@ -146,153 +307,29 @@ export class Planner {
     zoomInBtn.disabled = !canZoomIn(this.viewport);
     zoomInBtn.addEventListener('click', () => this.handleZoomIn());
     zoomControls.appendChild(zoomInBtn);
+    this.zoomInBtnEl = zoomInBtn;
 
-    primary.appendChild(zoomControls);
-
-    // Filter toggle
-    const filterBtn = document.createElement('button');
-    filterBtn.textContent = this.filterRowVisible ? '▲ Filter' : '▼ Filter';
-    filterBtn.title = 'Toggle filters';
-    filterBtn.className = this.filterRowVisible ? 'cp-btn cp-btn-active' : 'cp-btn';
-    filterBtn.addEventListener('click', () => {
-      this.filterRowVisible = !this.filterRowVisible;
-      this.buildToolbar();
-    });
-    primary.appendChild(filterBtn);
-
-    // Add lane button
-    const addLaneBtn = document.createElement('button');
-    addLaneBtn.textContent = '+ Lane';
-    addLaneBtn.className = 'cp-btn cp-btn-primary';
-    addLaneBtn.addEventListener('click', () => this.handleAddLane());
-    primary.appendChild(addLaneBtn);
-
-    // Per-lane edit buttons (always visible)
-    const sorted = [...this.data.lanes].sort((a, b) => a.order - b.order);
-    sorted.forEach(lane => {
-      const laneBtn = document.createElement('button');
-      laneBtn.textContent = `✎ ${lane.name}`;
-      laneBtn.title = `Edit or delete lane: ${lane.name}`;
-      laneBtn.className = 'cp-btn';
-      laneBtn.addEventListener('click', () => this.handleEditLane(lane));
-      primary.appendChild(laneBtn);
-    });
-
-    this.toolbar.appendChild(primary);
-
-    // ---- Secondary row (filters + lane management) ----
-    if (this.filterRowVisible) {
-      const secondary = document.createElement('div');
-      secondary.className = 'cp-secondary-row';
-
-      // Search input
-      const searchInput = document.createElement('input');
-      searchInput.type = 'text';
-      searchInput.placeholder = 'Search activities…';
-      searchInput.className = 'cp-filter-input';
-      searchInput.value = this.filterState.searchTerm;
-      searchInput.addEventListener('input', () => {
-        if (this.searchDebounce) clearTimeout(this.searchDebounce);
-        this.searchDebounce = setTimeout(() => {
-          this.filterState.searchTerm = searchInput.value.toLowerCase().trim();
-          this.refresh();
-        }, 200);
-      });
-      secondary.appendChild(searchInput);
-
-      // Separator
-      const sep = document.createElement('span');
-      sep.style.cssText = 'color:#c8cdd6;margin:0 2px;';
-      sep.textContent = '|';
-      secondary.appendChild(sep);
-
-      // Lane visibility toggles + edit buttons
-      const sorted = [...this.data.lanes].sort((a, b) => a.order - b.order);
-      sorted.forEach(lane => {
-        const laneRow = document.createElement('label');
-        laneRow.className = 'cp-lane-toggle';
-        laneRow.title = `Toggle visibility: ${lane.name}`;
-
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.checked = !this.filterState.hiddenLaneIds.has(lane.id);
-        cb.style.cssText = 'margin:0;cursor:pointer;';
-        cb.addEventListener('change', () => this.handleToggleLane(lane.id));
-
-        const dot = document.createElement('span');
-        dot.style.cssText = `width:10px;height:10px;border-radius:50%;background:${lane.color || '#ccc'};display:inline-block;border:1px solid rgba(0,0,0,0.15);flex-shrink:0;`;
-
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = lane.name;
-        nameSpan.style.cssText = `opacity:${this.filterState.hiddenLaneIds.has(lane.id) ? '0.4' : '1'};`;
-
-        laneRow.appendChild(cb);
-        laneRow.appendChild(dot);
-        laneRow.appendChild(nameSpan);
-        secondary.appendChild(laneRow);
-
-        // Edit button for this lane
-        const editBtn = document.createElement('button');
-        editBtn.textContent = '✎';
-        editBtn.title = `Edit lane: ${lane.name}`;
-        editBtn.className = 'cp-btn';
-        editBtn.style.cssText += 'padding:3px 7px;font-size:11px;';
-        editBtn.addEventListener('click', () => this.handleEditLane(lane));
-        secondary.appendChild(editBtn);
-      });
-
-      // Custom date range
-      const rangeSep = document.createElement('span');
-      rangeSep.style.cssText = 'color:#c8cdd6;margin:0 2px;';
-      rangeSep.textContent = '|';
-      secondary.appendChild(rangeSep);
-
-      const rangeLabel = document.createElement('span');
-      rangeLabel.style.cssText = 'font-size:11px;color:#6b7280;white-space:nowrap;';
-      rangeLabel.textContent = 'Range:';
-      secondary.appendChild(rangeLabel);
-
-      const rangeStart = document.createElement('input');
-      rangeStart.type = 'date';
-      rangeStart.value = formatDate(this.viewport.windowStart);
-      rangeStart.className = 'cp-filter-input';
-      rangeStart.style.cssText += 'width:130px;';
-      secondary.appendChild(rangeStart);
-
-      const rangeTo = document.createElement('span');
-      rangeTo.style.cssText = 'font-size:11px;color:#6b7280;';
-      rangeTo.textContent = '→';
-      secondary.appendChild(rangeTo);
-
-      const rangeEnd = document.createElement('input');
-      rangeEnd.type = 'date';
-      rangeEnd.value = formatDate(this.viewport.windowEnd);
-      rangeEnd.className = 'cp-filter-input';
-      rangeEnd.style.cssText += 'width:130px;';
-      secondary.appendChild(rangeEnd);
-
-      const applyBtn = document.createElement('button');
-      applyBtn.textContent = 'Apply';
-      applyBtn.className = 'cp-btn cp-btn-primary';
-      applyBtn.addEventListener('click', () => {
-        if (!rangeStart.value || !rangeEnd.value) return;
-        if (rangeStart.value >= rangeEnd.value) { alert('Start must be before end date.'); return; }
-        this.handleCustomRange(parseDate(rangeStart.value), parseDate(rangeEnd.value));
-      });
-      secondary.appendChild(applyBtn);
-
-      this.toolbar.appendChild(secondary);
-    }
+    this.toolbar.appendChild(zoomControls);
   }
 
   private refresh(): void {
     this.renderer.update(this.data, this.filterState);
-    this.buildToolbar();
+    // Rebuild sidebar to reflect lane changes
+    const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
+    if (sidebarBody) this.buildSidebar(sidebarBody);
   }
 
   private refreshViewport(): void {
     this.renderer.updateViewport(this.viewport);
-    this.buildToolbar();
+    this.updateViewportState();
+  }
+
+  /** Update only the viewport-dependent toolbar elements — no DOM rebuild */
+  private updateViewportState(): void {
+    this.vpLabelEl.textContent = viewportLabel(this.viewport);
+    this.yearSelEl.value = String(this.viewport.windowStart.getFullYear());
+    this.zoomOutBtnEl.disabled = !canZoomOut(this.viewport);
+    this.zoomInBtnEl.disabled  = !canZoomIn(this.viewport);
   }
 
   private save(): void {
@@ -336,7 +373,9 @@ export class Planner {
     } else {
       this.filterState.hiddenLaneIds.add(laneId);
     }
-    this.refresh();
+    this.renderer.update(this.data, this.filterState);
+    const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
+    if (sidebarBody) this.buildSidebar(sidebarBody);
   }
 
   // ==================== Activity/Lane handlers ====================

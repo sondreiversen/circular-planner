@@ -1,5 +1,5 @@
 import { Activity, Lane } from './types';
-import { COLOR_PALETTE, LANE_COLORS, randomId, formatDate, parseDate } from './utils';
+import { COLOR_PALETTE, LANE_COLORS, randomId, formatDate, parseDate, escapeHtml } from './utils';
 
 type SaveActivityCallback = (activity: Activity) => void;
 type DeleteActivityCallback = (activityId: string) => void;
@@ -63,7 +63,7 @@ export function showActivityDialog(
 
   const laneOptions = lanes
     .sort((a, b) => a.order - b.order)
-    .map(l => `<option value="${l.id}" ${(existingActivity?.laneId || laneId) === l.id ? 'selected' : ''}>${escHtml(l.name)}</option>`)
+    .map(l => `<option value="${l.id}" ${(existingActivity?.laneId || laneId) === l.id ? 'selected' : ''}>${escapeHtml(l.name)}</option>`)
     .join('');
 
   const colorPicker = createColorPicker(defaultColor, COLOR_PALETTE);
@@ -85,7 +85,7 @@ export function showActivityDialog(
       <h2 style="margin:0 0 16px;font-size:16px;font-family:sans-serif;">${isEdit ? 'Edit Activity' : 'Add Activity'}</h2>
       <label style="display:block;margin-bottom:12px;font-family:sans-serif;font-size:13px;">
         Title <span style="color:red">*</span>
-        <input id="cp-act-title" type="text" value="${escHtml(existingActivity?.title || '')}"
+        <input id="cp-act-title" type="text" value="${escapeHtml(existingActivity?.title || '')}"
           style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;">
       </label>
       <div style="display:flex;gap:12px;margin-bottom:12px;">
@@ -109,7 +109,7 @@ export function showActivityDialog(
       <label style="display:block;margin-bottom:12px;font-family:sans-serif;font-size:13px;">
         Description
         <textarea id="cp-act-desc" rows="3"
-          style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;resize:vertical;">${escHtml(existingActivity?.description || '')}</textarea>
+          style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;resize:vertical;">${escapeHtml(existingActivity?.description || '')}</textarea>
       </label>
       <label style="display:block;margin-bottom:16px;font-family:sans-serif;font-size:13px;">
         Colour
@@ -201,7 +201,7 @@ export function showLaneDialog(
       <h2 style="margin:0 0 16px;font-size:16px;font-family:sans-serif;">${isEdit ? 'Edit Lane' : 'Add Lane'}</h2>
       <label style="display:block;margin-bottom:12px;font-family:sans-serif;font-size:13px;">
         Lane name <span style="color:red">*</span>
-        <input id="cp-lane-name" type="text" value="${escHtml(existingLane?.name || '')}"
+        <input id="cp-lane-name" type="text" value="${escapeHtml(existingLane?.name || '')}"
           style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;">
       </label>
       <label style="display:block;margin-bottom:16px;font-family:sans-serif;font-size:13px;">
@@ -256,6 +256,3 @@ export function showLaneDialog(
   (document.getElementById('cp-lane-name') as HTMLInputElement)?.focus();
 }
 
-function escHtml(str: string): string {
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}

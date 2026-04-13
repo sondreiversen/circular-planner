@@ -1,51 +1,37 @@
 import express from 'express';
+import http from 'http';
+import https from 'https';
+import fs from 'fs';
 import path from 'path';
 import helmet from 'helmet';
 import cors from 'cors';
-import fs from 'fs';
+import cookieParser from 'cookie-parser';
 import { config } from './config';
-import { pool } from './db';
+import { runMigrations } from './migrations/run';
 import authRoutes from './routes/auth';
 import plannerRoutes from './routes/planners';
 import shareRoutes from './routes/share';
 
-async function runMigrations(): Promise<void> {
-  const client = await pool.connect();
-  try {
-    await client.query(`CREATE TABLE IF NOT EXISTS migrations (
-      id SERIAL PRIMARY KEY, filename VARCHAR(255) UNIQUE NOT NULL, applied_at TIMESTAMPTZ DEFAULT NOW()
-    )`);
-    const dir = path.join(__dirname, 'migrations');
-    const files = fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort();
-    for (const file of files) {
-      const { rows } = await client.query('SELECT 1 FROM migrations WHERE filename=$1', [file]);
-      if (rows.length) continue;
-      const sql = fs.readFileSync(path.join(dir, file), 'utf8');
-      await client.query('BEGIN');
-      await client.query(sql);
-      await client.query('INSERT INTO migrations(filename) VALUES($1)', [file]);
-      await client.query('COMMIT');
-      console.log(`  [migrated] ${file}`);
-    }
-  } finally {
-    client.release();
-  }
-}
-
 const app = express();
 
-app.use(helmet({ contentSecurityPolicy: false }));
+const isTls = !!(config.tlsCertFile && config.tlsKeyFile);
+
+app.use(helmet({
+  contentSecurityPolicy: false,
+  hsts: isTls ? { maxAge: 31536000 } : false,
+}));
 app.use(cors());
 app.use(express.json());
+app.use(cookieParser(config.jwtSecret)); // used for signed OAuth state cookie
 
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/planners', plannerRoutes);
 app.use('/api/planners/:plannerId/shares', shareRoutes);
 
-// Serve built frontend in production
-const publicDir = path.join(__dirname, '../../public');
-const distDir = path.join(__dirname, '../../dist/public');
+// Serve built frontend
+const publicDir = path.join(process.cwd(), 'public');
+const distDir = path.join(process.cwd(), 'dist/public');
 app.use(express.static(publicDir));
 app.use('/js', express.static(path.join(distDir, 'js')));
 
@@ -54,12 +40,40 @@ app.get('*', (_req, res) => {
   res.sendFile(path.join(publicDir, 'index.html'));
 });
 
-runMigrations()
-  .then(() => {
-    app.listen(config.port, () => {
+function startServers(): void {
+  if (isTls) {
+    const tlsOptions = {
+      cert: fs.readFileSync(config.tlsCertFile!),
+      key: fs.readFileSync(config.tlsKeyFile!),
+    };
+
+    https.createServer(tlsOptions, app).listen(config.httpsPort, () => {
+      console.log(`Circular Planner running at https://localhost:${config.httpsPort}`);
+    });
+
+    // HTTP → HTTPS redirect (or plain HTTP when forceHttps is false)
+    const httpApp = express();
+    if (config.forceHttps) {
+      httpApp.use((req, res) => {
+        const host = (req.headers.host || '').replace(/:\d+$/, '');
+        res.redirect(301, `https://${host}:${config.httpsPort}${req.url}`);
+      });
+    } else {
+      httpApp.use(app);
+    }
+    http.createServer(httpApp).listen(config.port, () => {
+      console.log(`HTTP listener on port ${config.port}${config.forceHttps ? ' (→ HTTPS redirect)' : ''}`);
+    });
+  } else {
+    console.warn('[WARNING] TLS_CERT_FILE / TLS_KEY_FILE not set — serving over HTTP only.');
+    http.createServer(app).listen(config.port, () => {
       console.log(`Circular Planner running at http://localhost:${config.port}`);
     });
-  })
+  }
+}
+
+runMigrations(path.join(__dirname, 'migrations'))
+  .then(startServers)
   .catch(err => {
     console.error('Migration failed:', err);
     process.exit(1);

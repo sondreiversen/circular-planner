@@ -42,6 +42,20 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+export function parseJWT(token: string): Record<string, unknown> {
+  try { return JSON.parse(atob(token.split('.')[1])); }
+  catch { return {}; }
+}
+
+export function logout(): void {
+  clearToken();
+  window.location.href = '/index.html';
+}
+
+export function requireLogin(): void {
+  if (!isLoggedIn()) window.location.href = '/index.html';
+}
+
 export const api = {
   get:    <T>(path: string)                    => request<T>('GET',    path),
   post:   <T>(path: string, body: unknown)     => request<T>('POST',   path, body),

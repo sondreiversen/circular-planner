@@ -9,12 +9,6 @@ export class DataManager {
     this.config = config;
   }
 
-  // Data is loaded by index.ts from the API before Planner is created;
-  // DataManager only handles incremental saves.
-  async load(): Promise<PlannerData | null> {
-    return null;
-  }
-
   /** Debounced save — waits 800ms after last call before sending */
   scheduleSave(data: PlannerData): void {
     if (this.saveTimer) clearTimeout(this.saveTimer);

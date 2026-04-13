@@ -1,16 +1,20 @@
 import { scaleTime } from 'd3-scale';
 
+export const FONT_FAMILY = '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif';
+
+export function escapeHtml(s: string): string {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 /**
  * Returns a D3 time scale that maps dates to angles (radians).
- * 0 radians = top (12 o'clock), increasing clockwise.
+ * Uses d3-shape arc convention: 0 = 12 o'clock, increasing clockwise.
  * Full circle = 2*PI.
  */
 export function createAngleScale(startDate: Date, endDate: Date) {
-  // d3 arc convention: 0 = top, PI/2 = right, PI = bottom, 3PI/2 = left
-  // We offset by -PI/2 so that our 0-angle maps to the top
   return scaleTime()
     .domain([startDate, endDate])
-    .range([-(Math.PI / 2), (3 * Math.PI) / 2]);
+    .range([0, 2 * Math.PI]);
 }
 
 /** Parse an ISO date string "YYYY-MM-DD" into a local Date object. */
@@ -29,14 +33,12 @@ export function formatDate(d: Date): string {
 
 /**
  * Convert an (x, y) position relative to the disc center to an angle in radians.
- * Returns a value in [-PI/2, 3*PI/2] matching the angle scale convention.
+ * Returns a value in [0, 2*PI] matching the d3-arc angle convention (0 = 12 o'clock, clockwise).
  */
 export function xyToAngle(dx: number, dy: number): number {
-  // atan2 returns [-PI, PI]; dy is inverted in SVG (y grows downward)
-  const raw = Math.atan2(dy, dx);
-  // Shift so 0 = top (12 o'clock)
-  let angle = raw + Math.PI / 2;
-  if (angle > (3 * Math.PI) / 2) angle -= 2 * Math.PI;
+  // d3-arc: sin(a) = x/r, -cos(a) = y/r, so a = atan2(dx, -dy)
+  let angle = Math.atan2(dx, -dy);
+  if (angle < 0) angle += 2 * Math.PI;
   return angle;
 }
 

@@ -6,7 +6,7 @@
     "build": "npm run build:client && npm run build:server",
     "build:client": "webpack --mode production",
     "build:server": "tsc -p tsconfig.server.json && cp server/migrations/*.sql dist/server/migrations/",
-    "dev": "concurrently \"nodemon --watch server -e ts --exec ts-node server/index.ts\" \"webpack --mode development --watch\"",
+    "dev": "concurrently \"nodemon --watch server -e ts --exec 'ts-node --project tsconfig.server.json server/index.ts'\" \"webpack --mode development --watch\"",
     "start": "node dist/server/index.js",
     "migrate": "ts-node server/migrations/migrate.ts",
     "visual": "webpack serve --mode development --open",
@@ -40,7 +40,9 @@
     "webpack-dev-server": "^4.15.1"
   },
   "dependencies": {
+    "@types/cookie-parser": "^1.4.10",
     "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "d3-color": "^3.1.0",
     "d3-drag": "^3.0.0",

@@ -179,6 +179,35 @@ input:focus, select:focus {
 
 .hint { font-size: 11px; color: #8896a5; font-weight: 400; }
 
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0 0;
+  color: #8896a5;
+  font-size: 12px;
+}
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #e4e7ed;
+}
+
+.btn-gitlab {
+  background: #fc6d26;
+  color: white;
+  border-color: #fc6d26;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+  text-decoration: none;
+}
+.btn-gitlab:hover { background: #e24329; border-color: #e24329; text-decoration: none; }
+
 .form-row { display: flex; gap: 12px; }
 .form-row label { flex: 1; }
 
@@ -252,9 +281,25 @@ input:focus, select:focus {
    Planner page
    ============================== */
 .planner-main {
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 20px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#planner-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 /* ==============================

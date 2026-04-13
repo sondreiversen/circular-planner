@@ -35,6 +35,16 @@
       <button type="submit" class="btn btn-primary btn-full">Sign In</button>
     </form>
 
+    <div id="gitlab-sso-section" class="hidden">
+      <div class="auth-divider"><span>or</span></div>
+      <a id="gitlab-signin-btn" href="/api/auth/gitlab/authorize" class="btn btn-gitlab btn-full">
+        <svg viewBox="0 0 380 380" width="16" height="16" aria-hidden="true" style="flex-shrink:0">
+          <path fill="currentColor" d="M282.83 170.73l-11.84-36.43-23.68-72.87a1.25 1.25 0 00-2.38 0l-23.68 72.87H158.75l-23.68-72.87a1.25 1.25 0 00-2.38 0L109 134.3l-11.84 36.43a2.5 2.5 0 00.91 2.8l91.93 66.79 91.93-66.79a2.5 2.5 0 00.9-2.8z"/>
+        </svg>
+        Sign in with GitLab
+      </a>
+    </div>
+
     <form id="register-form" class="auth-form hidden">
       <div id="register-error" class="form-error hidden"></div>
       <label>

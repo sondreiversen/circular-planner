@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { query, pool } from '../db';
 import { requireAuth } from '../middleware/auth';
+import { canAccess, sendError, handleRouteError } from '../middleware/access';
 
 const router = Router();
 router.use(requireAuth);
@@ -10,29 +11,6 @@ interface ActivityRow { id: string; lane_id: string; title: string; description:
 
 function fmt(d: Date): string {
   return d.toISOString().slice(0, 10);
-}
-
-/** Check if user has access; returns permission level or throws 403/404 */
-async function checkAccess(
-  plannerId: number,
-  userId: number,
-  require: 'view' | 'edit' | 'owner'
-): Promise<'owner' | 'edit' | 'view'> {
-  const { rows } = await query<{ owner_id: number }>(
-    'SELECT owner_id FROM planners WHERE id = $1', [plannerId]
-  );
-  if (!rows.length) throw { status: 404, message: 'Planner not found' };
-
-  if (rows[0].owner_id === userId) return 'owner';
-  if (require === 'owner') throw { status: 403, message: 'Only the owner can do this' };
-
-  const { rows: shares } = await query<{ permission: string }>(
-    'SELECT permission FROM planner_shares WHERE planner_id=$1 AND user_id=$2', [plannerId, userId]
-  );
-  if (!shares.length) throw { status: 403, message: 'Access denied' };
-  const perm = shares[0].permission as 'view' | 'edit';
-  if (require === 'edit' && perm !== 'edit') throw { status: 403, message: 'Edit access required' };
-  return perm;
 }
 
 // GET /api/planners — list owned + shared
@@ -63,8 +41,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
       ownerName: r.owner_username,
     })));
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to list planners' });
+    handleRouteError(res, err);
   }
 });
 
@@ -73,7 +50,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
   const { title, startDate, endDate } = req.body;
   if (!title || !startDate || !endDate) {
-    res.status(400).json({ error: 'title, startDate and endDate are required' });
+    sendError(res, 400, 'title, startDate and endDate are required');
     return;
   }
   try {
@@ -84,8 +61,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     const p = rows[0];
     res.status(201).json({ id: p.id, title: p.title, startDate: fmt(p.start_date), endDate: fmt(p.end_date) });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to create planner' });
+    handleRouteError(res, err);
   }
 });
 
@@ -94,7 +70,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
   const plannerId = parseInt(req.params.id, 10);
   const userId = req.user!.id;
   try {
-    await checkAccess(plannerId, userId, 'view');
+    await canAccess(plannerId, userId, 'view');
 
     const { rows: [p] } = await query<{ id: number; owner_id: number; title: string; start_date: Date; end_date: Date }>(
       'SELECT id, owner_id, title, start_date, end_date FROM planners WHERE id=$1', [plannerId]
@@ -106,8 +82,8 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
       'SELECT id, lane_id, title, description, start_date, end_date, color FROM activities WHERE planner_id=$1', [plannerId]
     );
 
-    const laneMap = Object.fromEntries(lanes.map(l => [l.id, { ...l, activities: [] as ActivityRow[] }]));
-    activities.forEach(a => { if (laneMap[a.lane_id]) laneMap[a.lane_id].activities.push(a); });
+    const laneMap = new Map(lanes.map(l => [l.id, { ...l, activities: [] as ActivityRow[] }]));
+    activities.forEach(a => { laneMap.get(a.lane_id)?.activities.push(a); });
 
     res.json({
       config: {
@@ -119,7 +95,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
         permission: p.owner_id === userId ? 'owner' : 'edit',
       },
       data: {
-        lanes: Object.values(laneMap).map(l => ({
+        lanes: [...laneMap.values()].map(l => ({
           id: l.id,
           name: l.name,
           order: l.sort_order,
@@ -136,27 +112,28 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
         })),
       },
     });
-  } catch (err: unknown) {
-    const e = err as { status?: number; message?: string };
-    if (e.status) { res.status(e.status).json({ error: e.message }); return; }
-    console.error(err);
-    res.status(500).json({ error: 'Failed to fetch planner' });
+  } catch (err) {
+    handleRouteError(res, err);
   }
 });
 
-// PUT /api/planners/:id — update config + full data sync
+type LaneInput = {
+  id: string; name: string; order: number; color: string;
+  activities: { id: string; laneId: string; title: string; description: string; startDate: string; endDate: string; color: string }[];
+};
+
+// PUT /api/planners/:id — update config + full data sync (batched)
 router.put('/:id', async (req: Request, res: Response): Promise<void> => {
   const plannerId = parseInt(req.params.id, 10);
   const userId = req.user!.id;
   try {
-    await checkAccess(plannerId, userId, 'edit');
+    await canAccess(plannerId, userId, 'edit');
 
     const { title, startDate, endDate, lanes } = req.body;
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      // Update planner metadata
       if (title || startDate || endDate) {
         await client.query(
           `UPDATE planners SET
@@ -169,45 +146,72 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
         );
       }
 
-      // Sync lanes + activities
       if (Array.isArray(lanes)) {
-        const incomingLaneIds = lanes.map((l: { id: string }) => l.id);
-        // Delete removed lanes (cascade deletes their activities)
+        const laneList = lanes as LaneInput[];
+        const incomingLaneIds = laneList.map(l => l.id);
+
+        // Delete removed lanes (CASCADE removes their activities)
         if (incomingLaneIds.length > 0) {
           await client.query(
-            `DELETE FROM lanes WHERE planner_id=$1 AND id != ALL($2::varchar[])`,
+            'DELETE FROM lanes WHERE planner_id=$1 AND id != ALL($2::varchar[])',
             [plannerId, incomingLaneIds]
           );
         } else {
           await client.query('DELETE FROM lanes WHERE planner_id=$1', [plannerId]);
         }
 
-        for (const lane of lanes as { id: string; name: string; order: number; color: string; activities: { id: string; laneId: string; title: string; description: string; startDate: string; endDate: string; color: string }[] }[]) {
+        // Batch-upsert all lanes in one statement
+        if (laneList.length > 0) {
           await client.query(
             `INSERT INTO lanes(id, planner_id, name, sort_order, color)
-             VALUES($1,$2,$3,$4,$5)
-             ON CONFLICT (id, planner_id) DO UPDATE SET name=$3, sort_order=$4, color=$5`,
-            [lane.id, plannerId, lane.name, lane.order, lane.color]
+             SELECT unnest($1::varchar[]), $2, unnest($3::varchar[]), unnest($4::int[]), unnest($5::varchar[])
+             ON CONFLICT (id, planner_id) DO UPDATE
+               SET name=EXCLUDED.name, sort_order=EXCLUDED.sort_order, color=EXCLUDED.color`,
+            [
+              laneList.map(l => l.id),
+              plannerId,
+              laneList.map(l => l.name),
+              laneList.map(l => l.order),
+              laneList.map(l => l.color),
+            ]
           );
+        }
 
-          const incomingActIds = (lane.activities || []).map((a: { id: string }) => a.id);
-          if (incomingActIds.length > 0) {
-            await client.query(
-              `DELETE FROM activities WHERE planner_id=$1 AND lane_id=$2 AND id != ALL($3::varchar[])`,
-              [plannerId, lane.id, incomingActIds]
-            );
-          } else {
-            await client.query('DELETE FROM activities WHERE planner_id=$1 AND lane_id=$2', [plannerId, lane.id]);
-          }
+        // Collect all activities across all lanes
+        const allActivities = laneList.flatMap(l => l.activities || []);
+        const incomingActIds = allActivities.map(a => a.id);
 
-          for (const act of (lane.activities || [])) {
-            await client.query(
-              `INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8)
-               ON CONFLICT (id, planner_id) DO UPDATE SET lane_id=$2, title=$4, description=$5, start_date=$6, end_date=$7, color=$8`,
-              [act.id, act.laneId, plannerId, act.title, act.description || '', act.startDate, act.endDate, act.color]
-            );
-          }
+        // Delete removed activities in one shot
+        if (incomingActIds.length > 0) {
+          await client.query(
+            'DELETE FROM activities WHERE planner_id=$1 AND id != ALL($2::varchar[])',
+            [plannerId, incomingActIds]
+          );
+        } else {
+          await client.query('DELETE FROM activities WHERE planner_id=$1', [plannerId]);
+        }
+
+        // Batch-upsert all activities in one statement
+        if (allActivities.length > 0) {
+          await client.query(
+            `INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color)
+             SELECT unnest($1::varchar[]), unnest($2::varchar[]), $3,
+                    unnest($4::varchar[]), unnest($5::text[]),
+                    unnest($6::date[]), unnest($7::date[]), unnest($8::varchar[])
+             ON CONFLICT (id, planner_id) DO UPDATE
+               SET lane_id=EXCLUDED.lane_id, title=EXCLUDED.title, description=EXCLUDED.description,
+                   start_date=EXCLUDED.start_date, end_date=EXCLUDED.end_date, color=EXCLUDED.color`,
+            [
+              allActivities.map(a => a.id),
+              allActivities.map(a => a.laneId),
+              plannerId,
+              allActivities.map(a => a.title),
+              allActivities.map(a => a.description || ''),
+              allActivities.map(a => a.startDate),
+              allActivities.map(a => a.endDate),
+              allActivities.map(a => a.color),
+            ]
+          );
         }
       }
 
@@ -219,11 +223,8 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
     } finally {
       client.release();
     }
-  } catch (err: unknown) {
-    const e = err as { status?: number; message?: string };
-    if (e.status) { res.status(e.status).json({ error: e.message }); return; }
-    console.error(err);
-    res.status(500).json({ error: 'Failed to save planner' });
+  } catch (err) {
+    handleRouteError(res, err);
   }
 });
 
@@ -232,14 +233,11 @@ router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
   const plannerId = parseInt(req.params.id, 10);
   const userId = req.user!.id;
   try {
-    await checkAccess(plannerId, userId, 'owner');
+    await canAccess(plannerId, userId, 'owner');
     await query('DELETE FROM planners WHERE id=$1', [plannerId]);
     res.json({ success: true });
-  } catch (err: unknown) {
-    const e = err as { status?: number; message?: string };
-    if (e.status) { res.status(e.status).json({ error: e.message }); return; }
-    console.error(err);
-    res.status(500).json({ error: 'Failed to delete planner' });
+  } catch (err) {
+    handleRouteError(res, err);
   }
 });
 

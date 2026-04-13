@@ -16,6 +16,16 @@ document.addEventListener('DOMContentLoaded', () => {
   // Redirect if already logged in
   if (isLoggedIn()) { window.location.href = '/dashboard.html'; return; }
 
+  // Show GitLab SSO button if enabled on the server
+  fetch('/api/auth/gitlab/status')
+    .then(r => r.json())
+    .then((data: { enabled: boolean }) => {
+      if (data.enabled) {
+        document.getElementById('gitlab-sso-section')?.classList.remove('hidden');
+      }
+    })
+    .catch(() => { /* SSO not available, keep button hidden */ });
+
   // Tab switching
   document.querySelectorAll<HTMLButtonElement>('.tab').forEach(tab => {
     tab.addEventListener('click', () => {

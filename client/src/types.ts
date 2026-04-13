@@ -27,6 +27,7 @@ export interface Activity {
   startDate: string; // YYYY-MM-DD
   endDate: string;   // YYYY-MM-DD
   color: string;     // arc fill color
+  label: string;     // free-text label, e.g. "vacation" — empty = none
 }
 
 export enum ZoomLevel {
@@ -46,11 +47,13 @@ export interface GridSpec {
   majorTicks: Date[];   // prominent gridlines (darker)
   minorTicks: Date[];   // lighter sub-divisions
   labels: Array<{ date: Date; text: string }>;
+  subLabels?: Array<{ date: Date; text: string }>; // inner day-number labels (Year zoom only)
 }
 
 export interface FilterState {
   hiddenLaneIds: Set<string>;
   searchTerm: string;
+  activeLabels: Set<string>; // inclusive OR filter; empty = show all
 }
 
 export interface User {
@@ -82,6 +85,7 @@ export interface DiscGeometry {
   coreRadius: number;    // inner hole radius (for title)
   outerRadius: number;   // total outer radius of outermost lane
   laneWidth: number;     // width of each lane
-  innerRadiusFn: (order: number) => number;
-  outerRadiusFn: (order: number) => number;
+  slotByLaneId: Map<string, number>; // visible-lane id → slot index (0 = innermost visible)
+  innerRadiusFn: (slot: number) => number;
+  outerRadiusFn: (slot: number) => number;
 }

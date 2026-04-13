@@ -1,6 +1,7 @@
-import { api, isLoggedIn } from './api-client';
+import { api, isLoggedIn, parseJWT, logout } from './api-client';
+import { escapeHtml } from './utils';
 import { Planner } from './planner';
-import { PlannerConfig, PlannerData } from './types';
+import { PlannerConfig, PlannerData, ShareEntry } from './types';
 
 interface PlannerResponse {
   config: PlannerConfig;
@@ -32,14 +33,13 @@ async function init(): Promise<void> {
     const titleHeader = document.getElementById('planner-title-header');
     if (titleHeader) titleHeader.textContent = config.title;
 
-    // Show username in header
-    try {
-      const payload = JSON.parse(atob(localStorage.getItem('cp_token')!.split('.')[1]));
+    const token = localStorage.getItem('cp_token');
+    if (token) {
+      const payload = parseJWT(token);
       const usernameEl = document.getElementById('header-username');
-      if (usernameEl) usernameEl.textContent = payload.username;
-    } catch { /* ignore */ }
+      if (usernameEl && payload.username) usernameEl.textContent = payload.username as string;
+    }
 
-    // Hide share button for non-owners
     const shareBtn = document.getElementById('share-btn') as HTMLButtonElement | null;
     if (shareBtn && !config.isOwner) shareBtn.style.display = 'none';
 
@@ -53,10 +53,7 @@ async function init(): Promise<void> {
       shareBtn.addEventListener('click', () => openShareDialog(plannerId));
     }
 
-    document.getElementById('logout-btn')?.addEventListener('click', () => {
-      localStorage.removeItem('cp_token');
-      window.location.href = '/index.html';
-    });
+    document.getElementById('logout-btn')?.addEventListener('click', logout);
 
   } catch (err: unknown) {
     if (loadingEl) loadingEl.style.display = 'none';
@@ -70,32 +67,40 @@ async function init(): Promise<void> {
 async function openShareDialog(plannerId: number): Promise<void> {
   const overlay = document.getElementById('share-overlay');
   if (!overlay) return;
+
+  // Bind listeners once; subsequent calls just show the dialog
+  if (!overlay.dataset.initialized) {
+    overlay.dataset.initialized = 'true';
+
+    document.getElementById('share-close')?.addEventListener('click', () => overlay.classList.add('hidden'));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.add('hidden'); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !overlay.classList.contains('hidden')) overlay.classList.add('hidden');
+    });
+
+    const form    = document.getElementById('share-form') as HTMLFormElement;
+    const errorEl = document.getElementById('share-error');
+    form?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email      = (document.getElementById('share-email') as HTMLInputElement).value.trim();
+      const permission = (document.getElementById('share-permission') as HTMLSelectElement).value;
+      if (!email) return;
+      if (errorEl) errorEl.classList.add('hidden');
+      try {
+        await api.post(`/api/planners/${plannerId}/shares`, { email, permission });
+        (document.getElementById('share-email') as HTMLInputElement).value = '';
+        await refreshShareList(plannerId);
+      } catch (err: unknown) {
+        if (errorEl) { errorEl.textContent = (err as Error).message; errorEl.classList.remove('hidden'); }
+      }
+    });
+  }
+
   overlay.classList.remove('hidden');
   await refreshShareList(plannerId);
-
-  document.getElementById('share-close')?.addEventListener('click', () => overlay.classList.add('hidden'));
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.add('hidden'); });
-
-  const form    = document.getElementById('share-form') as HTMLFormElement;
-  const errorEl = document.getElementById('share-error');
-  form?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const email      = (document.getElementById('share-email') as HTMLInputElement).value.trim();
-    const permission = (document.getElementById('share-permission') as HTMLSelectElement).value;
-    if (!email) return;
-    if (errorEl) errorEl.classList.add('hidden');
-    try {
-      await api.post(`/api/planners/${plannerId}/shares`, { email, permission });
-      (document.getElementById('share-email') as HTMLInputElement).value = '';
-      await refreshShareList(plannerId);
-    } catch (err: unknown) {
-      if (errorEl) { errorEl.textContent = (err as Error).message; errorEl.classList.remove('hidden'); }
-    }
-  });
 }
 
 async function refreshShareList(plannerId: number): Promise<void> {
-  interface ShareEntry { user_id: number; username: string; email: string; permission: string }
   const list = document.getElementById('share-list');
   if (!list) return;
   try {
@@ -110,8 +115,8 @@ async function refreshShareList(plannerId: number): Promise<void> {
       row.className = 'share-row';
       row.innerHTML = `
         <div class="share-row-info">
-          <span class="share-row-name">${esc(s.username)}</span>
-          <span class="share-row-email">${esc(s.email)}</span>
+          <span class="share-row-name">${escapeHtml(s.username)}</span>
+          <span class="share-row-email">${escapeHtml(s.email)}</span>
         </div>
         <div class="share-row-actions">
           <span class="badge ${s.permission === 'edit' ? 'badge-edit' : 'badge-view'}">${s.permission}</span>
@@ -125,10 +130,6 @@ async function refreshShareList(plannerId: number): Promise<void> {
       list.appendChild(row);
     });
   } catch { /* ignore */ }
-}
-
-function esc(s: string): string {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 document.addEventListener('DOMContentLoaded', init);
