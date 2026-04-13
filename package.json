@@ -4,10 +4,12 @@
   "private": true,
   "scripts": {
     "build": "npm run build:client && npm run build:server",
-    "build:client": "webpack --mode production",
+    "build:client": "esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts --bundle --outdir=public/js --entry-names=[name]-bundle --minify --target=es2020",
     "build:server": "tsc -p tsconfig.server.json && cp server/migrations/*.sql dist/server/migrations/",
-    "dev": "concurrently \"nodemon --watch server -e ts --exec 'ts-node --project tsconfig.server.json server/index.ts'\" \"webpack --mode development --watch\"",
+    "dev": "concurrently \"nodemon --watch server -e ts --exec 'ts-node --project tsconfig.server.json server/index.ts'\" \"esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts --bundle --outdir=public/js --entry-names=[name]-bundle --sourcemap=inline --target=es2020 --watch\"",
     "start": "node dist/server/index.js",
+    "start:go": "go run .",
+    "build:go": "npm run build:client && go build -o planner .",
     "migrate": "ts-node server/migrations/migrate.ts",
     "visual": "webpack serve --mode development --open",
     "test": "jest"
@@ -27,6 +29,7 @@
     "@types/jsonwebtoken": "^9.0.5",
     "@types/pg": "^8.11.0",
     "concurrently": "^8.2.2",
+    "esbuild": "^0.25.12",
     "html-webpack-plugin": "^5.6.0",
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0",
