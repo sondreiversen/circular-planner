@@ -34,7 +34,7 @@ export class Renderer {
     this.config = config;
     this.data = data;
     this.viewport = viewport;
-    this.filterState = { hiddenLaneIds: new Set(), searchTerm: '' };
+    this.filterState = { hiddenLaneIds: new Set(), searchTerm: '', activeLabels: new Set() };
 
     this.svg = select(container)
       .append('svg')

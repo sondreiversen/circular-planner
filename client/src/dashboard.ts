@@ -1,6 +1,9 @@
 import { api, isLoggedIn, parseJWT, logout } from './api-client';
 import { escapeHtml } from './utils';
 import { PlannerSummary } from './types';
+import { initTheme, applyTheme, currentTheme } from './theme';
+
+initTheme();
 
 const today = new Date();
 const thisYear = today.getFullYear();
@@ -16,6 +19,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   document.getElementById('logout-btn')?.addEventListener('click', logout);
+
+  const themeBtn = document.getElementById('theme-toggle') as HTMLButtonElement | null;
+  if (themeBtn) {
+    themeBtn.textContent = currentTheme() === 'dark' ? '☀️' : '🌙';
+    themeBtn.addEventListener('click', () => {
+      const next = currentTheme() === 'dark' ? 'light' : 'dark';
+      applyTheme(next);
+      themeBtn.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+  }
 
   document.getElementById('new-planner-btn')?.addEventListener('click', () => {
     // Set sensible defaults in the dialog

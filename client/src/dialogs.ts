@@ -111,6 +111,11 @@ export function showActivityDialog(
         <textarea id="cp-act-desc" rows="3"
           style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;resize:vertical;">${escapeHtml(existingActivity?.description || '')}</textarea>
       </label>
+      <label style="display:block;margin-bottom:12px;font-family:sans-serif;font-size:13px;">
+        Label <span style="color:#8896a5;font-weight:400;">(e.g. vacation, launch)</span>
+        <input id="cp-act-label" type="text" value="${escapeHtml(existingActivity?.label || '')}" placeholder="optional tag"
+          style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;">
+      </label>
       <label style="display:block;margin-bottom:16px;font-family:sans-serif;font-size:13px;">
         Colour
         <div id="cp-color-picker-holder"></div>
@@ -144,6 +149,7 @@ export function showActivityDialog(
     const end   = (document.getElementById('cp-act-end') as HTMLInputElement).value;
     const lane  = (document.getElementById('cp-act-lane') as HTMLSelectElement).value;
     const desc  = (document.getElementById('cp-act-desc') as HTMLTextAreaElement).value.trim();
+    const label = (document.getElementById('cp-act-label') as HTMLInputElement).value.trim();
     const color = getSelectedColor(colorPicker);
 
     if (!title || !start || !end) { alert('Please fill in title, start date, and end date.'); return; }
@@ -157,6 +163,7 @@ export function showActivityDialog(
       startDate: start,
       endDate: end,
       color,
+      label,
     };
     onSave(activity);
     close();

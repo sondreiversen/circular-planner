@@ -253,9 +253,60 @@
 
 /* ---- SVG container focus ---- */
 .cp-svg-container:focus {
-  outline: 2px solid #4a90e2;
+  outline: 2px solid var(--cp-accent, #4a90e2);
   outline-offset: 2px;
   border-radius: 4px;
+}
+
+/* ---- Drag reorder ---- */
+.cp-drag-handle {
+  color: var(--cp-text-muted, #8896a5);
+  font-size: 14px;
+  cursor: grab;
+  flex-shrink: 0;
+  padding: 0 2px;
+  line-height: 1;
+}
+.cp-drag-handle:active { cursor: grabbing; }
+
+.cp-sidebar-lane-row.dragging { opacity: 0.4; }
+.cp-sidebar-lane-row.drag-over-top { border-top: 2px solid var(--cp-accent, #4c8bf5); }
+.cp-sidebar-lane-row.drag-over-bottom { border-bottom: 2px solid var(--cp-accent, #4c8bf5); }
+
+/* ---- Dark mode: sidebar surface ---- */
+.cp-sidebar {
+  background: var(--cp-surface-2, #f8f9fb);
+  border-right: 1px solid var(--cp-border, #e4e7ed);
+}
+.cp-filter-input {
+  border-color: var(--cp-border-strong, #d0d4db);
+  background: var(--cp-surface, #fff);
+  color: var(--cp-text, #2c3e50);
+}
+
+/* ---- Theme toggle button ---- */
+.btn-theme {
+  background: transparent;
+  border: 1px solid var(--cp-border-strong, #d0d4db);
+  color: var(--cp-text-muted, #5a6b7a);
+  border-radius: 6px;
+  padding: 5px 9px;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  font-family: inherit;
+  transition: background 0.12s, color 0.12s;
+}
+.btn-theme:hover {
+  background: var(--cp-surface-2, #f4f6f9);
+  color: var(--cp-text, #1a2332);
+}
+
+/* ---- Toolbar dark mode ---- */
+.cp-toolbar {
+  background: var(--cp-surface, white) !important;
+  border-bottom: 1px solid var(--cp-border, #e4e7ed) !important;
+  color: var(--cp-text, #1a2332);
 }
 
 @media print {

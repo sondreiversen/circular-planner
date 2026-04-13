@@ -33,7 +33,7 @@ export class Planner {
     this.config = config;
     this.data = initialData;
     this.viewport = defaultViewport(this.config);
-    this.filterState = { hiddenLaneIds: new Set(), searchTerm: '' };
+    this.filterState = { hiddenLaneIds: new Set(), searchTerm: '', activeLabels: new Set() };
     this.dataManager = new DataManager(this.config);
 
     // Restore sidebar collapsed state
@@ -118,10 +118,10 @@ export class Planner {
     const searchSection = document.createElement('div');
     searchSection.className = 'cp-sidebar-section';
 
-    const searchLabel = document.createElement('div');
-    searchLabel.className = 'cp-sidebar-label';
-    searchLabel.textContent = 'Search';
-    searchSection.appendChild(searchLabel);
+    const searchHeading = document.createElement('div');
+    searchHeading.className = 'cp-sidebar-label';
+    searchHeading.textContent = 'Search';
+    searchSection.appendChild(searchHeading);
 
     const searchInput = document.createElement('input');
     searchInput.type = 'text';
@@ -138,19 +138,30 @@ export class Planner {
     searchSection.appendChild(searchInput);
     body.appendChild(searchSection);
 
-    // Section: Lanes
+    // Section: Lanes (top of list = outermost = highest order)
     const lanesSection = document.createElement('div');
     lanesSection.className = 'cp-sidebar-section';
 
-    const lanesLabel = document.createElement('div');
-    lanesLabel.className = 'cp-sidebar-label';
-    lanesLabel.textContent = 'Lanes';
-    lanesSection.appendChild(lanesLabel);
+    const lanesHeading = document.createElement('div');
+    lanesHeading.className = 'cp-sidebar-label';
+    lanesHeading.textContent = 'Lanes';
+    lanesSection.appendChild(lanesHeading);
 
-    const sorted = [...this.data.lanes].sort((a, b) => a.order - b.order);
-    sorted.forEach(lane => {
+    // Reverse: highest order (outermost) at top
+    const sidebarOrder = [...this.data.lanes].sort((a, b) => b.order - a.order);
+    let dragSrcId: string | null = null;
+
+    sidebarOrder.forEach(lane => {
       const laneRow = document.createElement('div');
       laneRow.className = 'cp-sidebar-lane-row';
+      laneRow.draggable = true;
+      laneRow.dataset.laneId = lane.id;
+
+      const handle = document.createElement('span');
+      handle.className = 'cp-drag-handle';
+      handle.textContent = '⠿';
+      handle.title = 'Drag to reorder';
+      laneRow.appendChild(handle);
 
       const toggleLabel = document.createElement('label');
       toggleLabel.className = 'cp-lane-toggle';
@@ -167,7 +178,7 @@ export class Planner {
 
       const nameSpan = document.createElement('span');
       nameSpan.textContent = lane.name;
-      nameSpan.style.cssText = `flex:1;opacity:${this.filterState.hiddenLaneIds.has(lane.id) ? '0.4' : '1'};`;
+      nameSpan.style.cssText = `flex:1;opacity:${this.filterState.hiddenLaneIds.has(lane.id) ? '0.4' : '1'};min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
 
       toggleLabel.appendChild(cb);
       toggleLabel.appendChild(dot);
@@ -178,9 +189,47 @@ export class Planner {
       editBtn.textContent = '✎';
       editBtn.title = `Edit lane: ${lane.name}`;
       editBtn.className = 'cp-btn';
-      editBtn.style.cssText = 'padding:3px 7px;font-size:11px;';
+      editBtn.style.cssText = 'padding:3px 7px;font-size:11px;flex-shrink:0;';
       editBtn.addEventListener('click', () => this.handleEditLane(lane));
       laneRow.appendChild(editBtn);
+
+      // Drag events
+      laneRow.addEventListener('dragstart', (e) => {
+        dragSrcId = lane.id;
+        laneRow.classList.add('dragging');
+        e.dataTransfer!.effectAllowed = 'move';
+        e.dataTransfer!.setData('text/plain', lane.id);
+      });
+      laneRow.addEventListener('dragend', () => {
+        dragSrcId = null;
+        laneRow.classList.remove('dragging');
+        lanesSection.querySelectorAll('.cp-sidebar-lane-row').forEach(r => {
+          r.classList.remove('drag-over-top', 'drag-over-bottom');
+        });
+      });
+      laneRow.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (!dragSrcId || dragSrcId === lane.id) return;
+        e.dataTransfer!.dropEffect = 'move';
+        const rect = laneRow.getBoundingClientRect();
+        const above = e.clientY < rect.top + rect.height / 2;
+        laneRow.classList.toggle('drag-over-top', above);
+        laneRow.classList.toggle('drag-over-bottom', !above);
+      });
+      laneRow.addEventListener('dragleave', () => {
+        laneRow.classList.remove('drag-over-top', 'drag-over-bottom');
+      });
+      laneRow.addEventListener('drop', (e) => {
+        e.preventDefault();
+        laneRow.classList.remove('drag-over-top', 'drag-over-bottom');
+        if (!dragSrcId || dragSrcId === lane.id) return;
+        const rect = laneRow.getBoundingClientRect();
+        const above = e.clientY < rect.top + rect.height / 2;
+        const rows = lanesSection.querySelectorAll<HTMLElement>('.cp-sidebar-lane-row');
+        const targetIndex = [...rows].indexOf(laneRow);
+        const dropIndex = above ? targetIndex : targetIndex + 1;
+        this.handleReorderLane(dragSrcId, dropIndex);
+      });
 
       lanesSection.appendChild(laneRow);
     });
@@ -193,14 +242,51 @@ export class Planner {
     lanesSection.appendChild(addLaneBtn);
     body.appendChild(lanesSection);
 
+    // Section: Labels (if any exist)
+    const allLabels = [...new Set(
+      this.data.lanes.flatMap(l => l.activities.map(a => a.label)).filter(Boolean)
+    )].sort();
+
+    if (allLabels.length > 0) {
+      const labelsSection = document.createElement('div');
+      labelsSection.className = 'cp-sidebar-section';
+
+      const labelsHeading = document.createElement('div');
+      labelsHeading.className = 'cp-sidebar-label';
+      labelsHeading.textContent = 'Labels';
+      labelsSection.appendChild(labelsHeading);
+
+      allLabels.forEach(lbl => {
+        const row = document.createElement('label');
+        row.className = 'cp-lane-toggle';
+        row.style.cssText = 'cursor:pointer;gap:6px;';
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = this.filterState.activeLabels.has(lbl);
+        cb.style.cssText = 'margin:0;cursor:pointer;';
+        cb.addEventListener('change', () => this.handleToggleLabel(lbl));
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = lbl;
+        nameSpan.style.cssText = `flex:1;font-size:12px;opacity:${this.filterState.activeLabels.size > 0 && !this.filterState.activeLabels.has(lbl) ? '0.4' : '1'};`;
+
+        row.appendChild(cb);
+        row.appendChild(nameSpan);
+        labelsSection.appendChild(row);
+      });
+
+      body.appendChild(labelsSection);
+    }
+
     // Section: Date range
     const rangeSection = document.createElement('div');
     rangeSection.className = 'cp-sidebar-section';
 
-    const rangeLabel = document.createElement('div');
-    rangeLabel.className = 'cp-sidebar-label';
-    rangeLabel.textContent = 'Date Range';
-    rangeSection.appendChild(rangeLabel);
+    const rangeHeading = document.createElement('div');
+    rangeHeading.className = 'cp-sidebar-label';
+    rangeHeading.textContent = 'Date Range';
+    rangeSection.appendChild(rangeHeading);
 
     const rangeStart = document.createElement('input');
     rangeStart.type = 'date';
@@ -230,6 +316,39 @@ export class Planner {
     });
     rangeSection.appendChild(applyBtn);
     body.appendChild(rangeSection);
+  }
+
+  private handleReorderLane(sourceId: string, targetIndex: number): void {
+    // Sidebar shows outermost (highest order) at top
+    const sidebarOrder = [...this.data.lanes].sort((a, b) => b.order - a.order);
+    const srcIndex = sidebarOrder.findIndex(l => l.id === sourceId);
+    if (srcIndex === -1) return;
+
+    // Adjust target when source is above it (removing source shifts items up)
+    let adjustedTarget = targetIndex;
+    if (srcIndex < targetIndex) adjustedTarget = targetIndex - 1;
+    if (srcIndex === adjustedTarget) return;
+
+    const [moved] = sidebarOrder.splice(srcIndex, 1);
+    sidebarOrder.splice(adjustedTarget, 0, moved);
+
+    // Reassign orders: sidebar index 0 = outermost = highest order
+    const N = sidebarOrder.length;
+    sidebarOrder.forEach((lane, i) => { lane.order = N - 1 - i; });
+
+    this.save();
+    this.refresh();
+  }
+
+  private handleToggleLabel(label: string): void {
+    if (this.filterState.activeLabels.has(label)) {
+      this.filterState.activeLabels.delete(label);
+    } else {
+      this.filterState.activeLabels.add(label);
+    }
+    this.renderer.update(this.data, this.filterState);
+    const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
+    if (sidebarBody) this.buildSidebar(sidebarBody);
   }
 
   private buildToolbar(): void {
@@ -451,5 +570,10 @@ export class Planner {
     this.data.lanes.sort((a, b) => a.order - b.order).forEach((l, i) => l.order = i);
     this.save();
     this.refresh();
+  }
+
+  /** Called when the global theme changes — re-renders the SVG with new CSS var values. */
+  onThemeChange(): void {
+    this.renderer.setTheme();
   }
 }

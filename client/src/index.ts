@@ -2,6 +2,9 @@ import { api, isLoggedIn, parseJWT, logout } from './api-client';
 import { escapeHtml } from './utils';
 import { Planner } from './planner';
 import { PlannerConfig, PlannerData, ShareEntry } from './types';
+import { initTheme, applyTheme, currentTheme } from './theme';
+
+initTheme();
 
 interface PlannerResponse {
   config: PlannerConfig;
@@ -44,9 +47,10 @@ async function init(): Promise<void> {
     if (shareBtn && !config.isOwner) shareBtn.style.display = 'none';
 
     if (loadingEl) loadingEl.style.display = 'none';
+    let plannerInstance: Planner | null = null;
     if (containerEl) {
       containerEl.classList.remove('hidden');
-      new Planner(containerEl, config, data);
+      plannerInstance = new Planner(containerEl, config, data);
     }
 
     if (shareBtn && config.isOwner) {
@@ -54,6 +58,17 @@ async function init(): Promise<void> {
     }
 
     document.getElementById('logout-btn')?.addEventListener('click', logout);
+
+    const themeBtn = document.getElementById('theme-toggle') as HTMLButtonElement | null;
+    if (themeBtn) {
+      themeBtn.textContent = currentTheme() === 'dark' ? '☀️' : '🌙';
+      themeBtn.addEventListener('click', () => {
+        const next = currentTheme() === 'dark' ? 'light' : 'dark';
+        applyTheme(next);
+        themeBtn.textContent = next === 'dark' ? '☀️' : '🌙';
+        plannerInstance?.onThemeChange();
+      });
+    }
 
   } catch (err: unknown) {
     if (loadingEl) loadingEl.style.display = 'none';

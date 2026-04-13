@@ -7,7 +7,7 @@ const router = Router();
 router.use(requireAuth);
 
 interface LaneRow { id: string; name: string; sort_order: number; color: string; }
-interface ActivityRow { id: string; lane_id: string; title: string; description: string; start_date: Date; end_date: Date; color: string; }
+interface ActivityRow { id: string; lane_id: string; title: string; description: string; start_date: Date; end_date: Date; color: string; label: string; }
 
 function fmt(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -79,7 +79,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
       'SELECT id, name, sort_order, color FROM lanes WHERE planner_id=$1 ORDER BY sort_order', [plannerId]
     );
     const { rows: activities } = await query<ActivityRow>(
-      'SELECT id, lane_id, title, description, start_date, end_date, color FROM activities WHERE planner_id=$1', [plannerId]
+      'SELECT id, lane_id, title, description, start_date, end_date, color, label FROM activities WHERE planner_id=$1', [plannerId]
     );
 
     const laneMap = new Map(lanes.map(l => [l.id, { ...l, activities: [] as ActivityRow[] }]));
@@ -108,6 +108,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
             startDate: fmt(a.start_date),
             endDate: fmt(a.end_date),
             color: a.color,
+            label: a.label || '',
           })),
         })),
       },
@@ -119,7 +120,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 
 type LaneInput = {
   id: string; name: string; order: number; color: string;
-  activities: { id: string; laneId: string; title: string; description: string; startDate: string; endDate: string; color: string }[];
+  activities: { id: string; laneId: string; title: string; description: string; startDate: string; endDate: string; color: string; label: string }[];
 };
 
 // PUT /api/planners/:id — update config + full data sync (batched)
@@ -194,13 +195,14 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
         // Batch-upsert all activities in one statement
         if (allActivities.length > 0) {
           await client.query(
-            `INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color)
+            `INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color, label)
              SELECT unnest($1::varchar[]), unnest($2::varchar[]), $3,
                     unnest($4::varchar[]), unnest($5::text[]),
-                    unnest($6::date[]), unnest($7::date[]), unnest($8::varchar[])
+                    unnest($6::date[]), unnest($7::date[]), unnest($8::varchar[]), unnest($9::varchar[])
              ON CONFLICT (id, planner_id) DO UPDATE
                SET lane_id=EXCLUDED.lane_id, title=EXCLUDED.title, description=EXCLUDED.description,
-                   start_date=EXCLUDED.start_date, end_date=EXCLUDED.end_date, color=EXCLUDED.color`,
+                   start_date=EXCLUDED.start_date, end_date=EXCLUDED.end_date, color=EXCLUDED.color,
+                   label=EXCLUDED.label`,
             [
               allActivities.map(a => a.id),
               allActivities.map(a => a.laneId),
@@ -210,6 +212,7 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
               allActivities.map(a => a.startDate),
               allActivities.map(a => a.endDate),
               allActivities.map(a => a.color),
+              allActivities.map(a => a.label || ''),
             ]
           );
         }

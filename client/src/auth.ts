@@ -1,4 +1,5 @@
 import { api, setToken, isLoggedIn } from './api-client';
+import { initTheme, applyTheme, currentTheme } from './theme';
 
 interface AuthResponse { token: string; user: { id: number; username: string; email: string } }
 
@@ -12,9 +13,22 @@ function clearError(id: string): void {
   if (el) el.classList.add('hidden');
 }
 
+initTheme();
+
 document.addEventListener('DOMContentLoaded', () => {
   // Redirect if already logged in
   if (isLoggedIn()) { window.location.href = '/dashboard.html'; return; }
+
+  document.getElementById('theme-toggle')?.addEventListener('click', () => {
+    const next = currentTheme() === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    (document.getElementById('theme-toggle') as HTMLButtonElement).textContent = next === 'dark' ? '☀️' : '🌙';
+  });
+  // Sync icon on load
+  if (currentTheme() === 'dark') {
+    const btn = document.getElementById('theme-toggle') as HTMLButtonElement | null;
+    if (btn) btn.textContent = '☀️';
+  }
 
   // Show GitLab SSO button if enabled on the server
   fetch('/api/auth/gitlab/status')
