@@ -12,7 +12,7 @@ function makeToken(user: { id: number; username: string; email: string }): strin
   return jwt.sign(
     { id: user.id, username: user.username, email: user.email },
     config.jwtSecret,
-    { expiresIn: '30d' }
+    { expiresIn: '7d', algorithm: 'HS256' }
   );
 }
 
@@ -183,22 +183,28 @@ router.get('/gitlab/callback', async (req: Request, res: Response): Promise<void
       );
       user = updated.rows[0];
     } else {
-      // New GitLab user — pick a unique username
+      // Refuse to auto-link an existing local account by email — prevents account takeover
+      // via a GitLab account that happens to share the email of a local user.
+      const emailCheck = await query<{ id: number }>(
+        'SELECT id FROM users WHERE email = $1', [gitlabUser.email]
+      );
+      if (emailCheck.rows.length > 0) {
+        res.status(409).send('An account with this email already exists. Log in with your password first, then link GitLab.');
+        return;
+      }
+
+      // Pick a unique username, using the globally-unique gitlab_id as suffix on collision
       let username = gitlabUser.username;
       const nameCheck = await query<{ count: string }>(
         'SELECT COUNT(*) as count FROM users WHERE username = $1', [username]
       );
       if (parseInt(nameCheck.rows[0].count) > 0) {
-        username = `${username}-gl`;
+        username = `${username}-${gitlabUser.id}`;
       }
 
       const inserted = await query<{ id: number; username: string; email: string }>(
         `INSERT INTO users(username, email, gitlab_id, gitlab_username, auth_provider)
          VALUES($1, $2, $3, $4, 'gitlab')
-         ON CONFLICT (email) DO UPDATE
-           SET gitlab_id = EXCLUDED.gitlab_id,
-               gitlab_username = EXCLUDED.gitlab_username,
-               auth_provider = 'gitlab'
          RETURNING id, username, email`,
         [username, gitlabUser.email, gitlabUser.id, gitlabUser.username]
       );

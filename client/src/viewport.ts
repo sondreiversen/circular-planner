@@ -80,10 +80,6 @@ export function navigate(current: Viewport, direction: -1 | 1, config: PlannerCo
 
   switch (current.zoomLevel) {
     case ZoomLevel.Year:
-      // At year level, slide by one month at a time
-      newStart = addMonths(current.windowStart, direction);
-      newEnd = addMonths(current.windowEnd, direction);
-      break;
     case ZoomLevel.Quarter:
     case ZoomLevel.Month:
       newStart = addMonths(current.windowStart, direction);
@@ -112,11 +108,6 @@ export function navigate(current: Viewport, direction: -1 | 1, config: PlannerCo
   }
 
   return { windowStart: newStart, windowEnd: newEnd, zoomLevel: current.zoomLevel };
-}
-
-/** Center viewport on a specific date at a given zoom level */
-export function zoomToDate(targetDate: Date, zoomLevel: ZoomLevel, config: PlannerConfig): Viewport {
-  return viewportForLevel(targetDate, zoomLevel, config);
 }
 
 /** Can we zoom in further? */

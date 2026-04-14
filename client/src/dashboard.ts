@@ -91,9 +91,9 @@ async function loadPlanners(): Promise<void> {
       const badgeText = p.isOwner ? 'Owner' : p.permission;
       card.innerHTML = `
         <div class="planner-card-title">${escapeHtml(p.title)}</div>
-        <div class="planner-card-dates">${p.startDate} → ${p.endDate}</div>
+        <div class="planner-card-dates">${escapeHtml(p.startDate)} → ${escapeHtml(p.endDate)}</div>
         <div class="planner-card-meta">
-          <span class="badge ${badge}">${badgeText}</span>
+          <span class="badge ${badge}">${escapeHtml(badgeText)}</span>
           ${!p.isOwner ? `<span style="font-size:11px;color:#8896a5;">by ${escapeHtml(p.ownerName)}</span>` : ''}
         </div>
       `;
@@ -101,7 +101,7 @@ async function loadPlanners(): Promise<void> {
       grid.appendChild(card);
     });
   } catch (err: unknown) {
-    if (grid) grid.innerHTML = `<div class="error-state">Failed to load planners: ${(err as Error).message}</div>`;
+    if (grid) grid.innerHTML = `<div class="error-state">Failed to load planners: ${escapeHtml((err as Error).message)}</div>`;
   }
 }
 

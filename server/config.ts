@@ -8,10 +8,15 @@ export const config = {
   tlsKeyFile: process.env.TLS_KEY_FILE,
   forceHttps: process.env.FORCE_HTTPS !== 'false',
   databaseUrl: process.env.DATABASE_URL || 'postgresql://localhost:5432/circular_planner',
-  jwtSecret: process.env.JWT_SECRET || (() => {
-    console.warn('[WARNING] JWT_SECRET not set. Using insecure default. Set it in .env!');
-    return 'insecure-default-secret-change-me';
+  jwtSecret: (() => {
+    const s = process.env.JWT_SECRET;
+    if (!s || s.length < 32) {
+      console.error('FATAL: JWT_SECRET must be set to a random string of at least 32 characters.');
+      process.exit(1);
+    }
+    return s;
   })(),
+  allowedOrigin: process.env.ALLOWED_ORIGIN || 'http://localhost:3000',
   nodeEnv: process.env.NODE_ENV || 'development',
   gitlab: {
     enabled: process.env.GITLAB_SSO_ENABLED === 'true',

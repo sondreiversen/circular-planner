@@ -68,6 +68,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 // GET /api/planners/:id — full planner with lanes + activities
 router.get('/:id', async (req: Request, res: Response): Promise<void> => {
   const plannerId = parseInt(req.params.id, 10);
+  if (isNaN(plannerId)) { sendError(res, 400, 'Invalid planner ID'); return; }
   const userId = req.user!.id;
   try {
     await canAccess(plannerId, userId, 'view');
@@ -126,6 +127,7 @@ type LaneInput = {
 // PUT /api/planners/:id — update config + full data sync (batched)
 router.put('/:id', async (req: Request, res: Response): Promise<void> => {
   const plannerId = parseInt(req.params.id, 10);
+  if (isNaN(plannerId)) { sendError(res, 400, 'Invalid planner ID'); return; }
   const userId = req.user!.id;
   try {
     await canAccess(plannerId, userId, 'edit');
@@ -234,6 +236,7 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
 // DELETE /api/planners/:id
 router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
   const plannerId = parseInt(req.params.id, 10);
+  if (isNaN(plannerId)) { sendError(res, 400, 'Invalid planner ID'); return; }
   const userId = req.user!.id;
   try {
     await canAccess(plannerId, userId, 'owner');

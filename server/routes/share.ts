@@ -9,6 +9,7 @@ router.use(requireAuth);
 // GET /api/planners/:plannerId/shares
 router.get('/', async (req: Request, res: Response): Promise<void> => {
   const plannerId = parseInt(req.params.plannerId, 10);
+  if (isNaN(plannerId)) { sendError(res, 400, 'Invalid planner ID'); return; }
   try {
     await canAccess(plannerId, req.user!.id, 'owner');
     const { rows } = await query<{ user_id: number; username: string; email: string; permission: string }>(
@@ -25,6 +26,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
 // POST /api/planners/:plannerId/shares
 router.post('/', async (req: Request, res: Response): Promise<void> => {
   const plannerId = parseInt(req.params.plannerId, 10);
+  if (isNaN(plannerId)) { sendError(res, 400, 'Invalid planner ID'); return; }
   try {
     await canAccess(plannerId, req.user!.id, 'owner');
 
@@ -51,6 +53,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 // DELETE /api/planners/:plannerId/shares/:userId
 router.delete('/:userId', async (req: Request, res: Response): Promise<void> => {
   const plannerId = parseInt(req.params.plannerId, 10);
+  if (isNaN(plannerId)) { sendError(res, 400, 'Invalid planner ID'); return; }
   try {
     await canAccess(plannerId, req.user!.id, 'owner');
     await query('DELETE FROM planner_shares WHERE planner_id=$1 AND user_id=$2', [plannerId, req.params.userId]);

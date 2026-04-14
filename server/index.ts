@@ -20,8 +20,11 @@ app.use(helmet({
   contentSecurityPolicy: false,
   hsts: isTls ? { maxAge: 31536000 } : false,
 }));
-app.use(cors());
-app.use(express.json());
+app.use(cors({
+  origin: config.allowedOrigin,
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+}));
+app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser(config.jwtSecret)); // used for signed OAuth state cookie
 
 // API routes
@@ -31,9 +34,7 @@ app.use('/api/planners/:plannerId/shares', shareRoutes);
 
 // Serve built frontend
 const publicDir = path.join(process.cwd(), 'public');
-const distDir = path.join(process.cwd(), 'dist/public');
 app.use(express.static(publicDir));
-app.use('/js', express.static(path.join(distDir, 'js')));
 
 // SPA fallback for any unmatched GET
 app.get('*', (_req, res) => {

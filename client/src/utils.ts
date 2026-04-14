@@ -42,11 +42,6 @@ export function xyToAngle(dx: number, dy: number): number {
   return angle;
 }
 
-/** Snap a date to the nearest whole day */
-export function snapToDay(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
-
 /** Generate a short random ID */
 export function randomId(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -83,11 +78,6 @@ export function getMonday(d: Date): Date {
 /** Snap a date to the 1st of its month */
 export function getMonthStart(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), 1);
-}
-
-/** Number of days in the month containing date d */
-export function daysInMonth(d: Date): number {
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
 }
 
 /** Predefined color palette for activities */
