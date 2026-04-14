@@ -1,4 +1,4 @@
-import { api, setToken, isLoggedIn } from './api-client';
+import { api } from './api-client';
 import { initTheme, applyTheme, currentTheme } from './theme';
 
 interface AuthResponse { token: string; user: { id: number; username: string; email: string } }
@@ -16,8 +16,10 @@ function clearError(id: string): void {
 initTheme();
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Redirect if already logged in
-  if (isLoggedIn()) { window.location.href = '/dashboard.html'; return; }
+  // Redirect if already logged in (cookie-based session check)
+  fetch('/api/auth/me', { credentials: 'include' })
+    .then(r => { if (r.ok) window.location.href = '/dashboard.html'; })
+    .catch(() => { /* not logged in */ });
 
   document.getElementById('theme-toggle')?.addEventListener('click', () => {
     const next = currentTheme() === 'dark' ? 'light' : 'dark';
@@ -58,8 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const email    = (document.getElementById('login-email')    as HTMLInputElement).value.trim();
     const password = (document.getElementById('login-password') as HTMLInputElement).value;
     try {
-      const { token } = await api.post<AuthResponse>('/api/auth/login', { email, password });
-      setToken(token);
+      await api.post<AuthResponse>('/api/auth/login', { email, password });
       window.location.href = '/dashboard.html';
     } catch (err: unknown) {
       showError('login-error', (err as Error).message || 'Login failed');
@@ -75,8 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const password = (document.getElementById('reg-password') as HTMLInputElement).value;
     if (password.length < 8) { showError('register-error', 'Password must be at least 8 characters'); return; }
     try {
-      const { token } = await api.post<AuthResponse>('/api/auth/register', { username, email, password });
-      setToken(token);
+      await api.post<AuthResponse>('/api/auth/register', { username, email, password });
       window.location.href = '/dashboard.html';
     } catch (err: unknown) {
       showError('register-error', (err as Error).message || 'Registration failed');

@@ -1,0 +1,15 @@
+node_modules
+dist
+public/js
+.git
+.gitignore
+*.log
+.env
+.env.*
+data/
+coverage/
+.claude/
+*.md
+Dockerfile
+docker-compose.yml
+.dockerignore

@@ -2,11 +2,30 @@ import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import rateLimit from 'express-rate-limit';
 import { query } from '../db';
 import { config } from '../config';
 import { requireAuth } from '../middleware/auth';
 
 const router = Router();
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts, please try again later.' },
+});
+
+function setAuthCookie(res: Response, token: string): void {
+  res.cookie('cp_token', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+    path: '/',
+  });
+}
 
 function makeToken(user: { id: number; username: string; email: string }): string {
   return jwt.sign(
@@ -17,7 +36,11 @@ function makeToken(user: { id: number; username: string; email: string }): strin
 }
 
 // POST /api/auth/register
-router.post('/register', async (req: Request, res: Response): Promise<void> => {
+router.post('/register', authLimiter, async (req: Request, res: Response): Promise<void> => {
+  if (!config.allowRegistration) {
+    res.status(403).json({ error: 'Registration is disabled' });
+    return;
+  }
   const { username, email, password } = req.body;
   if (!username || !email || !password) {
     res.status(400).json({ error: 'username, email and password are required' });
@@ -34,7 +57,9 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
       [username.trim(), email.trim().toLowerCase(), hash]
     );
     const user = rows[0];
-    res.json({ token: makeToken(user), user: { id: user.id, username: user.username, email: user.email } });
+    const token = makeToken(user);
+    setAuthCookie(res, token);
+    res.json({ token, user: { id: user.id, username: user.username, email: user.email } });
   } catch (err: unknown) {
     const pg = err as { code?: string };
     if (pg.code === '23505') {
@@ -47,7 +72,7 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
 });
 
 // POST /api/auth/login
-router.post('/login', async (req: Request, res: Response): Promise<void> => {
+router.post('/login', authLimiter, async (req: Request, res: Response): Promise<void> => {
   const { email, password } = req.body;
   if (!email || !password) {
     res.status(400).json({ error: 'email and password are required' });
@@ -63,11 +88,19 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       res.status(401).json({ error: 'Invalid email or password' });
       return;
     }
-    res.json({ token: makeToken(user), user: { id: user.id, username: user.username, email: user.email } });
+    const token = makeToken(user);
+    setAuthCookie(res, token);
+    res.json({ token, user: { id: user.id, username: user.username, email: user.email } });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Login failed' });
   }
+});
+
+// POST /api/auth/logout
+router.post('/logout', (_req: Request, res: Response): void => {
+  res.clearCookie('cp_token', { path: '/' });
+  res.status(204).end();
 });
 
 // GET /api/auth/me
@@ -217,16 +250,10 @@ router.get('/gitlab/callback', async (req: Request, res: Response): Promise<void
     }
 
     const token = makeToken(user);
+    setAuthCookie(res, token);
 
-    // Return a tiny HTML page that stores the token and redirects
-    res.send(`<!DOCTYPE html>
-<html><head><title>Signing in…</title></head><body>
-<script>
-try { localStorage.setItem('cp_token', ${JSON.stringify(token)}); } catch(e) {}
-location.replace('/dashboard.html');
-</script>
-<noscript>JavaScript is required to complete sign-in.</noscript>
-</body></html>`);
+    // Redirect to dashboard; the HttpOnly cookie above carries the session.
+    res.redirect('/dashboard.html');
   } catch (err) {
     console.error('GitLab SSO callback error:', err);
     res.status(500).send('An error occurred during sign-in. Please try again.');

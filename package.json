@@ -11,6 +11,7 @@
     "start:go": "go run .",
     "build:go": "npm run build:client && go build -o planner .",
     "migrate": "ts-node server/migrations/migrate.ts",
+    "create-admin": "node dist/server/scripts/create-admin.js",
     "test": "jest"
   },
   "devDependencies": {
@@ -53,6 +54,7 @@
     "d3-transition": "^3.0.1",
     "dotenv": "^16.4.1",
     "express": "^4.18.2",
+    "express-rate-limit": "^7.4.0",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.11.3"

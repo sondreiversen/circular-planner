@@ -1,4 +1,4 @@
-import { api, isLoggedIn, parseJWT, logout } from './api-client';
+import { api, logout } from './api-client';
 import { escapeHtml } from './utils';
 import { PlannerSummary } from './types';
 import { initTheme, applyTheme, currentTheme } from './theme';
@@ -9,13 +9,16 @@ const today = new Date();
 const thisYear = today.getFullYear();
 
 document.addEventListener('DOMContentLoaded', async () => {
-  if (!isLoggedIn()) { window.location.href = '/index.html'; return; }
-
-  const token = localStorage.getItem('cp_token');
-  if (token) {
-    const payload = parseJWT(token);
+  // Verify session via cookie; populate username from /api/auth/me.
+  try {
+    const meRes = await fetch('/api/auth/me', { credentials: 'include' });
+    if (!meRes.ok) { window.location.href = '/index.html'; return; }
+    const me = await meRes.json() as { user?: { username?: string } };
     const el = document.getElementById('header-username');
-    if (el && payload.username) el.textContent = payload.username as string;
+    if (el && me.user?.username) el.textContent = me.user.username;
+  } catch {
+    window.location.href = '/index.html';
+    return;
   }
 
   document.getElementById('logout-btn')?.addEventListener('click', logout);

@@ -34,33 +34,26 @@ A full-stack circular disc planner (Plandisc-style) with user accounts, data per
 ```bash
 git clone https://github.com/sondreiversen/circular-planner.git
 cd circular-planner
-npm install
+./install.sh
 ```
 
-Create a `.env` file (copy and edit the values below):
+The interactive installer works for both **Docker** and **bare-metal** (non-root) setups. It will prompt for:
 
-```env
-DATABASE_URL=postgresql://localhost:5432/circular_planner
-JWT_SECRET=change-me-in-production
-PORT=3000
-```
+- Install mode (Docker or bare-metal)
+- Admin username, email, and password (seeded via `npm run create-admin`)
+- Postgres connection details (bare-metal) — a password is generated for Docker
 
-Create the `circular_planner` database in Postgres, then:
+It then generates a strong `JWT_SECRET`, writes `.env` (with `ALLOW_REGISTRATION=false` by default), runs the build, applies migrations, and creates the admin user.
 
-```bash
-npm run build   # compile TypeScript + bundle frontend with esbuild
-npm start       # start server — migrations run automatically on first launch
-```
+Open [http://localhost:3000](http://localhost:3000) and sign in with the admin account.
 
-Open [http://localhost:3000](http://localhost:3000), register an account, and create your first planner.
-
-### Docker
+### Manual Docker
 
 ```bash
 docker compose up --build
 ```
 
-Starts PostgreSQL and the app together. Set `JWT_SECRET` via `.env` or the environment before running.
+`docker-compose.yml` requires `POSTGRES_PASSWORD` and `JWT_SECRET` in `.env` — there are no defaults. The image is multi-stage and runs as a non-root `node` user.
 
 ---
 
@@ -88,7 +81,9 @@ npm run migrate        # run database migrations manually
 | Variable | Default | Description |
 |---|---|---|
 | `DATABASE_URL` | `postgresql://localhost:5432/circular_planner` | Postgres connection string |
-| `JWT_SECRET` | *(insecure default — change this)* | Secret for signing JWT tokens |
+| `JWT_SECRET` | *(required — installer generates one)* | Secret for signing JWT tokens |
+| `ALLOW_REGISTRATION` | `true` | Set to `false` to disable public `/register` (installer defaults to `false`) |
+| `TRUST_PROXY` | `false` | Set to `true` when behind a reverse proxy terminating TLS (enables correct `Secure` cookies and client IPs for rate limiting) |
 | `PORT` | `3000` | HTTP port |
 | `HTTPS_PORT` | `3443` | HTTPS port (requires TLS config below) |
 | `TLS_CERT_FILE` | — | Path to TLS certificate |
@@ -100,6 +95,16 @@ npm run migrate        # run database migrations manually
 | `GITLAB_CLIENT_SECRET` | — | GitLab OAuth2 application secret |
 | `GITLAB_REDIRECT_URI` | — | OAuth2 callback URL |
 | `GITLAB_SCOPES` | `read_user openid email` | OAuth2 scopes to request |
+
+---
+
+## Security & deployment
+
+- **HTTPS is required in production.** Either point the app at a certificate directly with `TLS_CERT_FILE` + `TLS_KEY_FILE`, or run behind a reverse proxy (nginx, Caddy, Traefik) that terminates TLS and set `TRUST_PROXY=true` so the app issues `Secure` cookies and sees real client IPs.
+- **Cookie-based auth.** Login sets an `HttpOnly` `Secure` `SameSite=Lax` cookie named `cp_token`. Tokens are no longer stored in `localStorage`. The JSON response still returns the token for non-browser API clients. `POST /api/auth/logout` clears the cookie.
+- **Registration control.** `ALLOW_REGISTRATION=false` disables the public `/register` endpoint — the installer sets this by default. Create additional users with `npm run create-admin -- --username alice --email alice@example.com --password '...'` (runs interactively if stdin is a TTY).
+- **Rate limiting.** `/api/auth/login` and `/api/auth/register` are limited to 20 requests per 15 minutes per IP. `helmet` is enabled for standard security headers.
+- **Admin creation.** After a fresh install, `npm run create-admin` is the supported way to add users when registration is disabled.
 
 ---
 

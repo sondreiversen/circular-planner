@@ -1,4 +1,4 @@
-import { api, isLoggedIn, parseJWT, logout } from './api-client';
+import { api, logout } from './api-client';
 import { escapeHtml } from './utils';
 import { Planner } from './planner';
 import { PlannerConfig, PlannerData, ShareEntry } from './types';
@@ -12,11 +12,8 @@ interface PlannerResponse {
 }
 
 async function init(): Promise<void> {
-  if (!isLoggedIn()) {
-    window.location.href = '/index.html';
-    return;
-  }
-
+  // Session presence is validated by the API call below — a 401 from the
+  // server triggers a redirect to /index.html via api-client.
   const params = new URLSearchParams(window.location.search);
   const idStr = params.get('id');
   if (!idStr) {
@@ -36,12 +33,14 @@ async function init(): Promise<void> {
     const titleHeader = document.getElementById('planner-title-header');
     if (titleHeader) titleHeader.textContent = config.title;
 
-    const token = localStorage.getItem('cp_token');
-    if (token) {
-      const payload = parseJWT(token);
-      const usernameEl = document.getElementById('header-username');
-      if (usernameEl && payload.username) usernameEl.textContent = payload.username as string;
-    }
+    // Populate username from /api/auth/me (cookie-based session).
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then((me: { user?: { username?: string } } | null) => {
+        const usernameEl = document.getElementById('header-username');
+        if (usernameEl && me?.user?.username) usernameEl.textContent = me.user.username;
+      })
+      .catch(() => { /* ignore */ });
 
     const shareBtn = document.getElementById('share-btn') as HTMLButtonElement | null;
     if (shareBtn && !config.isOwner) shareBtn.style.display = 'none';

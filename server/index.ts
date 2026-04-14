@@ -16,6 +16,11 @@ const app = express();
 
 const isTls = !!(config.tlsCertFile && config.tlsKeyFile);
 
+if (process.env.TRUST_PROXY === 'true') {
+  app.set('trust proxy', 1);
+}
+
+// TODO: tune helmet CSP to allow D3/inline SVG; disabled for now to avoid breakage.
 app.use(helmet({
   contentSecurityPolicy: false,
   hsts: isTls ? { maxAge: 31536000 } : false,

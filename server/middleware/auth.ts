@@ -17,12 +17,15 @@ declare global {
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  // Prefer HttpOnly cookie; fall back to Authorization: Bearer for API clients.
+  const cookieToken = (req as Request & { cookies?: Record<string, string> }).cookies?.cp_token;
   const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
+  const bearerToken = header && header.startsWith('Bearer ') ? header.slice(7) : undefined;
+  const token = cookieToken || bearerToken;
+  if (!token) {
     res.status(401).json({ error: 'Authentication required' });
     return;
   }
-  const token = header.slice(7);
   try {
     const payload = jwt.verify(token, config.jwtSecret, { algorithms: ['HS256'] }) as AuthUser;
     req.user = payload;
