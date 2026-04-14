@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -88,7 +89,7 @@ func main() {
 	}
 	mux.Handle("/", spaHandler(http.FileServer(http.FS(sub))))
 
-	startServers(cfg, securityHeaders(mux))
+	startServers(cfg, securityHeaders(cfg.AllowedOrigin)(mux))
 }
 
 // startServers starts HTTP (and optionally HTTPS) listeners and blocks until
@@ -100,9 +101,13 @@ func startServers(cfg *config.Config, handler http.Handler) {
 	if isTLS {
 		httpsAddr := ":" + strconv.Itoa(cfg.HTTPSPort)
 		httpsServer := &http.Server{
-			Addr:      httpsAddr,
-			Handler:   handler,
-			TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+			Addr:              httpsAddr,
+			Handler:           handler,
+			TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      60 * time.Second,
+			IdleTimeout:       120 * time.Second,
 		}
 		servers = append(servers, httpsServer)
 		go func() {
@@ -122,7 +127,14 @@ func startServers(cfg *config.Config, handler http.Handler) {
 		} else {
 			httpH = handler
 		}
-		httpServer := &http.Server{Addr: ":" + strconv.Itoa(cfg.Port), Handler: httpH}
+		httpServer := &http.Server{
+			Addr:              ":" + strconv.Itoa(cfg.Port),
+			Handler:           httpH,
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      60 * time.Second,
+			IdleTimeout:       120 * time.Second,
+		}
 		servers = append(servers, httpServer)
 		suffix := ""
 		if cfg.ForceHTTPS {
@@ -136,7 +148,14 @@ func startServers(cfg *config.Config, handler http.Handler) {
 		}()
 	} else {
 		log.Println("[WARNING] TLS_CERT_FILE / TLS_KEY_FILE not set — serving over HTTP only.")
-		srv := &http.Server{Addr: ":" + strconv.Itoa(cfg.Port), Handler: handler}
+		srv := &http.Server{
+			Addr:              ":" + strconv.Itoa(cfg.Port),
+			Handler:           handler,
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      60 * time.Second,
+			IdleTimeout:       120 * time.Second,
+		}
 		servers = append(servers, srv)
 		go func() {
 			log.Printf("Circular Planner running at http://localhost:%d", cfg.Port)
@@ -190,13 +209,22 @@ func (rr *responseRecorder) Write(b []byte) (int, error) {
 	return rr.ResponseWriter.Write(b)
 }
 
-func securityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		next.ServeHTTP(w, r)
-	})
+func securityHeaders(allowedOrigin string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("X-Frame-Options", "DENY")
+			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+			w.Header().Set("Content-Security-Policy",
+				"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:")
+			// Reject cross-origin API calls from unexpected origins
+			if origin := r.Header.Get("Origin"); origin != "" && origin != allowedOrigin && strings.HasPrefix(r.URL.Path, "/api/") {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func stripPort(host string) string {

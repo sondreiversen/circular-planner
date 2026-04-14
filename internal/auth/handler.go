@@ -47,7 +47,7 @@ func (h *Handler) makeToken(id int, username, email string) (string, error) {
 		Username: username,
 		Email:    email,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(30 * 24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
@@ -273,6 +273,7 @@ func (h *Handler) GitLabCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Return a tiny page that stores the token and redirects
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store, no-cache")
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html><head><title>Signing in…</title></head><body>
 <script>
@@ -301,23 +302,30 @@ func (h *Handler) upsertGitLabUser(r *http.Request, u *gitlabProfile) (id int, u
 		return
 	}
 
-	// New user — ensure unique username
+	// Refuse to link an existing account by email — prevents takeover via a GitLab
+	// account that shares the email of a local user.
+	var existingID int
+	emailErr := h.db.QueryRowContext(ctx,
+		h.db.Rebind("SELECT id FROM users WHERE email = ?"), u.Email,
+	).Scan(&existingID)
+	if emailErr == nil {
+		err = fmt.Errorf("email already registered; log in with your password first to link GitLab")
+		return
+	}
+
+	// New user — ensure unique username; use globally-unique gitlab_id as suffix on collision
 	uname := u.Username
 	var count int
 	_ = h.db.QueryRowContext(ctx,
 		h.db.Rebind("SELECT COUNT(*) FROM users WHERE username = ?"), uname,
 	).Scan(&count)
 	if count > 0 {
-		uname = uname + "-gl"
+		uname = fmt.Sprintf("%s-%d", uname, u.ID)
 	}
 
 	err = h.db.QueryRowContext(ctx,
 		h.db.Rebind(`INSERT INTO users(username, email, gitlab_id, gitlab_username, auth_provider)
 		             VALUES (?, ?, ?, ?, 'gitlab')
-		             ON CONFLICT(email) DO UPDATE
-		               SET gitlab_id = excluded.gitlab_id,
-		                   gitlab_username = excluded.gitlab_username,
-		                   auth_provider = 'gitlab'
 		             RETURNING id, username, email`),
 		uname, u.Email, u.ID, u.Username,
 	).Scan(&id, &username, &email)
@@ -337,6 +345,8 @@ type gitlabProfile struct {
 	Name     string `json:"name"`
 }
 
+var gitlabHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
 func gitlabTokenExchange(cfg *config.Config, code string) (*gitlabTokenResponse, error) {
 	body, _ := json.Marshal(map[string]string{
 		"client_id":     cfg.GitLab.ClientID,
@@ -345,7 +355,7 @@ func gitlabTokenExchange(cfg *config.Config, code string) (*gitlabTokenResponse,
 		"grant_type":    "authorization_code",
 		"redirect_uri":  cfg.GitLab.RedirectURI,
 	})
-	resp, err := http.Post(cfg.GitLab.InstanceURL+"/oauth/token", "application/json", bytes.NewReader(body))
+	resp, err := gitlabHTTPClient.Post(cfg.GitLab.InstanceURL+"/oauth/token", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +370,7 @@ func gitlabTokenExchange(cfg *config.Config, code string) (*gitlabTokenResponse,
 func gitlabFetchUser(cfg *config.Config, accessToken string) (*gitlabProfile, error) {
 	req, _ := http.NewRequest("GET", cfg.GitLab.InstanceURL+"/api/v4/user", nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := gitlabHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

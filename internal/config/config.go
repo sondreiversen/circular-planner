@@ -25,15 +25,16 @@ type Config struct {
 	JWTSecret   string
 	NodeEnv     string
 	DataDir     string
+	AllowedOrigin string
 	GitLab      GitLab
 }
 
 func Load() *Config {
 	jwtSecret := env("JWT_SECRET", "")
-	if jwtSecret == "" {
-		log.Println("[WARNING] JWT_SECRET not set — using insecure default. Set it before production use!")
-		jwtSecret = "insecure-default-secret-change-me"
+	if len(jwtSecret) < 32 {
+		log.Fatal("FATAL: JWT_SECRET must be set to a random string of at least 32 characters.")
 	}
+	allowedOrigin := env("ALLOWED_ORIGIN", "http://localhost:3000")
 
 	dataDir := env("DATA_DIR", "./data")
 	dbURL := env("DATABASE_URL", "")
@@ -56,6 +57,7 @@ func Load() *Config {
 		JWTSecret:   jwtSecret,
 		NodeEnv:     env("NODE_ENV", "development"),
 		DataDir:     dataDir,
+		AllowedOrigin: allowedOrigin,
 		GitLab: GitLab{
 			Enabled:      os.Getenv("GITLAB_SSO_ENABLED") == "true",
 			InstanceURL:  env("GITLAB_INSTANCE_URL", ""),
