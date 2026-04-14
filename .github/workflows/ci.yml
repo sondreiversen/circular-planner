@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main, go-backend]
+  pull_request:
+
+jobs:
+  go:
+    if: github.ref == 'refs/heads/go-backend' || github.base_ref == 'go-backend'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build:client
+      - run: go build ./...
+      - run: go test ./... -race -timeout 2m
+
+  node:
+    if: github.ref == 'refs/heads/main' || github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: planner
+          POSTGRES_PASSWORD: planner
+          POSTGRES_DB: circular_planner_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://planner:planner@localhost:5432/circular_planner_test
+      JWT_SECRET: test-secret-at-least-32-characters-long-x
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build
+      - run: npm test

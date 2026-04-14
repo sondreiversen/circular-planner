@@ -1,4 +1,3 @@
--- label column already included in 001-initial.sql for fresh installs;
--- this migration is a no-op on Go-bootstrapped DBs but adds the column to
--- any existing DB that was created by the Node server's schema.
-ALTER TABLE activities ADD COLUMN IF NOT EXISTS label TEXT NOT NULL DEFAULT '';
+-- No-op on Go-bootstrapped DBs: the label column is already defined in 001-initial.sql.
+-- Kept as a tracked migration so schema_migrations matches across deployments.
+SELECT 1;
