@@ -1,41 +1,66 @@
 # Circular Planner
 
-A standalone full-stack web application — circular disc planner (Plandisc-style) with user accounts, PostgreSQL storage, and sharing.
+A full-stack circular disc planner (Plandisc-style) with user accounts, data persistence, and sharing.
 
-## Build commands
+Two backends live on separate branches:
+
+| Branch | Backend | Database | Build |
+|---|---|---|---|
+| `main` | Node.js + Express + TypeScript | PostgreSQL (required) | `npm run build && npm start` |
+| `go-backend` | Go (`net/http`) | SQLite (default) or Postgres | `npm run build:client && go build -o planner . && ./planner` |
+
+---
+
+## Build commands (main branch — Node backend)
 
 ```bash
-npm run build          # build both client and server
-npm run build:client   # webpack → dist/public/js/
-npm run build:server   # tsc → dist/server/
-npm run dev            # server (nodemon) + webpack watch, concurrently
-npm start              # run compiled server (production)
-npm run migrate        # run DB migrations manually
-npm test               # Jest frontend tests
+npm run build          # esbuild frontend → public/js/ + tsc server → dist/server/
+npm run build:client   # esbuild only → public/js/{planner,auth,dashboard}-bundle.js
+npm run build:server   # tsc → dist/server/ + copy migration SQL
+npm run dev            # nodemon (server) + esbuild watch, concurrently
+npm run dev:client     # esbuild watch only (for use with go run .)
+npm start              # run compiled Node server (production)
+npm run migrate        # run DB migrations manually (Node/Postgres)
+npm test               # Jest frontend unit tests
 ```
+
+## Build commands (go-backend branch — Go backend)
+
+```bash
+npm run build:client   # compile TypeScript frontend → public/js/ (required before go build)
+go build -o planner .  # embed public/ + compile Go binary
+./planner              # run (SQLite at ./data/planner.db by default)
+npm run build:go       # shorthand: build:client + go build in one step
+npm run start:go       # go run . (no pre-build needed, slower startup)
+npm run dev:client     # esbuild watch while running Go server separately
+```
+
+---
 
 ## Architecture
 
-### Stack
-- **Frontend**: Vanilla TypeScript + D3.js, webpack-bundled into three entry points (`planner`, `auth`, `dashboard`)
-- **Backend**: Node.js + Express, TypeScript compiled with `tsc`
-- **Database**: PostgreSQL — migrations run automatically on server start
-- **Auth**: JWT tokens in `Authorization: Bearer` header, stored in `localStorage`
+### Frontend (shared across both branches)
+- **TypeScript + D3.js**, bundled by **esbuild** into three entry points
+- Output goes to `public/js/` (gitignored) — not `dist/` like the old webpack setup
+- Entry points: `client/src/index.ts` → `planner-bundle.js`, `auth.ts` → `auth-bundle.js`, `dashboard.ts` → `dashboard-bundle.js`
+- **Auth**: JWT in `Authorization: Bearer` header, stored in `localStorage` as `cp_token`
+
+### Node backend (`main` branch)
+- Express + TypeScript, compiled with `tsc` to `dist/server/`
+- PostgreSQL via `pg` pool
+- Migrations in `server/migrations/`, tracked in a `migrations` table
+
+### Go backend (`go-backend` branch)
+- `net/http` + Go 1.22 ServeMux — no framework
+- Dual-database: `modernc.org/sqlite` (default, pure Go) or `pgx/v5` (Postgres), chosen from `DATABASE_URL` prefix
+- Migrations in `internal/db/migrations/`, embedded via `//go:embed`, tracked in `schema_migrations`
+- Static files embedded in binary via `//go:embed public`
+- Placeholder translation: all queries written with `?`, `DB.Rebind()` converts to `$N` for Postgres
+- `db.DateStr` custom scanner normalises SQLite `TEXT` and Postgres `DATE`/`TIMESTAMPTZ` to `YYYY-MM-DD` strings
 
 ### Project structure
 
 ```
-server/
-  index.ts              Express app + auto-migration on startup
-  config.ts             Env vars (DATABASE_URL, JWT_SECRET, PORT)
-  db.ts                 pg Pool + query helper
-  middleware/auth.ts    JWT verification middleware (attaches req.user)
-  routes/auth.ts        POST /api/auth/register, /login; GET /me
-  routes/planners.ts    CRUD for planners + transactional lane/activity sync
-  routes/share.ts       Share management (GET/POST/DELETE)
-  migrations/
-    001-initial.sql     Schema (users, planners, lanes, activities, planner_shares)
-    migrate.ts          Manual migration runner (npm run migrate)
 client/src/
   index.ts              Planner page: fetch from API, init Planner
   planner.ts            Main controller (toolbar, state, CRUD, filters)
@@ -43,18 +68,42 @@ client/src/
   viewport.ts           Zoom levels, navigation, grid specs
   dialogs.ts            Activity/lane modals (plain DOM)
   data-manager.ts       Saves to PUT /api/planners/:id
-  api-client.ts         Centralized fetch + JWT token management
+  api-client.ts         Centralised fetch + JWT token management
   auth.ts               Login/register page logic
   dashboard.ts          Planner list page logic
+  theme.ts              Dark/light mode (localStorage key: cp_theme)
   types.ts              All TypeScript interfaces
-  utils.ts              Date math, color palette, ID generation
+  utils.ts              Date math, colour palette, ID generation
+
 public/
   index.html            Login/register page
   dashboard.html        Planner list
   planner.html          Planner view (loads planner by ?id=N)
   css/
-    circular-planner.css  Disc/toolbar styles
+    circular-planner.css  Disc/toolbar styles (CSS custom properties for theming)
     app.css               App chrome, auth, dashboard styles
+  js/                   Compiled bundles (gitignored, generated by build:client)
+
+server/                 Node backend (main branch only)
+  index.ts              Express app + auto-migration on startup
+  config.ts             Env vars
+  db.ts                 pg Pool + query helper
+  middleware/auth.ts    JWT verification (attaches req.user)
+  middleware/access.ts  canAccess() permission helper
+  routes/auth.ts        POST /register, /login; GET /me; GitLab SSO
+  routes/planners.ts    CRUD + transactional lane/activity sync
+  routes/share.ts       Share management
+  migrations/           SQL schema files (001-initial, 002-gitlab-sso, 003-activity-labels)
+
+main.go                 Go entry point (go-backend branch only)
+internal/               Go packages (go-backend branch only)
+  config/               Env var loading (reads .env natively)
+  db/                   DB wrapper, Rebind(), DateStr scanner, migration runner
+  db/migrations/        SQL migrations embedded in binary
+  middleware/           RequireAuth(), UserFrom(), CanAccess()
+  auth/                 /api/auth/* handlers (register, login, me, GitLab SSO)
+  planners/             /api/planners/* handlers
+  share/                /api/planners/:id/shares/* handlers
 ```
 
 ### Data flow
@@ -68,20 +117,22 @@ public/
 ### Database schema
 
 ```
-users              id, username, email, password_hash
-planners           id, owner_id → users, title, start_date, end_date
-lanes              id (VARCHAR), planner_id → planners, name, sort_order, color
-activities         id (VARCHAR), lane_id, planner_id, title, description, dates, color
+users              id, username, email, password_hash, gitlab_id, gitlab_username, auth_provider
+planners           id, owner_id → users, title, start_date, end_date, updated_at
+lanes              id (TEXT/VARCHAR), planner_id → planners, name, sort_order, color
+activities         id (TEXT/VARCHAR), lane_id, planner_id, title, description, start_date, end_date, color, label
 planner_shares     planner_id, user_id, permission ('view'|'edit')
 ```
 
-Lane and activity IDs are frontend-generated short strings (from `randomId()`), scoped to their planner — compound primary keys `(id, planner_id)`.
+Lane and activity IDs are frontend-generated short strings (`randomId()`), scoped to their planner — compound primary keys `(id, planner_id)`.
+
+---
 
 ## Zoom and navigation
 
 Four zoom levels: **Year → Quarter → Month → Week**
 
-- **Year level**: slides month-by-month (not full-year jumps)
+- **Year level**: slides month-by-month; day sub-ticks at 1st/8th/15th/22nd of each month
 - **Year selector**: `<select>` in toolbar for jumping to a specific year
 - **Custom date range**: in filter panel (▼ Filter), two date inputs + Apply
 - **Keyboard**: Arrow left/right = navigate, up/down = zoom in/out
@@ -91,10 +142,11 @@ Four zoom levels: **Year → Quarter → Month → Week**
 
 ▼ Filter button reveals a secondary row with:
 - Search input (debounced 200ms) — filters activity titles
-- Per-lane checkboxes — toggle visibility (hidden lanes keep their slot)
+- Per-lane checkboxes — toggle visibility (hidden lanes release their ring slot when hidden)
+- Label filter — inclusive OR; no selection = show all
 - Custom date range picker
 
-FilterState (`types.ts`) is ephemeral — not persisted.
+`FilterState` (`types.ts`) is ephemeral — not persisted.
 
 ## Visual design
 
@@ -102,26 +154,54 @@ FilterState (`types.ts`) is ephemeral — not persisted.
 - **Seam shadow**: narrow gradient arc at 12 o'clock makes end-of-range appear to float above start
 - **Toolbar**: two rows — primary (nav/zoom/filter toggle) + collapsible secondary (filters/lanes)
 - **Lane colours**: 8 vibrant options at ~0.25 opacity (`LANE_COLORS` in utils.ts)
+- **Dark mode**: CSS custom properties on `:root` / `[data-theme="dark"]`; toggled via `theme.ts`; renderer re-reads vars on each render
 - **Buttons**: CSS classes `cp-btn`, `cp-btn-primary`, `cp-btn-active` with hover transitions
 
 ## Important patterns
 
-- `requireAuth` middleware reads `Authorization: Bearer <token>`, attaches `req.user`
 - `api-client.ts` automatically adds the JWT header and redirects to `/index.html` on 401
-- Server `PUT /api/planners/:id` is a last-write-wins full sync — no partial updates
-- Migrations run automatically at server startup via `runMigrations()` in `server/index.ts`
-- The SQL migration files must be `.sql` and are applied in alphabetical order
+- `PUT /api/planners/:id` is last-write-wins full sync — no partial updates
+- Migrations run automatically at server startup in both backends
+- Hidden lanes: `rebuildGeometry()` in renderer skips hidden lanes and redistributes radial space among visible ones
+- Lane reorder: sidebar shows lanes highest-order-first (outermost ring at top); `handleReorderLane()` reassigns `order` values
+
+## Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | Postgres: `postgresql://localhost:5432/circular_planner`; Go: `sqlite:./data/planner.db` | Database connection |
+| `DATA_DIR` | `./data` | SQLite data directory (Go backend only) |
+| `JWT_SECRET` | *(insecure default)* | **Must be set in production** |
+| `PORT` | `3000` | HTTP port |
+| `HTTPS_PORT` | `3443` | HTTPS port (when TLS configured) |
+| `TLS_CERT_FILE` | — | TLS certificate path |
+| `TLS_KEY_FILE` | — | TLS private key path |
+| `FORCE_HTTPS` | `true` | HTTP → HTTPS redirect when TLS active |
+| `GITLAB_SSO_ENABLED` | `false` | Enable GitLab OAuth2 |
+| `GITLAB_INSTANCE_URL` | — | GitLab base URL |
+| `GITLAB_CLIENT_ID` | — | GitLab OAuth2 app ID |
+| `GITLAB_CLIENT_SECRET` | — | GitLab OAuth2 app secret |
+| `GITLAB_REDIRECT_URI` | — | OAuth2 callback URL |
 
 ## Deployment
 
-### Bare Node.js
+### Node backend (main branch)
 ```bash
-./install.sh   # checks dependencies, installs, creates DB, builds
+npm run build
 npm start
 ```
+Requires PostgreSQL. Set `DATABASE_URL` and `JWT_SECRET`.
 
-### Docker
+### Go backend (go-backend branch)
+```bash
+npm run build:client
+go build -o planner .
+./planner                            # SQLite, no config needed
+DATABASE_URL=postgres://... ./planner  # or Postgres
+```
+
+### Docker (either branch)
 ```bash
 docker compose up --build
 ```
-Set `JWT_SECRET` in environment or `.env` before production deployment.
+Set `JWT_SECRET` in `.env` before running in production.
