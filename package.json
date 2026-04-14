@@ -28,11 +28,13 @@
     "@types/jest": "^29.5.11",
     "@types/jsonwebtoken": "^9.0.5",
     "@types/pg": "^8.11.0",
+    "@types/supertest": "^7.2.0",
     "concurrently": "^8.2.2",
     "esbuild": "^0.25.12",
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0",
     "nodemon": "^3.0.3",
+    "supertest": "^7.2.2",
     "ts-jest": "^29.1.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
@@ -63,6 +65,9 @@
     ],
     "testMatch": [
       "**/__tests__/**/*.test.ts"
-    ]
+    ],
+    "moduleNameMapper": {
+      "^d3-scale$": "<rootDir>/client/src/__tests__/__mocks__/d3-scale.ts"
+    }
   }
 }
