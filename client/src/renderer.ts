@@ -292,8 +292,8 @@ export class Renderer {
 
   private renderLanes(g: Selection<SVGGElement, unknown, null, undefined>): void {
     const sorted = [...this.data.lanes].sort((a, b) => a.order - b.order);
-    const laneStroke = this.cssVar('--cp-disc-stroke', '#c8cdd6');
-    const labelColor = this.cssVar('--cp-text-muted', '#6b7280');
+    const defaultBorder = this.cssVar('--cp-lane-border', '#ffffff');
+    const labelColor = this.cssVar('--cp-lane-border-text', '#1a2332');
 
     sorted.forEach((lane) => {
       const isHidden = this.filterState.hiddenLaneIds.has(lane.id);
@@ -306,19 +306,24 @@ export class Renderer {
       const innerR = this.geometry.innerRadiusFn(slot);
       const outerR = this.geometry.outerRadiusFn(slot);
 
+      // Reserve the outermost slice of the lane for a thick labelled border band.
+      const laneW = outerR - innerR;
+      const borderT = Math.max(10, Math.min(18, laneW * 0.28));
+      const borderInner = outerR - borderT;
+      const bandMid = (borderInner + outerR) / 2;
+      const fontSize = Math.max(8, Math.min(12, borderT - 4));
+
       const laneGroup = g.append('g')
         .attr('class', 'lane')
         .attr('data-lane-id', lane.id);
 
-      // Lane background ring
+      // Lane background fill (within the drawable area, not under the border band)
       const bgPathData = (this.arcGen as any)
-        .innerRadius(innerR).outerRadius(outerR)
+        .innerRadius(innerR).outerRadius(borderInner)
         .startAngle(MIN_ANGLE).endAngle(MAX_ANGLE)();
       laneGroup.append('path')
         .attr('d', bgPathData)
         .attr('fill', lane.color || 'rgba(200,200,200,0.1)')
-        .attr('stroke', laneStroke)
-        .attr('stroke-width', 0.5)
         .style('cursor', 'pointer')
         .on('click', (event: MouseEvent) => {
           const rect = (event.target as Element).closest('svg')?.getBoundingClientRect();
@@ -330,12 +335,56 @@ export class Renderer {
           this.onClickLane(lane.id, clickedDate);
         });
 
-      // Lane name label
-      laneGroup.append('text')
-        .attr('x', 0).attr('y', -(innerR + 4) - 4)
-        .attr('font-size', '9').attr('font-family', FONT_FAMILY)
-        .attr('fill', labelColor).attr('text-anchor', 'middle')
-        .text(lane.name);
+      // Thick border band at the outer edge of the lane
+      const borderPathData = (this.arcGen as any)
+        .innerRadius(borderInner).outerRadius(outerR)
+        .startAngle(MIN_ANGLE).endAngle(MAX_ANGLE)();
+      laneGroup.append('path')
+        .attr('d', borderPathData)
+        .attr('fill', defaultBorder)
+        .style('pointer-events', 'none');
+
+      // Repeat the lane name at 6 clock positions (1, 3, 5, 7, 9, 11) along the border band.
+      // Angle convention: 0 = 12 o'clock, increasing clockwise.
+      const sx = (a: number, r: number) => Math.sin(a) * r;
+      const sy = (a: number, r: number) => -Math.cos(a) * r;
+      const clockHours = [1, 3, 5, 7, 9, 11];
+      const labelSpan = Math.PI / 3 - 0.2;
+
+      clockHours.forEach((h) => {
+        const center = (h / 12) * 2 * Math.PI;
+        const isBottom = Math.cos(center) < -0.1;
+        // Offset the path radius so the text's visual centre lands on bandMid.
+        // Top-half text extends outward from its path → path sits inside bandMid.
+        // Bottom-flipped text extends inward from its path → path sits outside bandMid.
+        const pathRadius = isBottom ? bandMid + fontSize * 0.35 : bandMid - fontSize * 0.35;
+        const a0 = center - labelSpan / 2;
+        const a1 = center + labelSpan / 2;
+        const d = isBottom
+          ? `M ${sx(a1, pathRadius)} ${sy(a1, pathRadius)} A ${pathRadius} ${pathRadius} 0 0 0 ${sx(a0, pathRadius)} ${sy(a0, pathRadius)}`
+          : `M ${sx(a0, pathRadius)} ${sy(a0, pathRadius)} A ${pathRadius} ${pathRadius} 0 0 1 ${sx(a1, pathRadius)} ${sy(a1, pathRadius)}`;
+        const pathId = `lane-label-${lane.id}-${slot}-${h}`;
+
+        laneGroup.append('path')
+          .attr('id', pathId)
+          .attr('d', d)
+          .attr('fill', 'none')
+          .attr('stroke', 'none');
+
+        const text = laneGroup.append('text')
+          .attr('font-size', fontSize)
+          .attr('font-family', FONT_FAMILY)
+          .attr('font-weight', '600')
+          .attr('fill', labelColor)
+          .attr('dominant-baseline', 'central')
+          .style('pointer-events', 'none');
+
+        text.append('textPath')
+          .attr('href', `#${pathId}`)
+          .attr('startOffset', '50%')
+          .attr('text-anchor', 'middle')
+          .text(lane.name);
+      });
 
       // Filter activities by search term and active labels
       const visibleActivities = lane.activities.filter(a => {
@@ -361,7 +410,7 @@ export class Renderer {
       const totalSubRows = Math.max(rowEnds.length, 1);
 
       sortedActs.forEach((activity, i) => {
-        this.renderActivity(laneGroup, activity, innerR, outerR, subRows[i], totalSubRows);
+        this.renderActivity(laneGroup, activity, innerR, borderInner, subRows[i], totalSubRows);
       });
     });
   }
@@ -452,26 +501,46 @@ export class Renderer {
       .text(`${activity.title}\n${formatDate(startDate)} → ${formatDate(endDate)}\n${activity.description || ''}`);
   }
 
-  /** Plandisc-style overlap shadow at 12 o'clock seam */
+  /** Plandisc-style seam at 12 o'clock: the end-of-range "lifts" above the start,
+   *  making the direction of time (CW) visually obvious. */
   private renderSeamShadow(g: Selection<SVGGElement, unknown, null, undefined>): void {
-    // Shadow arc on the START side (just CW of 12 o'clock = angle 0).
-    // The END-of-range edge appears to float above, casting a shadow onto January.
-    const shadowSpread = 0.18; // ~10 degrees
-    g.append('path')
-      .attr('d', (this.arcGen as any)
-        .innerRadius(CORE_RADIUS).outerRadius(OUTER_RADIUS)
-        .startAngle(MIN_ANGLE).endAngle(MIN_ANGLE + shadowSpread)())
-      .attr('fill', 'url(#cp-seam-shadow)')
-      .attr('pointer-events', 'none');
+    const discBg = this.cssVar('--cp-disc-bg-outer', '#f4f5f7');
+    const borderStrong = this.cssVar('--cp-border-strong', '#d0d4db');
 
-    // Subtle highlight on the END side (the "elevated" edge, just CCW of 12)
-    const highlightSpread = 0.08; // ~4.5 degrees
+    // Subtle highlight on the END side — the lifted edge catches light
+    const highlightSpread = 0.08;
     g.append('path')
       .attr('d', (this.arcGen as any)
         .innerRadius(CORE_RADIUS).outerRadius(OUTER_RADIUS)
         .startAngle(MAX_ANGLE - highlightSpread).endAngle(MAX_ANGLE)())
       .attr('fill', 'rgba(255,255,255,0.22)')
       .attr('pointer-events', 'none');
+
+    // Narrow, light drop shadow on the START side — cast by the lifted end edge.
+    // Kept short (~3°) and soft so it reads as depth, not a dark band.
+    const shadowSpread = 0.055;
+    g.append('path')
+      .attr('d', (this.arcGen as any)
+        .innerRadius(CORE_RADIUS).outerRadius(OUTER_RADIUS)
+        .startAngle(MIN_ANGLE).endAngle(MIN_ANGLE + shadowSpread)())
+      .attr('fill', 'rgba(0,0,0,0.18)')
+      .attr('pointer-events', 'none');
+
+    // "Paper overhang" lip on the END side — a thin wedge extending just outside
+    // OUTER_RADIUS, creating the illusion that the end of the range sits on top
+    // of the start, like the outer turn of a rolled sheet.
+    const lipInnerR = CORE_RADIUS;
+    const lipOuterR = OUTER_RADIUS + 6;
+    const lipSpread = 0.04; // ~2.3°
+    g.append('path')
+      .attr('d', (this.arcGen as any)
+        .innerRadius(lipInnerR).outerRadius(lipOuterR)
+        .startAngle(MAX_ANGLE - lipSpread).endAngle(MAX_ANGLE)())
+      .attr('fill', discBg)
+      .attr('stroke', borderStrong)
+      .attr('stroke-width', 1)
+      .attr('pointer-events', 'none');
+
   }
 
   private renderTodayIndicator(g: Selection<SVGGElement, unknown, null, undefined>): void {

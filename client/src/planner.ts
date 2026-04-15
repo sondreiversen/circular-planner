@@ -1,5 +1,8 @@
 import { PlannerConfig, PlannerData, Lane, Activity, Viewport, FilterState } from './types';
 import { Renderer } from './renderer';
+import { ListRenderer } from './list-renderer';
+
+type ViewMode = 'disc' | 'list';
 import { DataManager } from './data-manager';
 import { showActivityDialog, showLaneDialog } from './dialogs';
 import { randomId, laneColor, parseDate, formatDate } from './utils';
@@ -16,11 +19,17 @@ export class Planner {
   private viewport: Viewport;
   private filterState: FilterState;
   private renderer!: Renderer;
+  private listRenderer: ListRenderer | null = null;
   private dataManager: DataManager;
   private container: HTMLElement;
   private toolbar!: HTMLElement;
+  private svgContainer!: HTMLElement;
+  private listContainer!: HTMLElement;
+  private viewMode: ViewMode = 'disc';
   private sidebarCollapsed = false;
   private searchDebounce: ReturnType<typeof setTimeout> | null = null;
+  private viewDiscBtn!: HTMLButtonElement;
+  private viewListBtn!: HTMLButtonElement;
 
   // Refs to toolbar elements that change on viewport updates
   private vpLabelEl!: HTMLSpanElement;
@@ -38,6 +47,13 @@ export class Planner {
 
     // Restore sidebar collapsed state
     this.sidebarCollapsed = localStorage.getItem('cp_sidebar_collapsed') === 'true';
+    const storedMode = localStorage.getItem('cp_view_mode');
+    if (storedMode === 'list' || storedMode === 'disc') this.viewMode = storedMode;
+
+    const storedBorder = localStorage.getItem('cp_lane_border_color');
+    if (storedBorder) {
+      document.documentElement.style.setProperty('--cp-lane-border', storedBorder);
+    }
 
     this.mount();
   }
@@ -88,6 +104,13 @@ export class Planner {
     svgContainer.className = 'cp-svg-container';
     svgContainer.tabIndex = 0;
     mainArea.appendChild(svgContainer);
+    this.svgContainer = svgContainer;
+
+    const listContainer = document.createElement('div');
+    listContainer.className = 'cp-list-container';
+    listContainer.tabIndex = 0;
+    mainArea.appendChild(listContainer);
+    this.listContainer = listContainer;
 
     this.renderer = new Renderer(svgContainer, this.config, this.data, this.viewport);
     this.renderer.setHandlers(
@@ -101,14 +124,52 @@ export class Planner {
       else if (e.deltaY > 0) this.handleZoomOut();
     }, { passive: false });
 
-    svgContainer.addEventListener('keydown', (e: KeyboardEvent) => {
+    const keyHandler = (e: KeyboardEvent) => {
       switch (e.key) {
         case 'ArrowLeft':  e.preventDefault(); this.handleNavigate(-1); break;
         case 'ArrowRight': e.preventDefault(); this.handleNavigate(1);  break;
         case 'ArrowUp':    e.preventDefault(); this.handleZoomIn();     break;
         case 'ArrowDown':  e.preventDefault(); this.handleZoomOut();    break;
       }
-    });
+    };
+    svgContainer.addEventListener('keydown', keyHandler);
+    listContainer.addEventListener('keydown', keyHandler);
+
+    this.applyViewMode();
+  }
+
+  private applyViewMode(): void {
+    const isList = this.viewMode === 'list';
+    this.svgContainer.style.display = isList ? 'none' : '';
+    this.listContainer.style.display = isList ? '' : 'none';
+
+    if (isList) {
+      if (!this.listRenderer) {
+        this.listRenderer = new ListRenderer(this.listContainer, this.data, this.viewport, this.filterState);
+        this.listRenderer.setHandlers(
+          (activity) => this.handleClickActivity(activity),
+          (laneId, date) => this.handleClickLane(laneId, date)
+        );
+      } else {
+        this.listRenderer.update(this.data, this.filterState);
+        this.listRenderer.updateViewport(this.viewport);
+      }
+      this.listContainer.focus();
+    } else {
+      this.svgContainer.focus();
+    }
+
+    if (this.viewDiscBtn && this.viewListBtn) {
+      this.viewDiscBtn.classList.toggle('cp-btn-active', !isList);
+      this.viewListBtn.classList.toggle('cp-btn-active', isList);
+    }
+  }
+
+  private setViewMode(mode: ViewMode): void {
+    if (this.viewMode === mode) return;
+    this.viewMode = mode;
+    localStorage.setItem('cp_view_mode', mode);
+    this.applyViewMode();
   }
 
   private buildSidebar(body: HTMLElement): void {
@@ -132,7 +193,7 @@ export class Planner {
       if (this.searchDebounce) clearTimeout(this.searchDebounce);
       this.searchDebounce = setTimeout(() => {
         this.filterState.searchTerm = searchInput.value.toLowerCase().trim();
-        this.renderer.update(this.data, this.filterState);
+        this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState);
       }, 200);
     });
     searchSection.appendChild(searchInput);
@@ -279,6 +340,52 @@ export class Planner {
       body.appendChild(labelsSection);
     }
 
+    // Section: Appearance (lane border colour)
+    const apprSection = document.createElement('div');
+    apprSection.className = 'cp-sidebar-section';
+
+    const apprHeading = document.createElement('div');
+    apprHeading.className = 'cp-sidebar-label';
+    apprHeading.textContent = 'Appearance';
+    apprSection.appendChild(apprHeading);
+
+    const borderRow = document.createElement('div');
+    borderRow.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:12px;';
+
+    const borderLabel = document.createElement('span');
+    borderLabel.textContent = 'Border';
+    borderLabel.style.cssText = 'flex:1;';
+    borderRow.appendChild(borderLabel);
+
+    const storedBorder = localStorage.getItem('cp_lane_border_color');
+    const borderInput = document.createElement('input');
+    borderInput.type = 'color';
+    borderInput.value = storedBorder || '#ffffff';
+    borderInput.style.cssText = 'width:32px;height:26px;padding:0;border:1px solid #ccc;border-radius:3px;cursor:pointer;';
+    borderInput.title = 'Lane border colour';
+    borderInput.addEventListener('input', () => {
+      document.documentElement.style.setProperty('--cp-lane-border', borderInput.value);
+      localStorage.setItem('cp_lane_border_color', borderInput.value);
+      this.renderer.update(this.data, this.filterState);
+    });
+    borderRow.appendChild(borderInput);
+
+    const borderReset = document.createElement('button');
+    borderReset.textContent = 'Reset';
+    borderReset.className = 'cp-btn';
+    borderReset.style.cssText = 'padding:3px 8px;font-size:11px;';
+    borderReset.title = 'Use default border colour';
+    borderReset.addEventListener('click', () => {
+      document.documentElement.style.removeProperty('--cp-lane-border');
+      localStorage.removeItem('cp_lane_border_color');
+      borderInput.value = '#ffffff';
+      this.renderer.update(this.data, this.filterState);
+    });
+    borderRow.appendChild(borderReset);
+
+    apprSection.appendChild(borderRow);
+    body.appendChild(apprSection);
+
     // Section: Date range
     const rangeSection = document.createElement('div');
     rangeSection.className = 'cp-sidebar-section';
@@ -346,7 +453,7 @@ export class Planner {
     } else {
       this.filterState.activeLabels.add(label);
     }
-    this.renderer.update(this.data, this.filterState);
+    this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState);
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
     if (sidebarBody) this.buildSidebar(sidebarBody);
   }
@@ -378,6 +485,29 @@ export class Planner {
     yearSel.addEventListener('change', () => this.handleYearSelect(Number(yearSel.value)));
     this.toolbar.appendChild(yearSel);
     this.yearSelEl = yearSel;
+
+    // View-mode toggle
+    const viewGroup = document.createElement('div');
+    viewGroup.className = 'cp-zoom-controls';
+    viewGroup.style.marginLeft = '8px';
+
+    const discBtn = document.createElement('button');
+    discBtn.textContent = 'Disc';
+    discBtn.className = 'cp-btn' + (this.viewMode === 'disc' ? ' cp-btn-active' : '');
+    discBtn.title = 'Disc view';
+    discBtn.addEventListener('click', () => this.setViewMode('disc'));
+    viewGroup.appendChild(discBtn);
+    this.viewDiscBtn = discBtn;
+
+    const listBtn = document.createElement('button');
+    listBtn.textContent = 'List';
+    listBtn.className = 'cp-btn' + (this.viewMode === 'list' ? ' cp-btn-active' : '');
+    listBtn.title = 'Timeline list view';
+    listBtn.addEventListener('click', () => this.setViewMode('list'));
+    viewGroup.appendChild(listBtn);
+    this.viewListBtn = listBtn;
+
+    this.toolbar.appendChild(viewGroup);
 
     // Spacer
     const spacer = document.createElement('span');
@@ -432,7 +562,8 @@ export class Planner {
   }
 
   private refresh(): void {
-    this.renderer.update(this.data, this.filterState);
+    this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState);
+    this.listRenderer?.update(this.data, this.filterState);
     // Rebuild sidebar to reflect lane changes
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
     if (sidebarBody) this.buildSidebar(sidebarBody);
@@ -440,6 +571,7 @@ export class Planner {
 
   private refreshViewport(): void {
     this.renderer.updateViewport(this.viewport);
+    this.listRenderer?.updateViewport(this.viewport);
     this.updateViewportState();
   }
 
@@ -492,7 +624,7 @@ export class Planner {
     } else {
       this.filterState.hiddenLaneIds.add(laneId);
     }
-    this.renderer.update(this.data, this.filterState);
+    this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState);
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
     if (sidebarBody) this.buildSidebar(sidebarBody);
   }
