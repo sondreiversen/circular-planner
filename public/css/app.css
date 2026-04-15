@@ -14,6 +14,8 @@
   --cp-disc-bg-inner: #ffffff;
   --cp-disc-bg-outer: #f4f5f7;
   --cp-disc-stroke: #d0d4db;
+  --cp-lane-border: #ffffff;
+  --cp-lane-border-text: #1a2332;
   --cp-grid-minor: #e8eaed;
   --cp-grid-major: #d5d9e0;
   --cp-seam-shadow: rgba(0,0,0,0.32);
@@ -33,6 +35,8 @@
   --cp-disc-bg-inner: #252932;
   --cp-disc-bg-outer: #1e2128;
   --cp-disc-stroke: #3a4049;
+  --cp-lane-border: #ffffff;
+  --cp-lane-border-text: #1a2332;
   --cp-grid-minor: #2d323c;
   --cp-grid-major: #3a4049;
   --cp-seam-shadow: rgba(0,0,0,0.55);
