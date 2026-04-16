@@ -1,5 +1,5 @@
 import { Activity, Lane } from './types';
-import { COLOR_PALETTE, LANE_COLORS, randomId, formatDate, parseDate, escapeHtml } from './utils';
+import { COLOR_PALETTE, LANE_COLORS, randomId, formatDate, parseDate, escapeHtml, ymdToDmy, dmyToYmd } from './utils';
 
 type SaveActivityCallback = (activity: Activity) => void;
 type DeleteActivityCallback = (activityId: string) => void;
@@ -57,9 +57,9 @@ export function showActivityDialog(
 
   const isEdit = !!existingActivity;
   const defaultColor = existingActivity?.color || COLOR_PALETTE[0];
-  const defaultStart = existingActivity ? existingActivity.startDate : formatDate(initialDate);
-  const defaultEnd   = existingActivity ? existingActivity.endDate
-    : formatDate(new Date(initialDate.getTime() + 7 * 24 * 3600 * 1000));
+  const defaultStart = ymdToDmy(existingActivity ? existingActivity.startDate : formatDate(initialDate));
+  const defaultEnd   = ymdToDmy(existingActivity ? existingActivity.endDate
+    : formatDate(new Date(initialDate.getTime() + 7 * 24 * 3600 * 1000)));
 
   const laneOptions = lanes
     .sort((a, b) => a.order - b.order)
@@ -91,12 +91,12 @@ export function showActivityDialog(
       <div style="display:flex;gap:12px;margin-bottom:12px;">
         <label style="flex:1;font-family:sans-serif;font-size:13px;">
           Start date <span style="color:red">*</span>
-          <input id="cp-act-start" type="date" value="${defaultStart}"
+          <input id="cp-act-start" type="text" inputmode="numeric" placeholder="DD/MM/YYYY" value="${defaultStart}"
             style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;">
         </label>
         <label style="flex:1;font-family:sans-serif;font-size:13px;">
           End date <span style="color:red">*</span>
-          <input id="cp-act-end" type="date" value="${defaultEnd}"
+          <input id="cp-act-end" type="text" inputmode="numeric" placeholder="DD/MM/YYYY" value="${defaultEnd}"
             style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;">
         </label>
       </div>
@@ -145,14 +145,17 @@ export function showActivityDialog(
 
   document.getElementById('cp-act-save')?.addEventListener('click', () => {
     const title = (document.getElementById('cp-act-title') as HTMLInputElement).value.trim();
-    const start = (document.getElementById('cp-act-start') as HTMLInputElement).value;
-    const end   = (document.getElementById('cp-act-end') as HTMLInputElement).value;
+    const startRaw = (document.getElementById('cp-act-start') as HTMLInputElement).value;
+    const endRaw   = (document.getElementById('cp-act-end') as HTMLInputElement).value;
     const lane  = (document.getElementById('cp-act-lane') as HTMLSelectElement).value;
     const desc  = (document.getElementById('cp-act-desc') as HTMLTextAreaElement).value.trim();
     const label = (document.getElementById('cp-act-label') as HTMLInputElement).value.trim();
     const color = getSelectedColor(colorPicker);
 
-    if (!title || !start || !end) { alert('Please fill in title, start date, and end date.'); return; }
+    if (!title || !startRaw || !endRaw) { alert('Please fill in title, start date, and end date.'); return; }
+    const start = dmyToYmd(startRaw);
+    const end   = dmyToYmd(endRaw);
+    if (!start || !end) { alert('Dates must be in DD/MM/YYYY format.'); return; }
     if (start > end) { alert('Start date must be before end date.'); return; }
 
     const activity: Activity = {

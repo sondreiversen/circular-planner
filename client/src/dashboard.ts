@@ -1,5 +1,5 @@
 import { api, logout } from './api-client';
-import { escapeHtml } from './utils';
+import { escapeHtml, ymdToDmy, dmyToYmd } from './utils';
 import { PlannerSummary } from './types';
 import { initTheme, applyTheme, currentTheme } from './theme';
 
@@ -37,8 +37,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Set sensible defaults in the dialog
     const start = document.getElementById('np-start') as HTMLInputElement;
     const end   = document.getElementById('np-end')   as HTMLInputElement;
-    if (start && !start.value) start.value = `${thisYear}-01-01`;
-    if (end   && !end.value)   end.value   = `${thisYear}-12-31`;
+    if (start && !start.value) start.value = ymdToDmy(`${thisYear}-01-01`);
+    if (end   && !end.value)   end.value   = ymdToDmy(`${thisYear}-12-31`);
     document.getElementById('new-planner-overlay')?.classList.remove('hidden');
     (document.getElementById('np-title') as HTMLInputElement)?.focus();
   });
@@ -51,20 +51,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('new-planner-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const title = (document.getElementById('np-title') as HTMLInputElement).value.trim();
-    const start = (document.getElementById('np-start') as HTMLInputElement).value;
-    const end   = (document.getElementById('np-end')   as HTMLInputElement).value;
+    const startRaw = (document.getElementById('np-start') as HTMLInputElement).value;
+    const endRaw   = (document.getElementById('np-end')   as HTMLInputElement).value;
     const errEl = document.getElementById('new-planner-error');
-    if (!title || !start || !end) return;
-    if (start >= end) {
-      if (errEl) { errEl.textContent = 'Start date must be before end date.'; errEl.classList.remove('hidden'); }
-      return;
-    }
+    const showErr = (msg: string) => {
+      if (errEl) { errEl.textContent = msg; errEl.classList.remove('hidden'); }
+    };
+    if (!title || !startRaw || !endRaw) return;
+    const start = dmyToYmd(startRaw);
+    const end   = dmyToYmd(endRaw);
+    if (!start || !end) { showErr('Dates must be in DD/MM/YYYY format.'); return; }
+    if (start >= end) { showErr('Start date must be before end date.'); return; }
     if (errEl) errEl.classList.add('hidden');
     try {
       const planner = await api.post<{ id: number }>('/api/planners', { title, startDate: start, endDate: end });
       window.location.href = `/planner.html?id=${planner.id}`;
     } catch (err: unknown) {
-      if (errEl) { errEl.textContent = (err as Error).message; errEl.classList.remove('hidden'); }
+      showErr((err as Error).message);
     }
   });
 

@@ -3,9 +3,18 @@ import { Renderer } from './renderer';
 import { ListRenderer } from './list-renderer';
 
 type ViewMode = 'disc' | 'list';
+
+const LANE_BORDER_ALPHA = 0.78;
+
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
 import { DataManager } from './data-manager';
 import { showActivityDialog, showLaneDialog } from './dialogs';
-import { randomId, laneColor, parseDate, formatDate } from './utils';
+import { randomId, laneColor, parseDate, formatDate, ymdToDmy, dmyToYmd } from './utils';
 import { defaultViewport, zoomIn, zoomOut, navigate, canZoomIn, canZoomOut, viewportLabel, navigateToYear, navigateToRange } from './viewport';
 import { ZoomLevel } from './types';
 
@@ -27,6 +36,7 @@ export class Planner {
   private listContainer!: HTMLElement;
   private viewMode: ViewMode = 'disc';
   private sidebarCollapsed = false;
+  private showBorder = true;
   private searchDebounce: ReturnType<typeof setTimeout> | null = null;
   private viewDiscBtn!: HTMLButtonElement;
   private viewListBtn!: HTMLButtonElement;
@@ -52,8 +62,10 @@ export class Planner {
 
     const storedBorder = localStorage.getItem('cp_lane_border_color');
     if (storedBorder) {
-      document.documentElement.style.setProperty('--cp-lane-border', storedBorder);
+      document.documentElement.style.setProperty('--cp-lane-border', hexToRgba(storedBorder, LANE_BORDER_ALPHA));
     }
+
+    if (localStorage.getItem('cp_lane_border_show') === 'false') this.showBorder = false;
 
     this.mount();
   }
@@ -117,6 +129,8 @@ export class Planner {
       (laneId, date) => this.handleClickLane(laneId, date),
       (activity) => this.handleClickActivity(activity)
     );
+    this.renderer.setBorderOptions(this.showBorder);
+    this.renderer.update(this.data, this.filterState);
 
     svgContainer.addEventListener('wheel', (e: WheelEvent) => {
       e.preventDefault();
@@ -349,11 +363,29 @@ export class Planner {
     apprHeading.textContent = 'Appearance';
     apprSection.appendChild(apprHeading);
 
+    const makeToggleRow = (
+      labelText: string,
+      checked: boolean,
+      onChange: (v: boolean) => void
+    ): HTMLLabelElement => {
+      const row = document.createElement('label');
+      row.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;user-select:none;';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = checked;
+      cb.addEventListener('change', () => onChange(cb.checked));
+      row.appendChild(cb);
+      const txt = document.createElement('span');
+      txt.textContent = labelText;
+      row.appendChild(txt);
+      return row;
+    };
+
     const borderRow = document.createElement('div');
     borderRow.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:12px;';
 
     const borderLabel = document.createElement('span');
-    borderLabel.textContent = 'Border';
+    borderLabel.textContent = 'Border colour';
     borderLabel.style.cssText = 'flex:1;';
     borderRow.appendChild(borderLabel);
 
@@ -363,8 +395,9 @@ export class Planner {
     borderInput.value = storedBorder || '#ffffff';
     borderInput.style.cssText = 'width:32px;height:26px;padding:0;border:1px solid #ccc;border-radius:3px;cursor:pointer;';
     borderInput.title = 'Lane border colour';
+    borderInput.disabled = !this.showBorder;
     borderInput.addEventListener('input', () => {
-      document.documentElement.style.setProperty('--cp-lane-border', borderInput.value);
+      document.documentElement.style.setProperty('--cp-lane-border', hexToRgba(borderInput.value, LANE_BORDER_ALPHA));
       localStorage.setItem('cp_lane_border_color', borderInput.value);
       this.renderer.update(this.data, this.filterState);
     });
@@ -375,6 +408,7 @@ export class Planner {
     borderReset.className = 'cp-btn';
     borderReset.style.cssText = 'padding:3px 8px;font-size:11px;';
     borderReset.title = 'Use default border colour';
+    borderReset.disabled = !this.showBorder;
     borderReset.addEventListener('click', () => {
       document.documentElement.style.removeProperty('--cp-lane-border');
       localStorage.removeItem('cp_lane_border_color');
@@ -382,6 +416,16 @@ export class Planner {
       this.renderer.update(this.data, this.filterState);
     });
     borderRow.appendChild(borderReset);
+
+    const borderToggleRow = makeToggleRow('Show lane borders', this.showBorder, (v) => {
+      this.showBorder = v;
+      localStorage.setItem('cp_lane_border_show', String(v));
+      borderInput.disabled = !v;
+      borderReset.disabled = !v;
+      this.renderer.setBorderOptions(this.showBorder);
+      this.renderer.update(this.data, this.filterState);
+    });
+    apprSection.appendChild(borderToggleRow);
 
     apprSection.appendChild(borderRow);
     body.appendChild(apprSection);
@@ -396,8 +440,10 @@ export class Planner {
     rangeSection.appendChild(rangeHeading);
 
     const rangeStart = document.createElement('input');
-    rangeStart.type = 'date';
-    rangeStart.value = formatDate(this.viewport.windowStart);
+    rangeStart.type = 'text';
+    rangeStart.inputMode = 'numeric';
+    rangeStart.placeholder = 'DD/MM/YYYY';
+    rangeStart.value = ymdToDmy(formatDate(this.viewport.windowStart));
     rangeStart.className = 'cp-filter-input cp-filter-input--full';
     rangeSection.appendChild(rangeStart);
 
@@ -407,8 +453,10 @@ export class Planner {
     rangeSection.appendChild(rangeTo);
 
     const rangeEnd = document.createElement('input');
-    rangeEnd.type = 'date';
-    rangeEnd.value = formatDate(this.viewport.windowEnd);
+    rangeEnd.type = 'text';
+    rangeEnd.inputMode = 'numeric';
+    rangeEnd.placeholder = 'DD/MM/YYYY';
+    rangeEnd.value = ymdToDmy(formatDate(this.viewport.windowEnd));
     rangeEnd.className = 'cp-filter-input cp-filter-input--full';
     rangeSection.appendChild(rangeEnd);
 
@@ -417,9 +465,11 @@ export class Planner {
     applyBtn.className = 'cp-btn cp-btn-primary';
     applyBtn.style.cssText = 'width:100%;margin-top:6px;';
     applyBtn.addEventListener('click', () => {
-      if (!rangeStart.value || !rangeEnd.value) return;
-      if (rangeStart.value >= rangeEnd.value) { alert('Start must be before end date.'); return; }
-      this.handleCustomRange(parseDate(rangeStart.value), parseDate(rangeEnd.value));
+      const startYmd = dmyToYmd(rangeStart.value);
+      const endYmd   = dmyToYmd(rangeEnd.value);
+      if (!startYmd || !endYmd) { alert('Dates must be in DD/MM/YYYY format.'); return; }
+      if (startYmd >= endYmd) { alert('Start must be before end date.'); return; }
+      this.handleCustomRange(parseDate(startYmd), parseDate(endYmd));
     });
     rangeSection.appendChild(applyBtn);
     body.appendChild(rangeSection);
