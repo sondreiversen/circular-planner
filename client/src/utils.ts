@@ -31,6 +31,25 @@ export function formatDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+/** Convert "YYYY-MM-DD" to "DD/MM/YYYY". Returns input unchanged on mismatch. */
+export function ymdToDmy(ymd: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : ymd;
+}
+
+/** Parse "DD/MM/YYYY" (or D/M/YYYY, with / - or . separators) to "YYYY-MM-DD", or null if invalid. */
+export function dmyToYmd(dmy: string): string | null {
+  const m = /^\s*(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})\s*$/.exec(dmy);
+  if (!m) return null;
+  const day = parseInt(m[1], 10);
+  const month = parseInt(m[2], 10);
+  const year = parseInt(m[3], 10);
+  if (month < 1 || month > 12 || day < 1) return null;
+  const d = new Date(year, month - 1, day);
+  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) return null;
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
 /**
  * Convert an (x, y) position relative to the disc center to an angle in radians.
  * Returns a value in [0, 2*PI] matching the d3-arc angle convention (0 = 12 o'clock, clockwise).

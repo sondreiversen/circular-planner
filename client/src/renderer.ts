@@ -25,6 +25,7 @@ export class Renderer {
   private filterState: FilterState;
   private angleScale!: ReturnType<typeof createAngleScale>;
   private geometry!: DiscGeometry;
+  private showBorder = true;
 
   private onClickLane: ClickLaneHandler = () => {};
   private onClickActivity: ClickActivityHandler = () => {};
@@ -50,6 +51,10 @@ export class Renderer {
   setHandlers(onClickLane: ClickLaneHandler, onClickActivity: ClickActivityHandler): void {
     this.onClickLane = onClickLane;
     this.onClickActivity = onClickActivity;
+  }
+
+  setBorderOptions(showBorder: boolean): void {
+    this.showBorder = showBorder;
   }
 
   /** Full re-render with new data (lanes/activities changed) */
@@ -239,8 +244,8 @@ export class Renderer {
         .attr('stroke-width', 1);
     });
 
-    // Outer labels around the perimeter
-    const labelRadius = OUTER_RADIUS + 20;
+    // Outer labels around the perimeter (outside the disc, in a dedicated ring)
+    const labelRadius = OUTER_RADIUS + 24;
     const labelsGroup = g.append('g').attr('class', 'grid-labels');
 
     gridSpec.labels.forEach(({ date, text }) => {
@@ -266,9 +271,10 @@ export class Renderer {
         .text(text);
     });
 
-    // Inner day-number sub-labels (Year zoom only)
+    // Day-number sub-labels (Year zoom only) — ring just outside the disc,
+    // between the disc edge and the main month labels.
     if (gridSpec.subLabels && gridSpec.subLabels.length > 0) {
-      const subLabelRadius = OUTER_RADIUS - 14;
+      const subLabelRadius = OUTER_RADIUS + 8;
       const subLabelsGroup = g.append('g').attr('class', 'grid-sublabels');
       const subLabelColor = this.cssVar('--cp-text-muted', '#8896a5');
 
@@ -309,7 +315,7 @@ export class Renderer {
       // Reserve the outermost slice of the lane for a thick labelled border band.
       const laneW = outerR - innerR;
       const borderT = Math.max(10, Math.min(18, laneW * 0.28));
-      const borderInner = outerR - borderT;
+      const borderInner = this.showBorder ? outerR - borderT : outerR;
       const bandMid = (borderInner + outerR) / 2;
       const fontSize = Math.max(8, Math.min(12, borderT - 4));
 
@@ -336,55 +342,59 @@ export class Renderer {
         });
 
       // Thick border band at the outer edge of the lane
-      const borderPathData = (this.arcGen as any)
-        .innerRadius(borderInner).outerRadius(outerR)
-        .startAngle(MIN_ANGLE).endAngle(MAX_ANGLE)();
-      laneGroup.append('path')
-        .attr('d', borderPathData)
-        .attr('fill', defaultBorder)
-        .style('pointer-events', 'none');
+      if (this.showBorder) {
+        const borderPathData = (this.arcGen as any)
+          .innerRadius(borderInner).outerRadius(outerR)
+          .startAngle(MIN_ANGLE).endAngle(MAX_ANGLE)();
+        laneGroup.append('path')
+          .attr('d', borderPathData)
+          .attr('fill', defaultBorder)
+          .style('pointer-events', 'none');
+      }
 
       // Repeat the lane name at 6 clock positions (1, 3, 5, 7, 9, 11) along the border band.
       // Angle convention: 0 = 12 o'clock, increasing clockwise.
-      const sx = (a: number, r: number) => Math.sin(a) * r;
-      const sy = (a: number, r: number) => -Math.cos(a) * r;
-      const clockHours = [1, 3, 5, 7, 9, 11];
-      const labelSpan = Math.PI / 3 - 0.2;
+      if (this.showBorder) {
+        const sx = (a: number, r: number) => Math.sin(a) * r;
+        const sy = (a: number, r: number) => -Math.cos(a) * r;
+        const clockHours = [1, 3, 5, 7, 9, 11];
+        const labelSpan = Math.PI / 3 - 0.2;
 
-      clockHours.forEach((h) => {
-        const center = (h / 12) * 2 * Math.PI;
-        const isBottom = Math.cos(center) < -0.1;
-        // Offset the path radius so the text's visual centre lands on bandMid.
-        // Top-half text extends outward from its path → path sits inside bandMid.
-        // Bottom-flipped text extends inward from its path → path sits outside bandMid.
-        const pathRadius = isBottom ? bandMid + fontSize * 0.35 : bandMid - fontSize * 0.35;
-        const a0 = center - labelSpan / 2;
-        const a1 = center + labelSpan / 2;
-        const d = isBottom
-          ? `M ${sx(a1, pathRadius)} ${sy(a1, pathRadius)} A ${pathRadius} ${pathRadius} 0 0 0 ${sx(a0, pathRadius)} ${sy(a0, pathRadius)}`
-          : `M ${sx(a0, pathRadius)} ${sy(a0, pathRadius)} A ${pathRadius} ${pathRadius} 0 0 1 ${sx(a1, pathRadius)} ${sy(a1, pathRadius)}`;
-        const pathId = `lane-label-${lane.id}-${slot}-${h}`;
+        clockHours.forEach((h) => {
+          const center = (h / 12) * 2 * Math.PI;
+          const isBottom = Math.cos(center) < -0.1;
+          // Offset the path radius so the text's visual centre lands on bandMid.
+          // Top-half text extends outward from its path → path sits inside bandMid.
+          // Bottom-flipped text extends inward from its path → path sits outside bandMid.
+          const pathRadius = isBottom ? bandMid + fontSize * 0.35 : bandMid - fontSize * 0.35;
+          const a0 = center - labelSpan / 2;
+          const a1 = center + labelSpan / 2;
+          const d = isBottom
+            ? `M ${sx(a1, pathRadius)} ${sy(a1, pathRadius)} A ${pathRadius} ${pathRadius} 0 0 0 ${sx(a0, pathRadius)} ${sy(a0, pathRadius)}`
+            : `M ${sx(a0, pathRadius)} ${sy(a0, pathRadius)} A ${pathRadius} ${pathRadius} 0 0 1 ${sx(a1, pathRadius)} ${sy(a1, pathRadius)}`;
+          const pathId = `lane-label-${lane.id}-${slot}-${h}`;
 
-        laneGroup.append('path')
-          .attr('id', pathId)
-          .attr('d', d)
-          .attr('fill', 'none')
-          .attr('stroke', 'none');
+          laneGroup.append('path')
+            .attr('id', pathId)
+            .attr('d', d)
+            .attr('fill', 'none')
+            .attr('stroke', 'none');
 
-        const text = laneGroup.append('text')
-          .attr('font-size', fontSize)
-          .attr('font-family', FONT_FAMILY)
-          .attr('font-weight', '600')
-          .attr('fill', labelColor)
-          .attr('dominant-baseline', 'central')
-          .style('pointer-events', 'none');
+          const text = laneGroup.append('text')
+            .attr('font-size', fontSize)
+            .attr('font-family', FONT_FAMILY)
+            .attr('font-weight', '600')
+            .attr('fill', labelColor)
+            .attr('dominant-baseline', 'central')
+            .style('pointer-events', 'none');
 
-        text.append('textPath')
-          .attr('href', `#${pathId}`)
-          .attr('startOffset', '50%')
-          .attr('text-anchor', 'middle')
-          .text(lane.name);
-      });
+          text.append('textPath')
+            .attr('href', `#${pathId}`)
+            .attr('startOffset', '50%')
+            .attr('text-anchor', 'middle')
+            .text(lane.name);
+        });
+      }
 
       // Filter activities by search term and active labels
       const visibleActivities = lane.activities.filter(a => {
