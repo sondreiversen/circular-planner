@@ -11,6 +11,7 @@ import { runMigrations } from './migrations/run';
 import authRoutes from './routes/auth';
 import plannerRoutes from './routes/planners';
 import shareRoutes from './routes/share';
+import importRoutes from './routes/import';
 
 const app = express();
 
@@ -36,6 +37,7 @@ app.use(cookieParser(config.jwtSecret)); // used for signed OAuth state cookie
 app.use('/api/auth', authRoutes);
 app.use('/api/planners', plannerRoutes);
 app.use('/api/planners/:plannerId/shares', shareRoutes);
+app.use('/api/planners', importRoutes);
 
 // Serve built frontend
 const publicDir = path.join(process.cwd(), 'public');

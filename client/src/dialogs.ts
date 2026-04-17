@@ -1,5 +1,6 @@
 import { Activity, Lane } from './types';
-import { COLOR_PALETTE, LANE_COLORS, randomId, formatDate, parseDate, escapeHtml, ymdToDmy, dmyToYmd } from './utils';
+import { COLOR_PALETTE, LANE_COLORS, randomId, formatDate, parseDate, escapeHtml, ymdToDmy, dmyToYmd, laneColor } from './utils';
+import { api } from './api-client';
 
 type SaveActivityCallback = (activity: Activity) => void;
 type DeleteActivityCallback = (activityId: string) => void;
@@ -264,5 +265,261 @@ export function showLaneDialog(
   });
 
   (document.getElementById('cp-lane-name') as HTMLInputElement)?.focus();
+}
+
+// ── Outlook Import Dialog ─────────────────────────────────────────────────
+
+interface ImportedEvent {
+  subject: string;
+  description: string;
+  startDate: string;
+  endDate: string;
+  location: string;
+  categories: string[];
+  isAllDay: boolean;
+}
+
+interface ImportResponse {
+  events: ImportedEvent[];
+  totalFound: number;
+  errors: string[];
+}
+
+export function showOutlookImportDialog(
+  plannerId: number,
+  lanes: Lane[],
+  nextLaneOrder: number,
+  onImport: (activities: Activity[], targetLaneId: string, newLane: Lane | null) => void,
+): void {
+  const DIALOG_ID = 'cp-outlook-import-dialog';
+  removeSafe(DIALOG_ID);
+
+  const laneOptions = lanes
+    .sort((a, b) => a.order - b.order)
+    .map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`)
+    .join('');
+
+  const dialog = document.createElement('section');
+  dialog.id = DIALOG_ID;
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+  dialog.style.cssText = `
+    position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;
+    display:flex;align-items:center;justify-content:center;
+    background:rgba(0,0,0,0.4);
+  `;
+
+  dialog.innerHTML = `
+    <div style="background:white;border-radius:6px;padding:24px;width:520px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+      <h2 style="margin:0 0 16px;font-size:16px;font-family:sans-serif;">Import from Outlook</h2>
+
+      <div id="cp-import-form">
+        <label style="display:block;margin-bottom:10px;font-family:sans-serif;font-size:13px;">
+          Exchange Server URL
+          <input id="cp-import-url" type="text" placeholder="https://mail.example.com/ews/exchange.asmx"
+            style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;">
+        </label>
+        <div style="display:flex;gap:12px;margin-bottom:10px;">
+          <label style="flex:1;font-family:sans-serif;font-size:13px;">
+            Username
+            <input id="cp-import-user" type="text" placeholder="DOMAIN\\username"
+              style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;">
+          </label>
+          <label style="flex:1;font-family:sans-serif;font-size:13px;">
+            Password
+            <input id="cp-import-pass" type="password"
+              style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;">
+          </label>
+        </div>
+        <div style="display:flex;gap:12px;margin-bottom:10px;">
+          <label style="flex:1;font-family:sans-serif;font-size:13px;">
+            Auth method
+            <select id="cp-import-auth" style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;">
+              <option value="ntlm" selected>NTLM</option>
+              <option value="basic">Basic</option>
+            </select>
+          </label>
+          <label style="flex:1;font-family:sans-serif;font-size:13px;">
+            Target lane
+            <select id="cp-import-lane" style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;">
+              <option value="__new__">+ New lane: Outlook Import</option>
+              ${laneOptions}
+            </select>
+          </label>
+        </div>
+        <div style="display:flex;gap:12px;margin-bottom:10px;">
+          <label style="flex:1;font-family:sans-serif;font-size:13px;">
+            Start date
+            <input id="cp-import-start" type="text" inputmode="numeric" placeholder="DD/MM/YYYY"
+              style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;">
+          </label>
+          <label style="flex:1;font-family:sans-serif;font-size:13px;">
+            End date
+            <input id="cp-import-end" type="text" inputmode="numeric" placeholder="DD/MM/YYYY"
+              style="display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:6px 8px;border:1px solid #ccc;border-radius:3px;font-size:13px;">
+          </label>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;margin-bottom:14px;font-family:sans-serif;font-size:13px;">
+          <input id="cp-import-selfsigned" type="checkbox"> Allow self-signed certificate
+        </label>
+        <div id="cp-import-error" style="color:#e53935;font-size:13px;font-family:sans-serif;margin-bottom:10px;display:none;"></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;">
+          <button id="cp-import-cancel" style="padding:7px 14px;background:#f4f4f4;border:1px solid #ccc;border-radius:3px;cursor:pointer;font-size:13px;">Cancel</button>
+          <button id="cp-import-fetch" style="padding:7px 14px;background:#0052cc;color:white;border:none;border-radius:3px;cursor:pointer;font-size:13px;">Fetch Events</button>
+        </div>
+      </div>
+
+      <div id="cp-import-preview" style="display:none;">
+        <div id="cp-import-summary" style="font-family:sans-serif;font-size:13px;margin-bottom:10px;"></div>
+        <div id="cp-import-list" style="max-height:300px;overflow-y:auto;border:1px solid #e4e7ed;border-radius:3px;margin-bottom:14px;"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <button id="cp-import-back" style="padding:7px 14px;background:#f4f4f4;border:1px solid #ccc;border-radius:3px;cursor:pointer;font-size:13px;">Back</button>
+          <div style="display:flex;gap:8px;">
+            <button id="cp-import-cancel2" style="padding:7px 14px;background:#f4f4f4;border:1px solid #ccc;border-radius:3px;cursor:pointer;font-size:13px;">Cancel</button>
+            <button id="cp-import-confirm" style="padding:7px 14px;background:#0052cc;color:white;border:none;border-radius:3px;cursor:pointer;font-size:13px;">Import Selected</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(dialog);
+
+  const close = () => removeSafe(DIALOG_ID);
+  dialog.addEventListener('click', (e) => { if (e.target === dialog) close(); });
+  document.getElementById('cp-import-cancel')?.addEventListener('click', close);
+  document.getElementById('cp-import-cancel2')?.addEventListener('click', close);
+
+  const errorEl = document.getElementById('cp-import-error')!;
+  const formEl = document.getElementById('cp-import-form')!;
+  const previewEl = document.getElementById('cp-import-preview')!;
+  let fetchedEvents: ImportedEvent[] = [];
+
+  function showError(msg: string): void {
+    errorEl.textContent = msg;
+    errorEl.style.display = 'block';
+  }
+
+  // Fetch events from Exchange
+  document.getElementById('cp-import-fetch')?.addEventListener('click', async () => {
+    errorEl.style.display = 'none';
+    const serverUrl = (document.getElementById('cp-import-url') as HTMLInputElement).value.trim();
+    const username = (document.getElementById('cp-import-user') as HTMLInputElement).value.trim();
+    const password = (document.getElementById('cp-import-pass') as HTMLInputElement).value;
+    const authMethod = (document.getElementById('cp-import-auth') as HTMLSelectElement).value;
+    const startDmy = (document.getElementById('cp-import-start') as HTMLInputElement).value.trim();
+    const endDmy = (document.getElementById('cp-import-end') as HTMLInputElement).value.trim();
+    const allowSelfSignedCert = (document.getElementById('cp-import-selfsigned') as HTMLInputElement).checked;
+
+    if (!serverUrl) { showError('Exchange server URL is required.'); return; }
+    if (!username)  { showError('Username is required.'); return; }
+    if (!password)  { showError('Password is required.'); return; }
+
+    const startDate = dmyToYmd(startDmy);
+    const endDate = dmyToYmd(endDmy);
+    if (!startDate) { showError('Invalid start date. Use DD/MM/YYYY format.'); return; }
+    if (!endDate)   { showError('Invalid end date. Use DD/MM/YYYY format.'); return; }
+
+    const fetchBtn = document.getElementById('cp-import-fetch') as HTMLButtonElement;
+    fetchBtn.disabled = true;
+    fetchBtn.textContent = 'Fetching...';
+
+    try {
+      const result = await api.post<ImportResponse>(`/api/planners/${plannerId}/import/outlook`, {
+        serverUrl, username, password, authMethod, startDate, endDate, allowSelfSignedCert,
+      });
+
+      fetchedEvents = result.events;
+      const listEl = document.getElementById('cp-import-list')!;
+      const summaryEl = document.getElementById('cp-import-summary')!;
+
+      let summaryText = `Found ${result.totalFound} event${result.totalFound !== 1 ? 's' : ''}`;
+      if (result.errors.length > 0) {
+        summaryText += ` (${result.errors.length} could not be parsed)`;
+      }
+      summaryEl.textContent = summaryText;
+
+      if (fetchedEvents.length === 0) {
+        listEl.innerHTML = '<div style="padding:12px;font-family:sans-serif;font-size:13px;color:#8896a5;">No events found in this date range.</div>';
+      } else {
+        listEl.innerHTML = fetchedEvents.map((ev, i) => `
+          <label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border-bottom:1px solid #f0f0f0;cursor:pointer;font-family:sans-serif;font-size:13px;">
+            <input type="checkbox" data-idx="${i}" checked style="margin-top:2px;">
+            <div>
+              <div style="font-weight:500;">${escapeHtml(ev.subject)}</div>
+              <div style="color:#8896a5;font-size:12px;">${escapeHtml(ev.startDate)}${ev.endDate !== ev.startDate ? ' - ' + escapeHtml(ev.endDate) : ''}${ev.categories.length ? ' &middot; ' + escapeHtml(ev.categories.join(', ')) : ''}</div>
+            </div>
+          </label>
+        `).join('');
+      }
+
+      formEl.style.display = 'none';
+      previewEl.style.display = 'block';
+    } catch (err) {
+      showError((err as Error).message || 'Failed to fetch events.');
+    } finally {
+      fetchBtn.disabled = false;
+      fetchBtn.textContent = 'Fetch Events';
+    }
+  });
+
+  // Back to form
+  document.getElementById('cp-import-back')?.addEventListener('click', () => {
+    previewEl.style.display = 'none';
+    formEl.style.display = 'block';
+  });
+
+  // Confirm import
+  document.getElementById('cp-import-confirm')?.addEventListener('click', () => {
+    const listEl = document.getElementById('cp-import-list')!;
+    const checkboxes = listEl.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+    const selectedIndices = new Set<number>();
+    checkboxes.forEach(cb => {
+      if (cb.checked) selectedIndices.add(Number(cb.dataset.idx));
+    });
+
+    if (selectedIndices.size === 0) { alert('No events selected.'); return; }
+
+    const laneSelect = document.getElementById('cp-import-lane') as HTMLSelectElement;
+    const laneValue = laneSelect.value;
+
+    let newLane: Lane | null = null;
+    let targetLaneId: string;
+
+    if (laneValue === '__new__') {
+      newLane = {
+        id: randomId(),
+        name: 'Outlook Import',
+        order: nextLaneOrder,
+        color: laneColor(nextLaneOrder),
+        activities: [],
+      };
+      targetLaneId = newLane.id;
+    } else {
+      targetLaneId = laneValue;
+    }
+
+    const activities: Activity[] = [];
+    let colorIdx = 0;
+    fetchedEvents.forEach((ev, i) => {
+      if (!selectedIndices.has(i)) return;
+      activities.push({
+        id: randomId(),
+        laneId: targetLaneId,
+        title: ev.subject,
+        description: ev.description,
+        startDate: ev.startDate,
+        endDate: ev.endDate,
+        color: COLOR_PALETTE[colorIdx % COLOR_PALETTE.length],
+        label: ev.categories[0] || '',
+      });
+      colorIdx++;
+    });
+
+    onImport(activities, targetLaneId, newLane);
+    close();
+  });
+
+  (document.getElementById('cp-import-url') as HTMLInputElement)?.focus();
 }
 

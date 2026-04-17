@@ -13,7 +13,7 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 import { DataManager } from './data-manager';
-import { showActivityDialog, showLaneDialog } from './dialogs';
+import { showActivityDialog, showLaneDialog, showOutlookImportDialog } from './dialogs';
 import { randomId, laneColor, parseDate, formatDate, ymdToDmy, dmyToYmd } from './utils';
 import { defaultViewport, zoomIn, zoomOut, navigate, canZoomIn, canZoomOut, viewportLabel, navigateToYear, navigateToRange } from './viewport';
 import { ZoomLevel } from './types';
@@ -559,6 +559,17 @@ export class Planner {
 
     this.toolbar.appendChild(viewGroup);
 
+    // Import button (edit/owner only)
+    if (this.config.permission !== 'view') {
+      const importBtn = document.createElement('button');
+      importBtn.textContent = 'Import';
+      importBtn.title = 'Import events from Outlook';
+      importBtn.className = 'cp-btn';
+      importBtn.style.marginLeft = '8px';
+      importBtn.addEventListener('click', () => this.handleOutlookImport());
+      this.toolbar.appendChild(importBtn);
+    }
+
     // Spacer
     const spacer = document.createElement('span');
     spacer.style.cssText = 'flex:1;';
@@ -677,6 +688,27 @@ export class Planner {
     this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState);
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
     if (sidebarBody) this.buildSidebar(sidebarBody);
+  }
+
+  // ==================== Import handler ====================
+
+  private handleOutlookImport(): void {
+    showOutlookImportDialog(
+      this.config.plannerId,
+      this.data.lanes,
+      this.data.lanes.length,
+      (activities, targetLaneId, newLane) => {
+        if (newLane) {
+          this.data.lanes.push(newLane);
+        }
+        const lane = this.data.lanes.find(l => l.id === targetLaneId);
+        if (lane) {
+          lane.activities.push(...activities);
+          this.save();
+          this.refresh();
+        }
+      },
+    );
   }
 
   // ==================== Activity/Lane handlers ====================
