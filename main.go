@@ -58,6 +58,15 @@ func main() {
 		log.Fatalf("migration: %v", err)
 	}
 
+	// --create-admin subcommand: seed an admin user and exit. Used by the
+	// air-gapped installer after first startup.
+	if len(os.Args) > 1 && os.Args[1] == "--create-admin" {
+		if err := runCreateAdmin(database, os.Args[2:]); err != nil {
+			log.Fatalf("create-admin: %v", err)
+		}
+		return
+	}
+
 	mux := http.NewServeMux()
 
 	// Auth routes
