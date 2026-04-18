@@ -35,6 +35,11 @@ export interface ImportedEvent {
 }
 
 const REQUEST_TIMEOUT = 30_000;
+const NTLM_HANDSHAKE_TIMEOUT = 45_000;
+
+function escapeXmlAttr(s: string): string {
+  return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c] ?? c));
+}
 
 function buildSoapEnvelope(query: EwsCalendarQuery): string {
   const max = query.maxItems || 500;
@@ -56,7 +61,7 @@ function buildSoapEnvelope(query: EwsCalendarQuery): string {
           <t:FieldURI FieldURI="calendar:IsAllDayEvent"/>
         </t:AdditionalProperties>
       </m:ItemShape>
-      <m:CalendarView StartDate="${query.startDate}T00:00:00Z" EndDate="${query.endDate}T23:59:59Z" MaxEntriesReturned="${max}"/>
+      <m:CalendarView StartDate="${escapeXmlAttr(query.startDate)}T00:00:00Z" EndDate="${escapeXmlAttr(query.endDate)}T23:59:59Z" MaxEntriesReturned="${max}"/>
       <m:ParentFolderIds>
         <t:DistinguishedFolderId Id="calendar"/>
       </m:ParentFolderIds>
@@ -118,6 +123,13 @@ async function fetchWithNtlm(
     rejectUnauthorized: !config.allowSelfSignedCert,
   });
 
+  const handshakeDeadline = Date.now() + NTLM_HANDSHAKE_TIMEOUT;
+  const remainingMs = () => {
+    const ms = handshakeDeadline - Date.now();
+    if (ms <= 0) throw new Error('NTLM handshake timed out');
+    return ms;
+  };
+
   try {
     // Step 1: Send Type 1 (Negotiate)
     const type1 = createType1Message(creds.domain);
@@ -125,7 +137,7 @@ async function fetchWithNtlm(
       'Content-Type': 'text/xml; charset=utf-8',
       'Authorization': `NTLM ${type1}`,
       'Content-Length': '0',
-    }, null, agent, REQUEST_TIMEOUT);
+    }, null, agent, remainingMs());
 
     if (res1.statusCode !== 401) {
       throw new Error(`NTLM negotiate failed: expected 401, got ${res1.statusCode}`);
@@ -152,7 +164,7 @@ async function fetchWithNtlm(
       'Content-Type': 'text/xml; charset=utf-8',
       'Authorization': `NTLM ${type3}`,
       'Content-Length': String(Buffer.byteLength(soapBody)),
-    }, soapBody, agent, REQUEST_TIMEOUT);
+    }, soapBody, agent, remainingMs());
 
     if (res3.statusCode === 401) {
       throw new Error('NTLM authentication failed — check username, password, and domain');

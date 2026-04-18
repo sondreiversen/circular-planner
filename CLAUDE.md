@@ -143,7 +143,7 @@ Four zoom levels: **Year → Quarter → Month → Week**
 ▼ Filter button reveals a secondary row with:
 - Search input (debounced 200ms) — filters activity titles
 - Per-lane checkboxes — toggle visibility (hidden lanes release their ring slot when hidden)
-- Label filter — inclusive OR; no selection = show all
+- Label filter — inclusive OR; no selection = show all. An **Untagged** chip appears automatically when any activities have no label, so they remain reachable under an active label filter
 - Custom date range picker
 
 `FilterState` (`types.ts`) is ephemeral — not persisted.
@@ -161,9 +161,11 @@ Four zoom levels: **Year → Quarter → Month → Week**
 
 - `api-client.ts` automatically adds the JWT header and redirects to `/index.html` on 401
 - `PUT /api/planners/:id` is last-write-wins full sync — no partial updates
-- Migrations run automatically at server startup in both backends
+- Migrations run automatically at server startup in both backends. The Node runner holds a Postgres advisory lock (app id `727274`) so concurrent restarts never double-apply a migration
+- `canAccess()` in `server/middleware/access.ts` returns `'owner' | 'edit' | 'view'`; `GET /api/planners/:id` now returns that value verbatim in `config.permission` — never hard-coded
 - Hidden lanes: `rebuildGeometry()` in renderer skips hidden lanes and redistributes radial space among visible ones
 - Lane reorder: sidebar shows lanes highest-order-first (outermost ring at top); `handleReorderLane()` reassigns `order` values
+- EWS/Outlook import uses a 45-second total handshake deadline across all three NTLM round-trips (`NTLM_HANDSHAKE_TIMEOUT` in `server/ews/client.ts`); SOAP attribute values are XML-escaped via `escapeXmlAttr()`
 
 ## Environment variables
 
@@ -171,12 +173,14 @@ Four zoom levels: **Year → Quarter → Month → Week**
 |---|---|---|
 | `DATABASE_URL` | Postgres: `postgresql://localhost:5432/circular_planner`; Go: `sqlite:./data/planner.db` | Database connection |
 | `DATA_DIR` | `./data` | SQLite data directory (Go backend only) |
-| `JWT_SECRET` | *(insecure default)* | **Must be set in production** |
+| `JWT_SECRET` | *(required — exits on startup if missing or < 32 chars)* | Secret for signing JWTs |
 | `PORT` | `3000` | HTTP port |
-| `HTTPS_PORT` | `3443` | HTTPS port (when TLS configured) |
+| `HTTPS_PORT` | `3443` | HTTPS port (when TLS configured). Set to `443` when terminating TLS directly on 443 — the redirect URL then omits the port suffix |
 | `TLS_CERT_FILE` | — | TLS certificate path |
 | `TLS_KEY_FILE` | — | TLS private key path |
-| `FORCE_HTTPS` | `true` | HTTP → HTTPS redirect when TLS active |
+| `FORCE_HTTPS` | `true` | HTTP → HTTPS redirect when TLS active. Set to `false` when a reverse proxy handles redirection |
+| `TRUST_PROXY` | `false` | Set to `true` behind a reverse proxy — enables `Secure` cookies and correct client IPs for rate limiting |
+| `ALLOW_REGISTRATION` | `true` | Set to `false` to disable the public `/register` endpoint (installer defaults to `false`) |
 | `GITLAB_SSO_ENABLED` | `false` | Enable GitLab OAuth2 |
 | `GITLAB_INSTANCE_URL` | — | GitLab base URL |
 | `GITLAB_CLIENT_ID` | — | GitLab OAuth2 app ID |
@@ -185,7 +189,9 @@ Four zoom levels: **Year → Quarter → Month → Week**
 
 ## Deployment
 
-### Node backend (main branch)
+See **[INSTALL.md](INSTALL.md)** for the full guide including Docker, bare-metal, air-gapped, TLS, reverse proxy, GitLab SSO, upgrading, and troubleshooting.
+
+### Node backend (main branch) — quick reference
 ```bash
 npm run build
 npm start
@@ -204,4 +210,4 @@ DATABASE_URL=postgres://... ./planner  # or Postgres
 ```bash
 docker compose up --build
 ```
-Set `JWT_SECRET` in `.env` before running in production.
+Set `JWT_SECRET` and `POSTGRES_PASSWORD` in `.env` before running.

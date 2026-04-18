@@ -54,9 +54,11 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 router.delete('/:userId', async (req: Request, res: Response): Promise<void> => {
   const plannerId = parseInt(req.params.plannerId, 10);
   if (isNaN(plannerId)) { sendError(res, 400, 'Invalid planner ID'); return; }
+  const targetUserId = parseInt(req.params.userId, 10);
+  if (isNaN(targetUserId)) { sendError(res, 400, 'Invalid user ID'); return; }
   try {
     await canAccess(plannerId, req.user!.id, 'owner');
-    await query('DELETE FROM planner_shares WHERE planner_id=$1 AND user_id=$2', [plannerId, req.params.userId]);
+    await query('DELETE FROM planner_shares WHERE planner_id=$1 AND user_id=$2', [plannerId, targetUserId]);
     res.json({ success: true });
   } catch (err) {
     handleRouteError(res, err);

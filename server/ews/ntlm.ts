@@ -113,6 +113,9 @@ export function createType3Message(creds: NtlmCredentials, type2: Type2Data): st
   const timestamp = ntTimestamp();
 
   // NTLMv2 blob: 0x01010000 + reserved(4) + timestamp(8) + clientNonce(8) + reserved(4) + targetInfo + reserved(4)
+  if (type2.targetInfo.length > 65536) {
+    throw new Error('NTLM Type 2 targetInfo exceeds maximum allowed size');
+  }
   const blob = Buffer.alloc(28 + type2.targetInfo.length + 4);
   blob.writeUInt32LE(0x00000101, 0);  // blob signature + reserved
   blob.writeUInt32LE(0, 4);           // reserved

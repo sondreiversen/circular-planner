@@ -37,23 +37,11 @@ cd circular-planner
 ./install.sh
 ```
 
-The interactive installer works for both **Docker** and **bare-metal** (non-root) setups. It will prompt for:
+The interactive installer handles both **Docker** and **bare-metal** setups, generates secrets, runs migrations, and seeds the admin user.
 
-- Install mode (Docker or bare-metal)
-- Admin username, email, and password (seeded via `npm run create-admin`)
-- Postgres connection details (bare-metal) — a password is generated for Docker
+Open [http://localhost:3000](http://localhost:3000) and sign in.
 
-It then generates a strong `JWT_SECRET`, writes `.env` (with `ALLOW_REGISTRATION=false` by default), runs the build, applies migrations, and creates the admin user.
-
-Open [http://localhost:3000](http://localhost:3000) and sign in with the admin account.
-
-### Manual Docker
-
-```bash
-docker compose up --build
-```
-
-`docker-compose.yml` requires `POSTGRES_PASSWORD` and `JWT_SECRET` in `.env` — there are no defaults. The image is multi-stage and runs as a non-root `node` user.
+**Full installation guide** — Docker, bare-metal, air-gapped, TLS, reverse proxy, GitLab SSO, upgrading, and troubleshooting: **[INSTALL.md](INSTALL.md)**
 
 ---
 

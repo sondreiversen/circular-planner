@@ -103,8 +103,12 @@ EOF
   info "✓ App is up"
 
   info "Seeding admin user…"
-  docker compose exec -T app npm run create-admin -- \
-    --username "$ADMIN_USER" --email "$ADMIN_EMAIL" --password "$ADMIN_PASS"
+  if ! docker compose exec -T app npm run create-admin -- \
+    --username "$ADMIN_USER" --email "$ADMIN_EMAIL" --password "$ADMIN_PASS"; then
+    err "Failed to create admin user. Recent logs:"
+    docker compose logs --tail=50 app >&2
+    exit 1
+  fi
 
 # ─── Bare-metal path ──────────────────────────────────────────────────────────
 else

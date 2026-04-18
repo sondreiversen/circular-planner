@@ -71,11 +71,12 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
   if (isNaN(plannerId)) { sendError(res, 400, 'Invalid planner ID'); return; }
   const userId = req.user!.id;
   try {
-    await canAccess(plannerId, userId, 'view');
+    const level = await canAccess(plannerId, userId, 'view');
 
     const { rows: [p] } = await query<{ id: number; owner_id: number; title: string; start_date: Date; end_date: Date }>(
       'SELECT id, owner_id, title, start_date, end_date FROM planners WHERE id=$1', [plannerId]
     );
+    if (!p) { sendError(res, 404, 'Planner not found'); return; }
     const { rows: lanes } = await query<LaneRow>(
       'SELECT id, name, sort_order, color FROM lanes WHERE planner_id=$1 ORDER BY sort_order', [plannerId]
     );
@@ -93,7 +94,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
         startDate: fmt(p.start_date),
         endDate: fmt(p.end_date),
         isOwner: p.owner_id === userId,
-        permission: p.owner_id === userId ? 'owner' : 'edit',
+        permission: level,
       },
       data: {
         lanes: [...laneMap.values()].map(l => ({

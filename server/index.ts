@@ -64,7 +64,9 @@ function startServers(): void {
     if (config.forceHttps) {
       httpApp.use((req, res) => {
         const host = (req.headers.host || '').replace(/:\d+$/, '');
-        res.redirect(301, `https://${host}:${config.httpsPort}${req.url}`);
+        // Omit the port suffix when it's the default HTTPS port (e.g. behind a proxy on 443).
+        const portSuffix = config.httpsPort === 443 ? '' : `:${config.httpsPort}`;
+        res.redirect(301, `https://${host}${portSuffix}${req.url}`);
       });
     } else {
       httpApp.use(app);

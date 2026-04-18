@@ -318,11 +318,11 @@ export class Planner {
     body.appendChild(lanesSection);
 
     // Section: Labels (if any exist)
-    const allLabels = [...new Set(
-      this.data.lanes.flatMap(l => l.activities.map(a => a.label)).filter(Boolean)
-    )].sort();
+    const allActivities = this.data.lanes.flatMap(l => l.activities);
+    const allLabels = [...new Set(allActivities.map(a => a.label).filter(Boolean))].sort();
+    const hasUntagged = allActivities.some(a => !a.label);
 
-    if (allLabels.length > 0) {
+    if (allLabels.length > 0 || hasUntagged) {
       const labelsSection = document.createElement('div');
       labelsSection.className = 'cp-sidebar-section';
 
@@ -331,7 +331,7 @@ export class Planner {
       labelsHeading.textContent = 'Labels';
       labelsSection.appendChild(labelsHeading);
 
-      allLabels.forEach(lbl => {
+      const makeChip = (lbl: string, displayText: string) => {
         const row = document.createElement('label');
         row.className = 'cp-lane-toggle';
         row.style.cssText = 'cursor:pointer;gap:6px;';
@@ -343,13 +343,16 @@ export class Planner {
         cb.addEventListener('change', () => this.handleToggleLabel(lbl));
 
         const nameSpan = document.createElement('span');
-        nameSpan.textContent = lbl;
+        nameSpan.textContent = displayText;
         nameSpan.style.cssText = `flex:1;font-size:12px;opacity:${this.filterState.activeLabels.size > 0 && !this.filterState.activeLabels.has(lbl) ? '0.4' : '1'};`;
 
         row.appendChild(cb);
         row.appendChild(nameSpan);
         labelsSection.appendChild(row);
-      });
+      };
+
+      allLabels.forEach(lbl => makeChip(lbl, lbl));
+      if (hasUntagged) makeChip('', 'Untagged');
 
       body.appendChild(labelsSection);
     }
@@ -623,7 +626,7 @@ export class Planner {
   }
 
   private refresh(): void {
-    this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState);
+    this.renderer.update(this.data, this.filterState);
     this.listRenderer?.update(this.data, this.filterState);
     // Rebuild sidebar to reflect lane changes
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;

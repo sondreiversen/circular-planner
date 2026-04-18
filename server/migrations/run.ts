@@ -13,21 +13,27 @@ export async function runMigrations(migrationsDir?: string): Promise<void> {
         applied_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
-    const files = fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort();
-    for (const file of files) {
-      const { rows } = await client.query('SELECT 1 FROM migrations WHERE filename=$1', [file]);
-      if (rows.length) { console.log(`  [skip] ${file}`); continue; }
-      const sql = fs.readFileSync(path.join(dir, file), 'utf8');
-      await client.query('BEGIN');
-      await client.query(sql);
-      await client.query('INSERT INTO migrations(filename) VALUES($1)', [file]);
-      await client.query('COMMIT');
-      console.log(`  [done] ${file}`);
+    // Advisory lock prevents concurrent migration runs (e.g. duplicate server startups).
+    await client.query('SELECT pg_advisory_lock($1)', [727274]);
+    try {
+      const files = fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort();
+      for (const file of files) {
+        const { rows } = await client.query('SELECT 1 FROM migrations WHERE filename=$1', [file]);
+        if (rows.length) { console.log(`  [skip] ${file}`); continue; }
+        const sql = fs.readFileSync(path.join(dir, file), 'utf8');
+        await client.query('BEGIN');
+        await client.query(sql);
+        await client.query('INSERT INTO migrations(filename) VALUES($1)', [file]);
+        await client.query('COMMIT');
+        console.log(`  [done] ${file}`);
+      }
+    } catch (err) {
+      await client.query('ROLLBACK').catch(rbErr => console.error('Migration rollback error:', rbErr));
+      throw err;
+    } finally {
+      await client.query('SELECT pg_advisory_unlock($1)', [727274]).catch(e => console.error('Advisory unlock error:', e));
     }
     console.log('Migrations complete.');
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw err;
   } finally {
     client.release();
   }
