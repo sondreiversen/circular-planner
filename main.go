@@ -25,6 +25,7 @@ import (
 	"planner/internal/auth"
 	"planner/internal/config"
 	"planner/internal/db"
+	"planner/internal/importing"
 	"planner/internal/middleware"
 	"planner/internal/planners"
 	"planner/internal/share"
@@ -81,6 +82,10 @@ func main() {
 	mux.HandleFunc("GET /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, shareH.List))
 	mux.HandleFunc("POST /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, shareH.Create))
 	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/{userID}", middleware.RequireAuth(cfg, shareH.Delete))
+
+	// Outlook / Exchange calendar import
+	importH := importing.NewHandler(database, cfg)
+	mux.HandleFunc("POST /api/planners/{id}/import/outlook", middleware.RequireAuth(cfg, importH.ImportOutlook))
 
 	// Static files embedded from public/ (HTML, CSS, JS bundles)
 	sub, err := fs.Sub(publicFS, "public")
