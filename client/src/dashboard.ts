@@ -2,6 +2,7 @@ import { api, logout } from './api-client';
 import { escapeHtml, ymdToDmy, dmyToYmd } from './utils';
 import { PlannerSummary } from './types';
 import { initTheme, applyTheme, currentTheme } from './theme';
+import { applyBranding } from './branding';
 
 interface GroupSummary {
   id: number;
@@ -17,6 +18,7 @@ const today = new Date();
 const thisYear = today.getFullYear();
 
 document.addEventListener('DOMContentLoaded', async () => {
+  applyBranding();
   // Verify session via cookie; populate username from /api/auth/me.
   try {
     const meRes = await fetch('/api/auth/me', { credentials: 'include' });

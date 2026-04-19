@@ -1,6 +1,7 @@
 import { api, logout } from './api-client';
 import { escapeHtml } from './utils';
 import { initTheme, applyTheme, currentTheme } from './theme';
+import { applyBranding } from './branding';
 
 initTheme();
 
@@ -38,6 +39,7 @@ let selectedUser: UserSearchResult | null = null;
 let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
+  applyBranding();
   try {
     const meRes = await fetch('/api/auth/me', { credentials: 'include' });
     if (!meRes.ok) { window.location.href = '/index.html'; return; }

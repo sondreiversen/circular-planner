@@ -50,6 +50,11 @@ while :; do
   warn "Passwords did not match — try again."
 done
 
+# ─── Prompt: branding ─────────────────────────────────────────────────────────
+read -r -p "App name shown in the header [Circular Planner]: " APP_NAME
+APP_NAME="${APP_NAME:-Circular Planner}"
+read -r -p "Logo URL (leave blank for default SVG): " APP_LOGO_URL
+
 # ─── .env overwrite guard ─────────────────────────────────────────────────────
 if [ -f .env ]; then
   read -r -p ".env already exists. Overwrite? [y/N]: " OVER
@@ -82,6 +87,8 @@ POSTGRES_USER=planner
 POSTGRES_DB=circular_planner
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 DATABASE_URL=postgresql://planner:${POSTGRES_PASSWORD}@postgres:5432/circular_planner
+APP_NAME=${APP_NAME}
+APP_LOGO_URL=${APP_LOGO_URL}
 EOF
   info "✓ Wrote .env"
 
@@ -169,6 +176,8 @@ PORT=${PORT}
 JWT_SECRET=${JWT_SECRET}
 ALLOW_REGISTRATION=false
 DATABASE_URL=${DB_URL}
+APP_NAME=${APP_NAME}
+APP_LOGO_URL=${APP_LOGO_URL}
 EOF
   info "✓ Wrote .env"
 

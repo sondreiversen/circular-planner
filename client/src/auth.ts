@@ -1,5 +1,6 @@
 import { api } from './api-client';
 import { initTheme, applyTheme, currentTheme } from './theme';
+import { applyBranding } from './branding';
 
 interface AuthResponse { token: string; user: { id: number; username: string; email: string } }
 
@@ -16,6 +17,7 @@ function clearError(id: string): void {
 initTheme();
 
 document.addEventListener('DOMContentLoaded', () => {
+  applyBranding();
   // Redirect if already logged in (cookie-based session check)
   fetch('/api/auth/me', { credentials: 'include' })
     .then(r => { if (r.ok) window.location.href = '/dashboard.html'; })

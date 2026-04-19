@@ -35,6 +35,11 @@ app.use(cors({
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser(config.jwtSecret)); // used for signed OAuth state cookie
 
+// Public branding endpoint — no auth required
+app.get('/api/branding', (_req, res) => {
+  res.json({ name: config.appName, logoUrl: config.appLogoUrl });
+});
+
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/planners', plannerRoutes);

@@ -3,6 +3,7 @@ import { escapeHtml } from './utils';
 import { Planner } from './planner';
 import { PlannerConfig, PlannerData, ShareEntry } from './types';
 import { initTheme, applyTheme, currentTheme } from './theme';
+import { applyBranding } from './branding';
 
 interface GroupSummary {
   id: number;
@@ -26,6 +27,7 @@ interface PlannerResponse {
 }
 
 async function init(): Promise<void> {
+  applyBranding();
   // Session presence is validated by the API call below — a 401 from the
   // server triggers a redirect to /index.html via api-client.
   const params = new URLSearchParams(window.location.search);

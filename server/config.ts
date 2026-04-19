@@ -19,6 +19,8 @@ export const config = {
   allowedOrigin: process.env.ALLOWED_ORIGIN || 'http://localhost:3000',
   nodeEnv: process.env.NODE_ENV || 'development',
   allowRegistration: process.env.ALLOW_REGISTRATION !== 'false',
+  appName: process.env.APP_NAME || 'Circular Planner',
+  appLogoUrl: process.env.APP_LOGO_URL || '',
   gitlab: {
     enabled: process.env.GITLAB_SSO_ENABLED === 'true',
     instanceUrl: process.env.GITLAB_INSTANCE_URL || '',
