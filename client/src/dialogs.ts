@@ -121,6 +121,7 @@ export function showActivityDialog(
         Colour
         <div id="cp-color-picker-holder"></div>
       </label>
+      ${isEdit && existingActivity?.createdBy ? `<div style="font-family:sans-serif;font-size:12px;color:#8896a5;margin-bottom:12px;">Created by ${escapeHtml(existingActivity.createdBy)}</div>` : ''}
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <div>
           ${isEdit ? '<button id="cp-act-delete" style="padding:7px 14px;background:#e53935;color:white;border:none;border-radius:3px;cursor:pointer;font-size:13px;">Delete</button>' : ''}

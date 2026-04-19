@@ -3,6 +3,14 @@ import { escapeHtml, ymdToDmy, dmyToYmd } from './utils';
 import { PlannerSummary } from './types';
 import { initTheme, applyTheme, currentTheme } from './theme';
 
+interface GroupSummary {
+  id: number;
+  name: string;
+  description: string | null;
+  role: 'admin' | 'member';
+  member_count: number;
+}
+
 initTheme();
 
 const today = new Date();
@@ -72,6 +80,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   await loadPlanners();
+  await loadGroups();
 });
 
 function closeDialog(): void {
@@ -108,6 +117,36 @@ async function loadPlanners(): Promise<void> {
     });
   } catch (err: unknown) {
     if (grid) grid.innerHTML = `<div class="error-state">Failed to load planners: ${escapeHtml((err as Error).message)}</div>`;
+  }
+}
+
+async function loadGroups(): Promise<void> {
+  const grid = document.getElementById('groups-grid');
+  if (!grid) return;
+  try {
+    const groups = await api.get<GroupSummary[]>('/api/groups');
+    grid.innerHTML = '';
+    if (groups.length === 0) {
+      grid.innerHTML = '<div class="loading-state">No groups yet. <a href="/groups.html">Create one!</a></div>';
+      return;
+    }
+    groups.forEach(g => {
+      const card = document.createElement('div');
+      card.className = 'planner-card';
+      const roleBadge = g.role === 'admin' ? 'badge-owner' : 'badge-view';
+      card.innerHTML = `
+        <div class="planner-card-title">${escapeHtml(g.name)}</div>
+        ${g.description ? `<div class="planner-card-dates">${escapeHtml(g.description)}</div>` : ''}
+        <div class="planner-card-meta">
+          <span class="badge ${roleBadge}">${escapeHtml(g.role)}</span>
+          <span style="font-size:11px;color:#8896a5;">${g.member_count} member${g.member_count !== 1 ? 's' : ''}</span>
+        </div>
+      `;
+      card.addEventListener('click', () => { window.location.href = `/groups.html?id=${g.id}`; });
+      grid.appendChild(card);
+    });
+  } catch (err: unknown) {
+    if (grid) grid.innerHTML = `<div class="error-state">Failed to load groups: ${escapeHtml((err as Error).message)}</div>`;
   }
 }
 

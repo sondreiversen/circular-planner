@@ -12,6 +12,8 @@ import authRoutes from './routes/auth';
 import plannerRoutes from './routes/planners';
 import shareRoutes from './routes/share';
 import importRoutes from './routes/import';
+import groupRoutes from './routes/groups';
+import userRoutes from './routes/users';
 
 const app = express();
 
@@ -28,7 +30,7 @@ app.use(helmet({
 }));
 app.use(cors({
   origin: config.allowedOrigin,
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
 }));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser(config.jwtSecret)); // used for signed OAuth state cookie
@@ -38,6 +40,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/planners', plannerRoutes);
 app.use('/api/planners/:plannerId/shares', shareRoutes);
 app.use('/api/planners', importRoutes);
+app.use('/api/groups', groupRoutes);
+app.use('/api/users', userRoutes);
 
 // Serve built frontend
 const publicDir = path.join(process.cwd(), 'public');

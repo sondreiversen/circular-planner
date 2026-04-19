@@ -7,7 +7,7 @@ const router = Router();
 router.use(requireAuth);
 
 interface LaneRow { id: string; name: string; sort_order: number; color: string; }
-interface ActivityRow { id: string; lane_id: string; title: string; description: string; start_date: Date; end_date: Date; color: string; label: string; }
+interface ActivityRow { id: string; lane_id: string; title: string; description: string; start_date: Date; end_date: Date; color: string; label: string; created_by_username: string | null; }
 
 function fmt(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -19,16 +19,30 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
   try {
     const { rows } = await query<{
       id: number; title: string; start_date: Date; end_date: Date;
-      owner_id: number; owner_username: string; permission: string;
+      owner_id: number; owner_username: string; permission: string; updated_at: Date;
     }>(`
       SELECT p.id, p.title, p.start_date, p.end_date, p.owner_id,
              u.username AS owner_username,
-             CASE WHEN p.owner_id = $1 THEN 'owner' ELSE ps.permission END AS permission
+             CASE WHEN p.owner_id = $1 THEN 'owner' ELSE ps.permission END AS permission,
+             p.updated_at
       FROM planners p
       JOIN users u ON u.id = p.owner_id
       LEFT JOIN planner_shares ps ON ps.planner_id = p.id AND ps.user_id = $1
       WHERE p.owner_id = $1 OR ps.user_id = $1
-      ORDER BY p.updated_at DESC
+      UNION
+      SELECT p.id, p.title, p.start_date, p.end_date, p.owner_id,
+             u.username AS owner_username,
+             COALESCE(pgmo.permission, pgs.default_permission) AS permission,
+             p.updated_at
+      FROM planner_group_shares pgs
+      JOIN group_members gm ON gm.group_id = pgs.group_id AND gm.user_id = $1
+      JOIN planners p ON p.id = pgs.planner_id AND p.owner_id <> $1
+      JOIN users u ON u.id = p.owner_id
+      LEFT JOIN planner_group_member_overrides pgmo
+        ON pgmo.planner_id = pgs.planner_id
+       AND pgmo.group_id   = pgs.group_id
+       AND pgmo.user_id    = $1
+      ORDER BY updated_at DESC
     `, [userId]);
 
     res.json(rows.map(r => ({
@@ -81,7 +95,11 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
       'SELECT id, name, sort_order, color FROM lanes WHERE planner_id=$1 ORDER BY sort_order', [plannerId]
     );
     const { rows: activities } = await query<ActivityRow>(
-      'SELECT id, lane_id, title, description, start_date, end_date, color, label FROM activities WHERE planner_id=$1', [plannerId]
+      `SELECT a.id, a.lane_id, a.title, a.description, a.start_date, a.end_date, a.color, a.label,
+              u.username AS created_by_username
+       FROM activities a
+       LEFT JOIN users u ON u.id = a.created_by
+       WHERE a.planner_id = $1`, [plannerId]
     );
 
     const laneMap = new Map(lanes.map(l => [l.id, { ...l, activities: [] as ActivityRow[] }]));
@@ -111,6 +129,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
             endDate: fmt(a.end_date),
             color: a.color,
             label: a.label || '',
+            createdBy: a.created_by_username || null,
           })),
         })),
       },
@@ -198,10 +217,11 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
         // Batch-upsert all activities in one statement
         if (allActivities.length > 0) {
           await client.query(
-            `INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color, label)
+            `INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color, label, created_by)
              SELECT unnest($1::varchar[]), unnest($2::varchar[]), $3,
                     unnest($4::varchar[]), unnest($5::text[]),
-                    unnest($6::date[]), unnest($7::date[]), unnest($8::varchar[]), unnest($9::varchar[])
+                    unnest($6::date[]), unnest($7::date[]), unnest($8::varchar[]), unnest($9::varchar[]),
+                    $10
              ON CONFLICT (id, planner_id) DO UPDATE
                SET lane_id=EXCLUDED.lane_id, title=EXCLUDED.title, description=EXCLUDED.description,
                    start_date=EXCLUDED.start_date, end_date=EXCLUDED.end_date, color=EXCLUDED.color,
@@ -216,6 +236,7 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
               allActivities.map(a => a.endDate),
               allActivities.map(a => a.color),
               allActivities.map(a => a.label || ''),
+              userId,
             ]
           );
         }

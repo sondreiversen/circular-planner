@@ -28,6 +28,7 @@ export interface Activity {
   endDate: string;   // YYYY-MM-DD
   color: string;     // arc fill color
   label: string;     // free-text label, e.g. "vacation" — empty = none
+  createdBy?: string | null;
 }
 
 export enum ZoomLevel {

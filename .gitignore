@@ -10,3 +10,6 @@ data/
 *.pem
 *.key
 *.crt
+.claude/
+e2e-report/
+test-results/

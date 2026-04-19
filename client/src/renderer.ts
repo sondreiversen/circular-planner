@@ -508,7 +508,12 @@ export class Renderer {
     }
 
     actGroup.append('title')
-      .text(`${activity.title}\n${formatDate(startDate)} → ${formatDate(endDate)}\n${activity.description || ''}`);
+      .text([
+        activity.title,
+        `${formatDate(startDate)} → ${formatDate(endDate)}`,
+        activity.description || '',
+        activity.createdBy ? `Created by ${activity.createdBy}` : '',
+      ].filter(Boolean).join('\n'));
   }
 
   /** Plandisc-style seam at 12 o'clock: the end-of-range "lifts" above the start,

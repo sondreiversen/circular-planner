@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "build": "npm run build:client && npm run build:server",
-    "build:client": "esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts --bundle --outdir=public/js --entry-names=[name]-bundle --minify --target=es2020",
+    "build:client": "esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts groups=client/src/groups.ts --bundle --outdir=public/js --entry-names=[name]-bundle --minify --target=es2020",
     "build:server": "tsc -p tsconfig.server.json && mkdir -p dist/server/migrations && cp server/migrations/*.sql dist/server/migrations/",
-    "dev": "concurrently \"nodemon --watch server -e ts --exec 'ts-node --project tsconfig.server.json server/index.ts'\" \"esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts --bundle --outdir=public/js --entry-names=[name]-bundle --sourcemap=inline --target=es2020 --watch\"",
+    "dev": "concurrently \"nodemon --watch server -e ts --exec 'ts-node --project tsconfig.server.json server/index.ts'\" \"esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts groups=client/src/groups.ts --bundle --outdir=public/js --entry-names=[name]-bundle --sourcemap=inline --target=es2020 --watch\"",
     "start": "node dist/server/index.js",
     "start:go": "go run .",
     "build:go": "npm run build:client && go build -o planner .",
@@ -15,6 +15,7 @@
     "test": "jest"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",

@@ -31,24 +31,54 @@
   <div id="share-overlay" class="overlay hidden">
     <div class="dialog-card dialog-card--wide">
       <h3>Share Planner</h3>
-      <div id="share-error" class="form-error hidden"></div>
 
-      <div id="share-list" class="share-list"></div>
+      <!-- Tabs -->
+      <div class="tab-bar" style="margin-bottom:0;">
+        <button class="tab active" id="share-tab-users" type="button">Users</button>
+        <button class="tab" id="share-tab-groups" type="button">Groups</button>
+      </div>
 
-      <form id="share-form" class="share-add-form">
-        <label>
-          Add by email
-          <input type="email" id="share-email" placeholder="user@example.com">
-        </label>
-        <label>
-          Permission
-          <select id="share-permission">
-            <option value="view">View only</option>
-            <option value="edit">Can edit</option>
-          </select>
-        </label>
-        <button type="submit" class="btn btn-primary">Add</button>
-      </form>
+      <!-- Users panel -->
+      <div id="share-panel-users">
+        <div id="share-error" class="form-error hidden"></div>
+        <div id="share-list" class="share-list"></div>
+        <form id="share-form" class="share-add-form">
+          <label>
+            Add by email
+            <input type="email" id="share-email" placeholder="user@example.com">
+          </label>
+          <label>
+            Permission
+            <select id="share-permission">
+              <option value="view">View only</option>
+              <option value="edit">Can edit</option>
+            </select>
+          </label>
+          <button type="submit" class="btn btn-primary">Add</button>
+        </form>
+      </div>
+
+      <!-- Groups panel -->
+      <div id="share-panel-groups" class="hidden">
+        <div id="share-group-error" class="form-error hidden"></div>
+        <div id="share-group-list" class="share-list"></div>
+        <div class="share-add-form" style="align-items:flex-end;flex-wrap:wrap;gap:10px;">
+          <label style="flex:1;min-width:180px;">
+            My group
+            <select id="share-group-select">
+              <option value="">— select a group —</option>
+            </select>
+          </label>
+          <label>
+            Default permission
+            <select id="share-group-permission">
+              <option value="view">View only</option>
+              <option value="edit">Can edit</option>
+            </select>
+          </label>
+          <button id="share-group-add-btn" class="btn btn-primary" type="button">Add Group</button>
+        </div>
+      </div>
 
       <div class="dialog-actions">
         <button id="share-close" class="btn btn-ghost">Close</button>

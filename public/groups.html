@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Groups — Circular Planner</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <style>
+    .groups-page { max-width: 960px; margin: 0 auto; padding: 28px 20px; }
+
+    /* Group list view */
+    .groups-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .group-card {
+      background: var(--cp-surface);
+      border-radius: 10px;
+      border: 1px solid var(--cp-border);
+      padding: 20px;
+      cursor: pointer;
+      transition: box-shadow 0.15s, border-color 0.15s;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .group-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.10); border-color: var(--cp-border-strong); }
+    .group-card-name { font-weight: 600; font-size: 15px; }
+    .group-card-desc { font-size: 12px; color: var(--cp-text-muted); }
+    .group-card-meta { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+
+    .badge-admin  { background: #fef3c7; color: #92400e; }
+    .badge-member { background: #f0f2f5; color: #5a6b7a; }
+
+    /* Group detail view */
+    .group-detail { max-width: 680px; }
+    .group-detail-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .group-detail-title { font-size: 22px; font-weight: 700; }
+    .group-detail-desc-edit {
+      font-size: 13px;
+      color: var(--cp-text-muted);
+      margin-top: 4px;
+      cursor: pointer;
+    }
+    .group-detail-desc-edit:hover { color: var(--cp-accent); }
+
+    .members-section { margin-top: 28px; }
+    .members-section h3 { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
+    .members-list { display: flex; flex-direction: column; gap: 8px; }
+    .member-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: var(--cp-surface-2);
+      border-radius: 7px;
+      font-size: 13px;
+    }
+    .member-info { display: flex; flex-direction: column; gap: 2px; }
+    .member-name { font-weight: 500; }
+    .member-email { font-size: 12px; color: var(--cp-text-muted); }
+    .member-actions { display: flex; gap: 8px; align-items: center; }
+
+    /* User search */
+    .search-results {
+      border: 1px solid var(--cp-border-strong);
+      border-radius: 6px;
+      background: var(--cp-surface);
+      max-height: 200px;
+      overflow-y: auto;
+      margin-top: 4px;
+    }
+    .search-result-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 13px;
+      border-bottom: 1px solid var(--cp-border);
+    }
+    .search-result-item:last-child { border-bottom: none; }
+    .search-result-item:hover { background: var(--cp-surface-2); }
+    .search-result-name { font-weight: 500; }
+    .search-result-email { font-size: 12px; color: var(--cp-text-muted); }
+
+    .add-member-form {
+      background: var(--cp-surface-2);
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 16px;
+    }
+    .add-member-form h4 { font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+    .add-member-fields { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+    .add-member-fields label { flex: 1; min-width: 180px; }
+
+    .edit-name-form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 12px; }
+    .edit-name-form label { flex: 1; min-width: 180px; }
+  </style>
+</head>
+<body class="app-page">
+  <header class="app-header">
+    <div class="header-left">
+      <a href="/dashboard.html" class="back-link">← Dashboard</a>
+    </div>
+    <div class="header-right">
+      <span id="header-username" class="header-user"></span>
+      <button id="theme-toggle" class="btn-theme" title="Toggle dark mode">🌙</button>
+      <button id="logout-btn" class="btn btn-ghost">Sign Out</button>
+    </div>
+  </header>
+
+  <main id="groups-main" class="groups-page">
+    <div id="list-view">
+      <div class="dashboard-title-row">
+        <h2>My Groups</h2>
+        <button id="new-group-btn" class="btn btn-primary">+ New Group</button>
+      </div>
+      <div id="groups-grid" class="groups-grid">
+        <div class="loading-state">Loading groups…</div>
+      </div>
+    </div>
+
+    <div id="detail-view" class="hidden group-detail">
+      <div class="group-detail-header">
+        <div>
+          <div id="detail-name" class="group-detail-title"></div>
+          <div id="detail-desc" class="group-detail-desc-edit" title="Click to edit"></div>
+        </div>
+        <div style="display:flex;gap:8px;flex-shrink:0;">
+          <button id="edit-group-btn" class="btn btn-ghost hidden">Edit</button>
+          <button id="delete-group-btn" class="btn btn-danger hidden">Delete Group</button>
+        </div>
+      </div>
+
+      <!-- Inline edit form (hidden by default) -->
+      <div id="edit-form-wrap" class="hidden">
+        <div id="edit-error" class="form-error hidden"></div>
+        <div class="edit-name-form">
+          <label>Name<input type="text" id="edit-name-input"></label>
+          <label>Description<input type="text" id="edit-desc-input"></label>
+          <button id="edit-save-btn" class="btn btn-primary">Save</button>
+          <button id="edit-cancel-btn" class="btn btn-ghost">Cancel</button>
+        </div>
+      </div>
+
+      <div class="members-section">
+        <h3>Members</h3>
+        <div id="members-list" class="members-list">
+          <div class="loading-state">Loading members…</div>
+        </div>
+
+        <!-- Add member form (admin only) -->
+        <div id="add-member-form" class="add-member-form hidden">
+          <h4>Add Member</h4>
+          <div id="add-member-error" class="form-error hidden"></div>
+          <div class="add-member-fields">
+            <label>
+              Search user
+              <input type="text" id="member-search" placeholder="Username or email…" autocomplete="off">
+            </label>
+            <label>
+              Role
+              <select id="member-role">
+                <option value="member">Member</option>
+                <option value="admin">Admin</option>
+              </select>
+            </label>
+            <button id="add-member-btn" class="btn btn-primary" disabled>Add</button>
+          </div>
+          <div id="member-search-results" class="search-results hidden"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- New group dialog -->
+  <div id="new-group-overlay" class="overlay hidden">
+    <div class="dialog-card">
+      <h3>New Group</h3>
+      <div id="ng-error" class="form-error hidden"></div>
+      <form id="new-group-form">
+        <label>
+          Name
+          <input type="text" id="ng-name" placeholder="e.g. Platform Team" required>
+        </label>
+        <label>
+          Description <span class="hint">(optional)</span>
+          <input type="text" id="ng-desc" placeholder="What this group is for">
+        </label>
+        <div class="dialog-actions">
+          <button type="button" id="ng-cancel" class="btn btn-ghost">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/js/groups-bundle.js"></script>
+</body>
+</html>

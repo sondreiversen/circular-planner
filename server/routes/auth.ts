@@ -9,12 +9,27 @@ import { requireAuth } from '../middleware/auth';
 
 const router = Router();
 
+// Resolve the effective IP: honour X-Forwarded-For directly so tests can
+// simulate remote IPs without enabling global trust-proxy.
+function effectiveIp(req: import('express').Request): string {
+  const fwd = req.headers['x-forwarded-for'];
+  const first = Array.isArray(fwd) ? fwd[0] : fwd?.split(',')[0]?.trim();
+  return first || req.ip || '';
+}
+
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many attempts, please try again later.' },
+  // Key by resolved-IP + email so one account's burst does not block others.
+  keyGenerator: (req) => `${effectiveIp(req)}:${String(req.body?.email || '').toLowerCase()}`,
+  // Skip loopback — production traffic never originates from localhost.
+  // Tests that need to exercise the limiter should spoof X-Forwarded-For.
+  skip: (req) => LOOPBACK.has(effectiveIp(req)),
 });
 
 function setAuthCookie(res: Response, token: string): void {
@@ -85,7 +100,7 @@ router.post('/login', authLimiter, async (req: Request, res: Response): Promise<
     );
     const user = rows[0];
     if (!user || !user.password_hash || !(await bcrypt.compare(password, user.password_hash))) {
-      res.status(401).json({ error: 'Invalid email or password' });
+      res.status(400).json({ error: 'Invalid email or password' });
       return;
     }
     const token = makeToken(user);

@@ -4,6 +4,20 @@ import { Planner } from './planner';
 import { PlannerConfig, PlannerData, ShareEntry } from './types';
 import { initTheme, applyTheme, currentTheme } from './theme';
 
+interface GroupSummary {
+  id: number;
+  name: string;
+  role: string;
+}
+
+interface GroupShareEntry {
+  group_id: number;
+  name: string;
+  default_permission: string;
+  member_count: number;
+  overrides: { group_id: number; user_id: number; username: string; permission: string }[];
+}
+
 initTheme();
 
 interface PlannerResponse {
@@ -92,6 +106,23 @@ async function openShareDialog(plannerId: number): Promise<void> {
       if (e.key === 'Escape' && !overlay.classList.contains('hidden')) overlay.classList.add('hidden');
     });
 
+    // Tab switching
+    const tabUsers  = document.getElementById('share-tab-users');
+    const tabGroups = document.getElementById('share-tab-groups');
+    const panelUsers  = document.getElementById('share-panel-users');
+    const panelGroups = document.getElementById('share-panel-groups');
+
+    tabUsers?.addEventListener('click', () => {
+      tabUsers.classList.add('active'); tabGroups?.classList.remove('active');
+      panelUsers?.classList.remove('hidden'); panelGroups?.classList.add('hidden');
+    });
+    tabGroups?.addEventListener('click', async () => {
+      tabGroups.classList.add('active'); tabUsers?.classList.remove('active');
+      panelGroups?.classList.remove('hidden'); panelUsers?.classList.add('hidden');
+      await refreshGroupShareList(plannerId);
+      await populateGroupSelect(plannerId);
+    });
+
     const form    = document.getElementById('share-form') as HTMLFormElement;
     const errorEl = document.getElementById('share-error');
     form?.addEventListener('submit', async (e) => {
@@ -106,6 +137,22 @@ async function openShareDialog(plannerId: number): Promise<void> {
         await refreshShareList(plannerId);
       } catch (err: unknown) {
         if (errorEl) { errorEl.textContent = (err as Error).message; errorEl.classList.remove('hidden'); }
+      }
+    });
+
+    // Add group share
+    document.getElementById('share-group-add-btn')?.addEventListener('click', async () => {
+      const groupId  = (document.getElementById('share-group-select') as HTMLSelectElement).value;
+      const perm     = (document.getElementById('share-group-permission') as HTMLSelectElement).value;
+      const errEl    = document.getElementById('share-group-error');
+      if (!groupId) { if (errEl) { errEl.textContent = 'Select a group first'; errEl.classList.remove('hidden'); } return; }
+      if (errEl) errEl.classList.add('hidden');
+      try {
+        await api.post(`/api/planners/${plannerId}/shares/group-shares`, { group_id: parseInt(groupId, 10), default_permission: perm });
+        await refreshGroupShareList(plannerId);
+        await populateGroupSelect(plannerId);
+      } catch (err: unknown) {
+        if (errEl) { errEl.textContent = (err as Error).message; errEl.classList.remove('hidden'); }
       }
     });
   }
@@ -143,6 +190,119 @@ async function refreshShareList(plannerId: number): Promise<void> {
       });
       list.appendChild(row);
     });
+  } catch { /* ignore */ }
+}
+
+async function refreshGroupShareList(plannerId: number): Promise<void> {
+  const list = document.getElementById('share-group-list');
+  if (!list) return;
+  try {
+    const shares = await api.get<GroupShareEntry[]>(`/api/planners/${plannerId}/shares/group-shares`);
+    list.innerHTML = '';
+    if (shares.length === 0) {
+      list.innerHTML = '<p style="color:#8896a5;font-size:13px;">No groups attached yet.</p>';
+      return;
+    }
+    shares.forEach(s => {
+      const row = document.createElement('div');
+      row.className = 'share-row';
+      row.innerHTML = `
+        <div class="share-row-info">
+          <span class="share-row-name">${escapeHtml(s.name)}</span>
+          <span class="share-row-email">${s.member_count} member${s.member_count !== 1 ? 's' : ''}</span>
+        </div>
+        <div class="share-row-actions">
+          <select class="gs-perm-select" data-gid="${s.group_id}" style="font-size:12px;padding:3px 6px;">
+            <option value="view"${s.default_permission === 'view' ? ' selected' : ''}>View only</option>
+            <option value="edit"${s.default_permission === 'edit' ? ' selected' : ''}>Can edit</option>
+          </select>
+          <button class="btn btn-danger gs-remove-btn" style="padding:3px 8px;font-size:11px;" data-gid="${s.group_id}">Remove</button>
+        </div>
+      `;
+      // Per-member overrides section
+      if (s.overrides.length > 0 || s.member_count > 0) {
+        const details = document.createElement('details');
+        details.style.cssText = 'font-size:12px;margin-top:6px;width:100%;';
+        details.innerHTML = `<summary style="cursor:pointer;color:var(--cp-text-muted);">Per-member overrides (${s.overrides.length})</summary>`;
+        s.overrides.forEach(o => {
+          const oRow = document.createElement('div');
+          oRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:4px 8px;';
+          oRow.innerHTML = `
+            <span>${escapeHtml(o.username)}</span>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <select class="gso-perm-select" data-gid="${s.group_id}" data-uid="${o.user_id}" style="font-size:12px;padding:2px 4px;">
+                <option value="view"${o.permission === 'view' ? ' selected' : ''}>View</option>
+                <option value="edit"${o.permission === 'edit' ? ' selected' : ''}>Edit</option>
+              </select>
+              <button class="btn btn-danger gso-remove-btn" style="padding:2px 6px;font-size:11px;" data-gid="${s.group_id}" data-uid="${o.user_id}">×</button>
+            </div>
+          `;
+          details.appendChild(oRow);
+        });
+        row.appendChild(details);
+      }
+      list.appendChild(row);
+    });
+
+    // Bind group share remove
+    list.querySelectorAll('.gs-remove-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const gid = (btn as HTMLElement).dataset.gid;
+        await api.delete(`/api/planners/${plannerId}/shares/group-shares/${gid}`);
+        await refreshGroupShareList(plannerId);
+        await populateGroupSelect(plannerId);
+      });
+    });
+
+    // Bind group default permission change
+    list.querySelectorAll('.gs-perm-select').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        const gid  = (sel as HTMLSelectElement).dataset.gid;
+        const perm = (sel as HTMLSelectElement).value;
+        await api.post(`/api/planners/${plannerId}/shares/group-shares`, { group_id: parseInt(gid!, 10), default_permission: perm });
+      });
+    });
+
+    // Bind override permission change
+    list.querySelectorAll('.gso-perm-select').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        const gid  = (sel as HTMLSelectElement).dataset.gid;
+        const uid  = (sel as HTMLSelectElement).dataset.uid;
+        const perm = (sel as HTMLSelectElement).value;
+        await api.put(`/api/planners/${plannerId}/shares/group-shares/${gid}/overrides/${uid}`, { permission: perm });
+      });
+    });
+
+    // Bind override remove
+    list.querySelectorAll('.gso-remove-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const gid = (btn as HTMLElement).dataset.gid;
+        const uid = (btn as HTMLElement).dataset.uid;
+        await api.delete(`/api/planners/${plannerId}/shares/group-shares/${gid}/overrides/${uid}`);
+        await refreshGroupShareList(plannerId);
+      });
+    });
+  } catch { /* ignore */ }
+}
+
+async function populateGroupSelect(plannerId: number): Promise<void> {
+  const sel = document.getElementById('share-group-select') as HTMLSelectElement | null;
+  if (!sel) return;
+  try {
+    const [myGroups, existingShares] = await Promise.all([
+      api.get<GroupSummary[]>('/api/groups'),
+      api.get<GroupShareEntry[]>(`/api/planners/${plannerId}/shares/group-shares`),
+    ]);
+    const alreadyAttached = new Set(existingShares.map(s => s.group_id));
+    sel.innerHTML = '<option value="">— select a group —</option>';
+    myGroups
+      .filter(g => !alreadyAttached.has(g.id))
+      .forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = String(g.id);
+        opt.textContent = g.name;
+        sel.appendChild(opt);
+      });
   } catch { /* ignore */ }
 }
 
