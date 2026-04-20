@@ -31,7 +31,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ─── Prerequisites ────────────────────────────────────────────────────────────
-require node
+# Debian/Ubuntu ships Node.js as "nodejs"; other distros use "node".
+if command -v node >/dev/null 2>&1; then
+  NODE=node
+elif command -v nodejs >/dev/null 2>&1; then
+  NODE=nodejs
+else
+  err "ERROR: Node.js not found. Install it (e.g. 'sudo apt install nodejs') and re-run."
+  exit 1
+fi
 require npm
 
 if [ "$SKIP_DOCKER" = false ]; then
@@ -48,7 +56,7 @@ fi
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VERSION=$(node -p "require('${SCRIPT_DIR}/package.json').version")
+VERSION=$($NODE -p "require('${SCRIPT_DIR}/package.json').version")
 DATE=$(date +%Y%m%d)
 GIT_HASH=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 ARCHIVE_NAME="circular-planner-airgap-${VERSION}-${DATE}"
@@ -71,20 +79,20 @@ echo "  Platform: ${PLATFORM:-$(uname -m) (host default)}"
 echo ""
 
 # ─── Step 1: Build application ────────────────────────────────────────────────
-info "[1/6] Installing dependencies and building application..."
+info "[1/7] Installing dependencies and building application..."
 cd "$SCRIPT_DIR"
 npm ci --ignore-scripts=false
 npm run build
 
 # ─── Step 2: Production node_modules ──────────────────────────────────────────
-info "[2/6] Building production-only node_modules..."
+info "[2/7] Building production-only node_modules..."
 PROD_DIR="$(mktemp -d)"
 cp "$SCRIPT_DIR/package.json" "$PROD_DIR/"
 cp "$SCRIPT_DIR/package-lock.json" "$PROD_DIR/"
 (cd "$PROD_DIR" && npm ci --omit=dev)
 
 # ─── Step 3: Stage bare-metal artifacts ───────────────────────────────────────
-info "[3/6] Staging bare-metal artifacts..."
+info "[3/7] Staging bare-metal artifacts..."
 mkdir -p "$STAGING/$ARCHIVE_NAME/bare-metal"
 cp -r "$PROD_DIR/node_modules" "$STAGING/$ARCHIVE_NAME/bare-metal/"
 cp -r "$SCRIPT_DIR/dist"       "$STAGING/$ARCHIVE_NAME/bare-metal/"
@@ -92,9 +100,29 @@ cp -r "$SCRIPT_DIR/public"     "$STAGING/$ARCHIVE_NAME/bare-metal/"
 cp    "$SCRIPT_DIR/package.json" "$STAGING/$ARCHIVE_NAME/bare-metal/"
 rm -rf "$PROD_DIR"
 
+# ─── Step 3b: Bundle .deb packages for offline bare-metal prereqs ─────────────
+# This runs only on Debian/Ubuntu packaging hosts. The downloaded .debs let the
+# target installer offer 'sudo dpkg -i' for nodejs + postgresql-client without
+# any network access. Target distro codename must match the packaging host's.
+if command -v apt-get >/dev/null 2>&1; then
+  info "[4/7] Downloading .deb packages for bare-metal fallback (nodejs, postgresql-client)..."
+  DEBS_DIR="$STAGING/$ARCHIVE_NAME/debs"
+  mkdir -p "$DEBS_DIR/partial"
+  apt-get \
+    -o Dir::Cache::archives="$DEBS_DIR" \
+    -o Debug::NoLocking=1 \
+    --download-only --reinstall --yes \
+    install nodejs postgresql-client 2>&1 | grep -v "^Get:" || true
+  rm -rf "$DEBS_DIR/partial" "$DEBS_DIR/lock"
+  DEB_COUNT=$(find "$DEBS_DIR" -maxdepth 1 -name '*.deb' | wc -l)
+  info "  Downloaded ${DEB_COUNT} .deb file(s) to debs/"
+else
+  info "[4/7] Not an apt-based host — skipping .deb bundle (Docker path still works)."
+fi
+
 # ─── Step 4: Docker images ────────────────────────────────────────────────────
 if [ "$SKIP_DOCKER" = false ]; then
-  info "[4/6] Building and saving Docker images..."
+  info "[5/7] Building and saving Docker images..."
   mkdir -p "$STAGING/$ARCHIVE_NAME/images"
 
   # Pull base images
@@ -117,14 +145,20 @@ if [ "$SKIP_DOCKER" = false ]; then
     "$SCRIPT_DIR/docker-compose.yml" \
     > "$STAGING/$ARCHIVE_NAME/docker-compose.airgap.yml"
 else
-  info "[4/6] Skipping Docker images (--skip-docker)"
+  info "[5/7] Skipping Docker images (--skip-docker)"
 fi
 
-# ─── Step 5: Copy installer and build info ────────────────────────────────────
-info "[5/6] Writing build info and installer..."
+# ─── Step 6: Copy installer and build info ────────────────────────────────────
+info "[6/7] Writing build info and installer..."
 
 cp "$SCRIPT_DIR/install-airgap.sh" "$STAGING/$ARCHIVE_NAME/"
 chmod +x "$STAGING/$ARCHIVE_NAME/install-airgap.sh"
+
+# Capture distro codename so the target installer can warn on mismatch.
+DISTRO_CODENAME="unknown"
+if [ -f /etc/os-release ]; then
+  DISTRO_CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME:-${ID:-unknown}}")
+fi
 
 cat > "$STAGING/$ARCHIVE_NAME/BUILD_INFO" <<EOF
 Circular Planner — Air-Gapped Deployment Package
@@ -132,23 +166,27 @@ Circular Planner — Air-Gapped Deployment Package
 Version:      ${VERSION}
 Git commit:   ${GIT_HASH}
 Packaged:     $(date -u +%Y-%m-%dT%H:%M:%SZ)
-Node.js:      $(node -v)
+Node.js:      $($NODE -v)
 npm:          $(npm -v)
 Platform:     $(uname -s) $(uname -m)
+Distro:       $(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-unknown}" || echo "unknown")
+Codename:     ${DISTRO_CODENAME}
 Docker:       $(docker --version 2>/dev/null || echo "n/a")
 
 Contents:
   bare-metal/     Pre-built server, frontend, and production dependencies
+  debs/           Offline .deb packages for nodejs + postgresql-client (apt hosts only)
   images/         Docker images (node, postgres, app) as tar archives
   install-airgap.sh  Interactive installer for the target machine
 
 Note: For bare-metal deployment, the target machine must match
-the build platform ($(uname -s) $(uname -m)). Docker images
-are for $([ -n "$PLATFORM" ] && echo "$PLATFORM" || echo "$(uname -m)").
+the build platform ($(uname -s) $(uname -m)). The bundled .deb packages
+in debs/ are for ${DISTRO_CODENAME} — install on a different distro/codename
+at your own risk. Docker images are for $([ -n "$PLATFORM" ] && echo "$PLATFORM" || echo "$(uname -m)").
 EOF
 
 # ─── Step 6: Create archive ──────────────────────────────────────────────────
-info "[6/6] Creating archive..."
+info "[6/7] Creating archive..."
 tar -czf "$SCRIPT_DIR/${ARCHIVE_NAME}.tar.gz" -C "$STAGING" "$ARCHIVE_NAME"
 
 ARCHIVE_SIZE=$(du -h "$SCRIPT_DIR/${ARCHIVE_NAME}.tar.gz" | cut -f1)

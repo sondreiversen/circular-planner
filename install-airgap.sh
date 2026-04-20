@@ -139,7 +139,9 @@ EOF
   info "Waiting for app to become healthy..."
   HEALTHY=0
   for _ in $(seq 1 60); do
-    if curl -fsS "http://localhost:${PORT}/index.html" >/dev/null 2>&1; then
+    # Use bash built-in /dev/tcp — no curl/wget needed on minimal Debian installs.
+    if (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; then
+      exec 3<&- 2>/dev/null || true
       HEALTHY=1; break
     fi
     sleep 1
@@ -157,13 +159,69 @@ EOF
 
 # ─── Bare-metal path ──────────────────────────────────────────────────────────
 else
-  require node
-  require psql
-  NODE_MAJOR=$(node -v | sed 's/v//' | cut -d. -f1)
-  if [ "$NODE_MAJOR" -lt 18 ]; then
-    err "Node.js 18+ required (found $(node -v))."; exit 1
+  # ── Optional: install bundled .deb packages for nodejs + postgresql-client ──
+  HAS_DEBS=false
+  if [ -d "$SCRIPT_DIR/debs" ] && ls "$SCRIPT_DIR/debs"/*.deb >/dev/null 2>&1; then
+    HAS_DEBS=true
   fi
-  info "Node $(node -v), psql present"
+
+  NEED_PREREQS=false
+  command -v node   >/dev/null 2>&1 || command -v nodejs >/dev/null 2>&1 || NEED_PREREQS=true
+  command -v psql   >/dev/null 2>&1 || NEED_PREREQS=true
+
+  if [ "$HAS_DEBS" = true ] && [ "$NEED_PREREQS" = true ]; then
+    echo ""
+    warn "nodejs and/or postgresql-client not found on this machine."
+    info "The archive includes bundled .deb packages that can install them offline."
+
+    # Warn if packaging host codename doesn't match this host's codename.
+    TARGET_CODENAME="unknown"
+    if [ -f /etc/os-release ]; then
+      TARGET_CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME:-${ID:-unknown}}")
+    fi
+    BUILD_CODENAME=$(grep '^Codename:' "$SCRIPT_DIR/BUILD_INFO" 2>/dev/null | awk '{print $2}')
+    if [ -n "$BUILD_CODENAME" ] && [ "$BUILD_CODENAME" != "unknown" ] && \
+       [ "$TARGET_CODENAME" != "$BUILD_CODENAME" ]; then
+      warn "WARNING: These .debs were built for '${BUILD_CODENAME}' but this host is '${TARGET_CODENAME}'."
+      warn "         Installing may fail or cause conflicts. Proceed with caution."
+    fi
+
+    read -r -p "Install bundled .deb packages now (requires sudo)? [Y/n]: " INST_DEBS
+    INST_DEBS="${INST_DEBS:-Y}"
+    case "$INST_DEBS" in
+      y|Y|yes|YES)
+        info "Running: sudo dpkg -i ${SCRIPT_DIR}/debs/*.deb"
+        if ! sudo dpkg -i "$SCRIPT_DIR"/debs/*.deb; then
+          warn "dpkg reported errors (possibly missing dependencies)."
+          warn "Attempting to fix: sudo apt-get install -f --no-download"
+          sudo apt-get install -f --no-download -y 2>/dev/null || \
+            warn "apt-get -f also failed — you may need to resolve dependencies manually."
+        fi
+        ;;
+      *) warn "Skipping .deb install. Make sure nodejs 18+ and postgresql-client are installed before continuing." ;;
+    esac
+  fi
+
+  # Debian/Ubuntu ships Node.js as "nodejs"; other distros use "node".
+  if command -v node >/dev/null 2>&1; then
+    NODE=node
+  elif command -v nodejs >/dev/null 2>&1; then
+    NODE=nodejs
+  else
+    err "ERROR: Node.js not found."
+    if [ "$HAS_DEBS" = false ]; then
+      err "  This archive has no bundled .debs. Install Node.js 18+ manually, then re-run."
+    else
+      err "  The .deb install may have failed. Check errors above, then re-run."
+    fi
+    exit 1
+  fi
+  require psql
+  NODE_MAJOR=$($NODE -v | sed 's/v//' | cut -d. -f1)
+  if [ "$NODE_MAJOR" -lt 18 ]; then
+    err "Node.js 18+ required (found $($NODE -v))."; exit 1
+  fi
+  info "Node $($NODE -v), psql present"
 
   # DB connection prompt
   echo ""
@@ -225,8 +283,54 @@ EOF
   info "Wrote .env"
 
   info "Running migrations and seeding admin..."
-  (cd "$INSTALL_DIR" && node dist/server/scripts/create-admin.js \
+  (cd "$INSTALL_DIR" && $NODE dist/server/scripts/create-admin.js \
     --username "$ADMIN_USER" --email "$ADMIN_EMAIL" --password "$ADMIN_PASS")
+
+  # ── systemd service ──────────────────────────────────────────────────────────
+  NODE_PATH=$(command -v "$NODE")
+  SERVICE_FILE="$INSTALL_DIR/circular-planner.service"
+  SERVICE_USER="${SUDO_USER:-$USER}"
+
+  cat > "$SERVICE_FILE" <<UNIT
+[Unit]
+Description=Circular Planner
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+WorkingDirectory=${INSTALL_DIR}
+EnvironmentFile=${INSTALL_DIR}/.env
+ExecStart=${NODE_PATH} ${INSTALL_DIR}/dist/server/index.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  SYSTEMD_OK=false
+  if command -v systemctl >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    read -r -p "Install and enable systemd service (requires sudo)? [Y/n]: " INST_SVC
+    INST_SVC="${INST_SVC:-Y}"
+    case "$INST_SVC" in
+      y|Y|yes|YES)
+        sudo install -m 0644 "$SERVICE_FILE" /etc/systemd/system/circular-planner.service
+        sudo systemctl daemon-reload
+        sudo systemctl enable --now circular-planner.service
+        SYSTEMD_OK=true
+        info "Service installed and started."
+        ;;
+    esac
+  fi
+
+  if [ "$SYSTEMD_OK" = false ]; then
+    warn "Systemd service not installed automatically."
+    warn "To install it manually:"
+    warn "  sudo cp ${SERVICE_FILE} /etc/systemd/system/"
+    warn "  sudo systemctl daemon-reload"
+    warn "  sudo systemctl enable --now circular-planner"
+  fi
 fi
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
@@ -246,8 +350,19 @@ warn "  set TLS_CERT_FILE and TLS_KEY_FILE in .env, or"
 warn "  put a reverse proxy in front and set TRUST_PROXY=true."
 echo ""
 if [ "$MODE" = "2" ]; then
-  echo "Start the server:"
-  echo "  cd ${INSTALL_DIR}"
-  echo "  node dist/server/index.js"
+  if [ "${SYSTEMD_OK:-false}" = true ]; then
+    echo "Service management:"
+    echo "  sudo systemctl status  circular-planner"
+    echo "  sudo systemctl restart circular-planner"
+    echo "  sudo systemctl stop    circular-planner"
+  else
+    echo "Start the server:"
+    echo "  cd ${INSTALL_DIR}"
+    echo "  ${NODE} dist/server/index.js"
+    echo ""
+    echo "Or install the generated service file:"
+    echo "  sudo cp ${INSTALL_DIR}/circular-planner.service /etc/systemd/system/"
+    echo "  sudo systemctl daemon-reload && sudo systemctl enable --now circular-planner"
+  fi
   echo ""
 fi

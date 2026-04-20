@@ -214,11 +214,26 @@ sudo systemctl enable --now circular-planner
 
 Use `package-airgap.sh` on an internet-connected machine to create a self-contained archive, then transfer and install it on the target.
 
-### On the build machine (internet access required)
+### Debian / Ubuntu quickstart (recommended path)
+
+**Docker is the recommended install method on Debian/Ubuntu** — the archive ships pre-saved Docker images so no `apt install` is needed on the target; the only prerequisite is Docker Engine with the Compose plugin.
+
+If Docker is not available, the archive also bundles `.deb` packages for `nodejs` and `postgresql-client` (downloaded on the packaging host). The installer will offer to `sudo dpkg -i` them before continuing with bare-metal install.
+
+> **Codename match:** The bundled `.deb` packages must match the target's distro codename (e.g. `trixie`, `bookworm`, `noble`). The `BUILD_INFO` file in the archive records the packaging host's codename. A mismatch warning is printed during install — proceed with caution if they differ.
+
+### On the build machine (internet access, Debian/Ubuntu recommended)
 
 ```bash
 ./package-airgap.sh
 # Produces: circular-planner-airgap-YYYYMMDD.tar.gz
+# On apt-based hosts, also downloads nodejs + postgresql-client .debs into the archive.
+
+# To skip Docker image export (smaller archive, bare-metal only):
+./package-airgap.sh --skip-docker
+
+# To cross-compile Docker images for a different architecture:
+./package-airgap.sh --platform linux/amd64
 ```
 
 ### On the target machine (no internet)
@@ -229,7 +244,22 @@ cd circular-planner-airgap-*/
 ./install-airgap.sh
 ```
 
-The air-gapped installer follows the same interactive flow as `install.sh`. If Docker images are present in the archive it offers both Docker and bare-metal; otherwise it falls back to bare-metal automatically.
+The installer will:
+1. Offer **Docker** (option 1, default) or **bare-metal** (option 2).
+2. On bare-metal: offer to install bundled `.deb` packages if `nodejs` or `postgresql-client` is missing.
+3. Walk through admin account creation and database connection.
+4. On bare-metal: generate and install a **systemd service** (`circular-planner.service`) so the server starts automatically on boot.
+
+### Managing the bare-metal service
+
+```bash
+sudo systemctl status  circular-planner   # check status
+sudo systemctl restart circular-planner   # apply .env changes
+sudo systemctl stop    circular-planner   # stop
+sudo journalctl -u circular-planner -f    # live logs
+```
+
+The `.env` file lives in your install directory (default `~/circular-planner/.env`). Edit it and `sudo systemctl restart circular-planner` to apply changes.
 
 ---
 
