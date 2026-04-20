@@ -130,11 +130,10 @@ DATABASE_URL=postgresql://planner:${POSTGRES_PASSWORD}@db:5432/circular_planner
 EOF
   info "Wrote .env"
 
-  # Copy compose file to working directory
-  cp "$SCRIPT_DIR/docker-compose.airgap.yml" ./docker-compose.airgap.yml
+  COMPOSE_FILE="$SCRIPT_DIR/docker-compose.airgap.yml"
 
   info "Starting containers..."
-  docker compose -f docker-compose.airgap.yml up -d
+  docker compose -f "$COMPOSE_FILE" up -d
 
   info "Waiting for app to become healthy..."
   HEALTHY=0
@@ -147,13 +146,13 @@ EOF
     sleep 1
   done
   if [ "$HEALTHY" -ne 1 ]; then
-    err "App did not become healthy within 60s. Check: docker compose -f docker-compose.airgap.yml logs"
+    err "App did not become healthy within 60s. Check: docker compose -f \"$COMPOSE_FILE\" logs"
     exit 1
   fi
   info "App is up"
 
   info "Seeding admin user..."
-  docker compose -f docker-compose.airgap.yml exec -T app \
+  docker compose -f "$COMPOSE_FILE" exec -T app \
     node dist/server/scripts/create-admin.js \
     --username "$ADMIN_USER" --email "$ADMIN_EMAIL" --password "$ADMIN_PASS"
 
