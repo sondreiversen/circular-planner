@@ -147,6 +147,8 @@
   font-family: inherit;
   box-shadow: 0 1px 2px rgba(0,0,0,0.06);
   transition: background 0.12s, box-shadow 0.12s, color 0.12s, border-color 0.12s;
+  /* Ensure a sensible min-size baseline even without the coarse rule */
+  min-height: 32px;
 }
 
 .cp-btn:hover:not(:disabled) {
@@ -210,6 +212,73 @@
   cursor: pointer;
   padding: 4px 6px;
   color: var(--cp-text, #1a2332);
+}
+
+/* ---- Save-state badge ---- */
+.cp-save-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  transition: opacity 0.3s, background 0.2s, color 0.2s;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.cp-save-badge--idle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.cp-save-badge--saving {
+  background: var(--cp-surface-2, #f4f6f9);
+  color: var(--cp-text-muted, #6b7280);
+  border-color: var(--cp-border, #e4e7ed);
+  opacity: 1;
+  animation: cp-badge-pulse 1s ease-in-out infinite alternate;
+}
+
+.cp-save-badge--saved {
+  background: #ecfdf5;
+  color: #065f46;
+  border-color: #a7f3d0;
+  opacity: 1;
+}
+
+.cp-save-badge--error {
+  background: #fef2f2;
+  color: #991b1b;
+  border-color: #fecaca;
+  opacity: 1;
+  cursor: pointer;
+}
+
+.cp-save-badge--error:hover {
+  background: #fee2e2;
+}
+
+@keyframes cp-badge-pulse {
+  from { opacity: 0.6; }
+  to   { opacity: 1; }
+}
+
+[data-theme="dark"] .cp-save-badge--saving {
+  background: #2a2d35;
+  color: #9ca3af;
+  border-color: #3f4451;
+}
+
+[data-theme="dark"] .cp-save-badge--saved {
+  background: #052e16;
+  color: #86efac;
+  border-color: #166534;
+}
+
+[data-theme="dark"] .cp-save-badge--error {
+  background: #2d1b1b;
+  color: #fca5a5;
+  border-color: #7f1d1d;
 }
 
 /* ---- Filter / secondary row ---- */
@@ -435,4 +504,115 @@
   text-align: center;
   color: var(--cp-text-muted, #5a6b7a);
   font-size: 13px;
+}
+
+/* ============================================================
+   RESPONSIVE / TOUCH ENHANCEMENTS
+   ============================================================ */
+
+/* Prevent the SVG area from hijacking single-finger scroll;
+   the pinch handler in renderer.ts uses pointer-events instead. */
+.cp-svg-container {
+  touch-action: pan-x pan-y;
+}
+
+/* --- Coarse-pointer (touch) hit-target sizing --- */
+@media (pointer: coarse) {
+  /* Buttons in the toolbar and sidebar */
+  .cp-btn,
+  .cp-sidebar-toggle,
+  .btn-theme,
+  .cp-year-select {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 10px 14px;
+    font-size: 14px;
+  }
+
+  /* Zoom/nav controls already use .cp-btn; the group just needs a bit more gap */
+  .cp-zoom-controls {
+    gap: 6px;
+  }
+
+  /* Sidebar lane-toggle rows — make the whole row at least 44px tall */
+  .cp-sidebar-lane-row,
+  .cp-lane-toggle {
+    min-height: 44px;
+  }
+
+  /* Label / appearance toggle rows (built with plain <label> elements) */
+  .cp-sidebar-section label {
+    min-height: 44px;
+  }
+
+  /* Filter inputs */
+  .cp-filter-input {
+    min-height: 44px;
+    font-size: 16px; /* prevents iOS auto-zoom on focus */
+    padding: 8px 10px;
+  }
+}
+
+/* --- Narrow viewport: toolbar wraps cleanly --- */
+@media (max-width: 720px) {
+  /* The toolbar inline styles set flex+wrap; here we tighten padding
+     and let it be two rows at most. */
+  .cp-toolbar {
+    padding: 4px 6px !important;
+    gap: 4px !important;
+    row-gap: 4px;
+  }
+
+  /* Year selector: shrink a bit so it doesn't push controls off */
+  .cp-year-select {
+    max-width: 80px;
+  }
+
+  /* Viewport label: shorten so it doesn't hog space */
+  .cp-viewport-label {
+    min-width: 70px;
+    font-size: 11px;
+  }
+
+  /* Save badge: hide text, keep dot — achieved simply by keeping it short */
+  .cp-save-badge {
+    font-size: 10px;
+    padding: 2px 6px;
+  }
+
+  /* Sidebar: collapse to icon-only rail on very narrow screens
+     so the disc still has room. */
+  .cp-sidebar {
+    width: 36px;
+    min-width: 36px;
+  }
+  .cp-sidebar .cp-sidebar-body {
+    display: none;
+  }
+  /* Keep the toggle button visible even when auto-collapsed */
+  .cp-sidebar-toggle {
+    margin: 4px auto;
+  }
+}
+
+/* Prevent horizontal overflow on the very narrowest viewports */
+@media (max-width: 400px) {
+  .cp-toolbar {
+    overflow-x: hidden;
+  }
+
+  /* Drop the planner title text on tiny screens — it can be read from the
+     disc centre hub. We hide it via a utility class toggled in JS below,
+     but the media query provides the fallback. */
+  .cp-toolbar-title {
+    display: none;
+  }
+}
+
+/* --- Reduced motion --- */
+@media (prefers-reduced-motion: reduce) {
+  .cp-svg-container .circular-planner-svg * {
+    transition: none !important;
+    animation: none !important;
+  }
 }

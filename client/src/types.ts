@@ -7,6 +7,16 @@ export interface PlannerConfig {
   permission: 'owner' | 'edit' | 'view';
 }
 
+/**
+ * Top-level field returned by GET /api/planners/:id alongside `config` and `data`.
+ * Stored by the client and sent back as `client_updated_at` in the PUT body so the
+ * server can detect concurrent edits (409 if the row was modified by another session).
+ * The PUT response also returns `updated_at` so the client can refresh its copy.
+ */
+export interface PlannerTimestamp {
+  updated_at: string; // ISO 8601 string, e.g. "2026-04-20T12:34:56.789Z"
+}
+
 export interface PlannerData {
   lanes: Lane[];
 }

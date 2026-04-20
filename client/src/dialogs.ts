@@ -12,6 +12,45 @@ function removeSafe(id: string): void {
   if (el) el.remove();
 }
 
+// ── Focus management helpers ──────────────────────────────────────────────────
+
+const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** Install focus trap inside `dialogEl`. Returns cleanup function. */
+function installFocusTrap(dialogEl: HTMLElement): () => void {
+  const handler = (e: KeyboardEvent) => {
+    if (e.key !== 'Tab') return;
+    const focusable = Array.from(dialogEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+      .filter(el => el.offsetParent !== null); // skip hidden elements
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey) {
+      if (document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else {
+      if (document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  };
+  dialogEl.addEventListener('keydown', handler);
+  return () => dialogEl.removeEventListener('keydown', handler);
+}
+
+/** Wrap a close function so it also restores focus to `previouslyFocused`. */
+function withFocusRestore(closeFn: () => void, previouslyFocused: Element | null): () => void {
+  return () => {
+    closeFn();
+    if (previouslyFocused && (previouslyFocused as HTMLElement).focus) {
+      (previouslyFocused as HTMLElement).focus();
+    }
+  };
+}
+
 function createColorPicker(selectedColor: string, palette: string[]): HTMLElement {
   const wrapper = document.createElement('div');
   wrapper.className = 'cp-planner-color-picker';
@@ -55,6 +94,7 @@ export function showActivityDialog(
 ): void {
   const DIALOG_ID = 'cp-activity-dialog';
   removeSafe(DIALOG_ID);
+  const previouslyFocused = document.activeElement;
 
   const isEdit = !!existingActivity;
   const defaultColor = existingActivity?.color || COLOR_PALETTE[0];
@@ -75,6 +115,7 @@ export function showActivityDialog(
   dialog.id = DIALOG_ID;
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-modal', 'true');
+  dialog.setAttribute('aria-labelledby', 'cp-act-dialog-title');
   dialog.style.cssText = `
     position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;
     display:flex;align-items:center;justify-content:center;
@@ -83,7 +124,7 @@ export function showActivityDialog(
 
   dialog.innerHTML = `
     <div style="background:white;border-radius:6px;padding:24px;width:420px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,0.2);">
-      <h2 style="margin:0 0 16px;font-size:16px;font-family:sans-serif;">${isEdit ? 'Edit Activity' : 'Add Activity'}</h2>
+      <h2 id="cp-act-dialog-title" style="margin:0 0 16px;font-size:16px;font-family:sans-serif;">${isEdit ? 'Edit Activity' : 'Add Activity'}</h2>
       <label style="display:block;margin-bottom:12px;font-family:sans-serif;font-size:13px;">
         Title <span style="color:red">*</span>
         <input id="cp-act-title" type="text" value="${escapeHtml(existingActivity?.title || '')}"
@@ -140,10 +181,13 @@ export function showActivityDialog(
   const pickerSlot = document.getElementById('cp-color-picker-holder');
   if (pickerSlot) pickerSlot.replaceWith(colorPicker);
 
-  const close = () => removeSafe(DIALOG_ID);
+  const closeRaw = () => removeSafe(DIALOG_ID);
+  const close = withFocusRestore(closeRaw, previouslyFocused);
+  const removeTrap = installFocusTrap(dialog);
+  const closeAndCleanup = () => { removeTrap(); close(); };
 
-  dialog.addEventListener('click', (e) => { if (e.target === dialog) close(); });
-  document.getElementById('cp-act-cancel')?.addEventListener('click', close);
+  dialog.addEventListener('click', (e) => { if (e.target === dialog) closeAndCleanup(); });
+  document.getElementById('cp-act-cancel')?.addEventListener('click', closeAndCleanup);
 
   document.getElementById('cp-act-save')?.addEventListener('click', () => {
     const title = (document.getElementById('cp-act-title') as HTMLInputElement).value.trim();
@@ -171,13 +215,13 @@ export function showActivityDialog(
       label,
     };
     onSave(activity);
-    close();
+    closeAndCleanup();
   });
 
   document.getElementById('cp-act-delete')?.addEventListener('click', () => {
     if (existingActivity && confirm(`Delete activity "${existingActivity.title}"?`)) {
       onDelete(existingActivity.id);
-      close();
+      closeAndCleanup();
     }
   });
 
@@ -193,6 +237,7 @@ export function showLaneDialog(
 ): void {
   const DIALOG_ID = 'cp-lane-dialog';
   removeSafe(DIALOG_ID);
+  const previouslyFocused = document.activeElement;
 
   const isEdit = !!existingLane;
   const defaultColor = existingLane?.color || LANE_COLORS[nextOrder % LANE_COLORS.length];
@@ -202,6 +247,8 @@ export function showLaneDialog(
   const dialog = document.createElement('section');
   dialog.id = DIALOG_ID;
   dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+  dialog.setAttribute('aria-labelledby', 'cp-lane-dialog-title');
   dialog.style.cssText = `
     position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;
     display:flex;align-items:center;justify-content:center;
@@ -210,7 +257,7 @@ export function showLaneDialog(
 
   dialog.innerHTML = `
     <div style="background:white;border-radius:6px;padding:24px;width:360px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,0.2);">
-      <h2 style="margin:0 0 16px;font-size:16px;font-family:sans-serif;">${isEdit ? 'Edit Lane' : 'Add Lane'}</h2>
+      <h2 id="cp-lane-dialog-title" style="margin:0 0 16px;font-size:16px;font-family:sans-serif;">${isEdit ? 'Edit Lane' : 'Add Lane'}</h2>
       <label style="display:block;margin-bottom:12px;font-family:sans-serif;font-size:13px;">
         Lane name <span style="color:red">*</span>
         <input id="cp-lane-name" type="text" value="${escapeHtml(existingLane?.name || '')}"
@@ -237,10 +284,13 @@ export function showLaneDialog(
   const pickerSlot = document.getElementById('cp-lane-color-holder');
   if (pickerSlot) pickerSlot.replaceWith(colorPicker);
 
-  const close = () => removeSafe(DIALOG_ID);
+  const closeRaw = () => removeSafe(DIALOG_ID);
+  const close = withFocusRestore(closeRaw, previouslyFocused);
+  const removeTrap = installFocusTrap(dialog);
+  const closeAndCleanup = () => { removeTrap(); close(); };
 
-  dialog.addEventListener('click', (e) => { if (e.target === dialog) close(); });
-  document.getElementById('cp-lane-cancel')?.addEventListener('click', close);
+  dialog.addEventListener('click', (e) => { if (e.target === dialog) closeAndCleanup(); });
+  document.getElementById('cp-lane-cancel')?.addEventListener('click', closeAndCleanup);
 
   document.getElementById('cp-lane-save')?.addEventListener('click', () => {
     const name = (document.getElementById('cp-lane-name') as HTMLInputElement).value.trim();
@@ -255,13 +305,13 @@ export function showLaneDialog(
       activities: existingLane?.activities || [],
     };
     onSave(lane);
-    close();
+    closeAndCleanup();
   });
 
   document.getElementById('cp-lane-delete')?.addEventListener('click', () => {
     if (existingLane && confirm(`Delete lane "${existingLane.name}" and all its activities?`)) {
       onDelete(existingLane.id);
-      close();
+      closeAndCleanup();
     }
   });
 
@@ -294,6 +344,7 @@ export function showOutlookImportDialog(
 ): void {
   const DIALOG_ID = 'cp-outlook-import-dialog';
   removeSafe(DIALOG_ID);
+  const previouslyFocused = document.activeElement;
 
   const laneOptions = lanes
     .sort((a, b) => a.order - b.order)
@@ -304,6 +355,7 @@ export function showOutlookImportDialog(
   dialog.id = DIALOG_ID;
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-modal', 'true');
+  dialog.setAttribute('aria-labelledby', 'cp-import-dialog-title');
   dialog.style.cssText = `
     position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;
     display:flex;align-items:center;justify-content:center;
@@ -312,7 +364,7 @@ export function showOutlookImportDialog(
 
   dialog.innerHTML = `
     <div style="background:white;border-radius:6px;padding:24px;width:520px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.2);">
-      <h2 style="margin:0 0 16px;font-size:16px;font-family:sans-serif;">Import from Outlook</h2>
+      <h2 id="cp-import-dialog-title" style="margin:0 0 16px;font-size:16px;font-family:sans-serif;">Import from Outlook</h2>
 
       <div id="cp-import-form">
         <label style="display:block;margin-bottom:10px;font-family:sans-serif;font-size:13px;">
@@ -386,10 +438,13 @@ export function showOutlookImportDialog(
 
   document.body.appendChild(dialog);
 
-  const close = () => removeSafe(DIALOG_ID);
-  dialog.addEventListener('click', (e) => { if (e.target === dialog) close(); });
-  document.getElementById('cp-import-cancel')?.addEventListener('click', close);
-  document.getElementById('cp-import-cancel2')?.addEventListener('click', close);
+  const closeRaw = () => removeSafe(DIALOG_ID);
+  const close = withFocusRestore(closeRaw, previouslyFocused);
+  const removeTrap = installFocusTrap(dialog);
+  const closeAndCleanup = () => { removeTrap(); close(); };
+  dialog.addEventListener('click', (e) => { if (e.target === dialog) closeAndCleanup(); });
+  document.getElementById('cp-import-cancel')?.addEventListener('click', closeAndCleanup);
+  document.getElementById('cp-import-cancel2')?.addEventListener('click', closeAndCleanup);
 
   const errorEl = document.getElementById('cp-import-error')!;
   const formEl = document.getElementById('cp-import-form')!;
@@ -399,6 +454,36 @@ export function showOutlookImportDialog(
   function showError(msg: string): void {
     errorEl.textContent = msg;
     errorEl.style.display = 'block';
+  }
+
+  interface JobStatusResponse {
+    state: 'running' | 'done' | 'failed';
+    completed_pages: number;
+    total_pages: number;
+    last_error?: string;
+    result?: ImportResponse;
+  }
+
+  /** Poll for job status every 1.5 s. Resolves with result or rejects on failure. */
+  function pollJobStatus(plannerId: number, jobId: string, onProgress: (completed: number, total: number) => void): Promise<ImportResponse> {
+    return new Promise((resolve, reject) => {
+      const poll = async () => {
+        try {
+          const status = await api.get<JobStatusResponse>(`/api/planners/${plannerId}/import/status/${jobId}`);
+          if (status.state === 'done' && status.result) {
+            resolve(status.result);
+          } else if (status.state === 'failed') {
+            reject(new Error(status.last_error || 'Import failed'));
+          } else {
+            onProgress(status.completed_pages, status.total_pages);
+            setTimeout(poll, 1500);
+          }
+        } catch (err) {
+          reject(err);
+        }
+      };
+      poll();
+    });
   }
 
   // Fetch events from Exchange
@@ -426,8 +511,16 @@ export function showOutlookImportDialog(
     fetchBtn.textContent = 'Fetching...';
 
     try {
-      const result = await api.post<ImportResponse>(`/api/planners/${plannerId}/import/outlook`, {
+      // Start the async job
+      const { jobId } = await api.post<{ jobId: string }>(`/api/planners/${plannerId}/import/outlook`, {
         serverUrl, username, password, authMethod, startDate, endDate, allowSelfSignedCert,
+      });
+
+      // Poll with live progress text
+      const result = await pollJobStatus(plannerId, jobId, (completed, total) => {
+        if (total > 1) {
+          fetchBtn.textContent = `Fetching… (${completed}/${total} months)`;
+        }
       });
 
       fetchedEvents = result.events;
@@ -518,7 +611,7 @@ export function showOutlookImportDialog(
     });
 
     onImport(activities, targetLaneId, newLane);
-    close();
+    closeAndCleanup();
   });
 
   (document.getElementById('cp-import-url') as HTMLInputElement)?.focus();

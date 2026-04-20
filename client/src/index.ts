@@ -4,6 +4,10 @@ import { Planner } from './planner';
 import { PlannerConfig, PlannerData, ShareEntry } from './types';
 import { initTheme, applyTheme, currentTheme } from './theme';
 import { applyBranding } from './branding';
+import { installOfflineBanner, installGlobalErrorHandlers } from './toast';
+
+installOfflineBanner();
+installGlobalErrorHandlers();
 
 interface GroupSummary {
   id: number;
@@ -24,6 +28,7 @@ initTheme();
 interface PlannerResponse {
   config: PlannerConfig;
   data: PlannerData;
+  updated_at?: string;
 }
 
 async function init(): Promise<void> {
@@ -43,7 +48,7 @@ async function init(): Promise<void> {
   const containerEl = document.getElementById('planner-container');
 
   try {
-    const { config, data } = await api.get<PlannerResponse>(`/api/planners/${plannerId}`);
+    const { config, data, updated_at } = await api.get<PlannerResponse>(`/api/planners/${plannerId}`);
 
     document.title = `${config.title} — Circular Planner`;
     const titleHeader = document.getElementById('planner-title-header');
@@ -65,7 +70,34 @@ async function init(): Promise<void> {
     let plannerInstance: Planner | null = null;
     if (containerEl) {
       containerEl.classList.remove('hidden');
-      plannerInstance = new Planner(containerEl, config, data);
+      plannerInstance = new Planner(containerEl, config, data, updated_at);
+    }
+
+    // Empty-lane CTA: show overlay when planner has no lanes
+    if (containerEl && data.lanes.length === 0) {
+      const cta = document.createElement('div');
+      cta.id = 'no-lanes-cta';
+      cta.className = 'no-lanes-cta';
+      cta.innerHTML = `
+        <svg width="52" height="52" viewBox="0 0 52 52" fill="none" aria-hidden="true" style="color:var(--cp-border-strong)">
+          <circle cx="26" cy="26" r="24" stroke="currentColor" stroke-width="2.5" fill="none"/>
+          <line x1="26" y1="14" x2="26" y2="38" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          <line x1="14" y1="26" x2="38" y2="26" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+        <h3>No lanes yet</h3>
+        <p>Add your first lane to start placing activities on the disc.</p>
+        <button id="cta-add-lane-btn" class="btn btn-primary">+ Add lane</button>`;
+      containerEl.style.position = 'relative';
+      containerEl.appendChild(cta);
+
+      document.getElementById('cta-add-lane-btn')?.addEventListener('click', () => {
+        // Reuse the existing "+ Add Lane" button rendered by Planner in the sidebar
+        const addLaneBtn = containerEl.querySelector<HTMLButtonElement>('.cp-btn.cp-btn-primary');
+        if (addLaneBtn) {
+          addLaneBtn.click();
+          cta.remove();
+        }
+      });
     }
 
     if (shareBtn && config.isOwner) {

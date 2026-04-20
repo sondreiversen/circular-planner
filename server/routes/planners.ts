@@ -2,9 +2,11 @@ import { Router, Request, Response } from 'express';
 import { query, pool } from '../db';
 import { requireAuth } from '../middleware/auth';
 import { canAccess, sendError, handleRouteError } from '../middleware/access';
+import { mutationLimiter } from '../middleware/rateLimit';
 
 const router = Router();
 router.use(requireAuth);
+router.use(mutationLimiter);
 
 interface LaneRow { id: string; name: string; sort_order: number; color: string; }
 interface ActivityRow { id: string; lane_id: string; title: string; description: string; start_date: Date; end_date: Date; color: string; label: string; created_by_username: string | null; }
@@ -87,8 +89,8 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
     const level = await canAccess(plannerId, userId, 'view');
 
-    const { rows: [p] } = await query<{ id: number; owner_id: number; title: string; start_date: Date; end_date: Date }>(
-      'SELECT id, owner_id, title, start_date, end_date FROM planners WHERE id=$1', [plannerId]
+    const { rows: [p] } = await query<{ id: number; owner_id: number; title: string; start_date: Date; end_date: Date; updated_at: Date }>(
+      'SELECT id, owner_id, title, start_date, end_date, updated_at FROM planners WHERE id=$1', [plannerId]
     );
     if (!p) { sendError(res, 404, 'Planner not found'); return; }
     const { rows: lanes } = await query<LaneRow>(
@@ -106,6 +108,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
     activities.forEach(a => { laneMap.get(a.lane_id)?.activities.push(a); });
 
     res.json({
+      updated_at: p.updated_at.toISOString(),
       config: {
         plannerId: p.id,
         title: p.title,
@@ -152,10 +155,23 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
     await canAccess(plannerId, userId, 'edit');
 
-    const { title, startDate, endDate, lanes } = req.body;
+    const { title, startDate, endDate, lanes, client_updated_at } = req.body;
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+
+      // Concurrent-edit check: if the client sent client_updated_at, compare with the
+      // current row's updated_at and reject if the row was modified by another session.
+      if (client_updated_at) {
+        const { rows: [current] } = await client.query<{ updated_at: Date }>(
+          'SELECT updated_at FROM planners WHERE id=$1 FOR UPDATE', [plannerId]
+        );
+        if (current && new Date(client_updated_at) < current.updated_at) {
+          await client.query('ROLLBACK');
+          res.status(409).json({ error: 'conflict', server_updated_at: current.updated_at.toISOString() });
+          return;
+        }
+      }
 
       if (title || startDate || endDate) {
         await client.query(
@@ -243,7 +259,11 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
       }
 
       await client.query('COMMIT');
-      res.json({ success: true });
+      // Return the current updated_at so the client can refresh its last-known timestamp
+      const { rows: [updated] } = await client.query<{ updated_at: Date }>(
+        'SELECT updated_at FROM planners WHERE id=$1', [plannerId]
+      );
+      res.json({ success: true, updated_at: updated?.updated_at?.toISOString() ?? null });
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;

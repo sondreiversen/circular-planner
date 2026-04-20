@@ -2,8 +2,11 @@ import { api, logout } from './api-client';
 import { escapeHtml } from './utils';
 import { initTheme, applyTheme, currentTheme } from './theme';
 import { applyBranding } from './branding';
+import { installOfflineBanner, installGlobalErrorHandlers } from './toast';
 
 initTheme();
+installOfflineBanner();
+installGlobalErrorHandlers();
 
 interface GroupSummary {
   id: number;

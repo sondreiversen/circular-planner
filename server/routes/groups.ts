@@ -2,9 +2,11 @@ import { Router, Request, Response } from 'express';
 import { query, pool } from '../db';
 import { requireAuth } from '../middleware/auth';
 import { sendError, handleRouteError } from '../middleware/access';
+import { mutationLimiter } from '../middleware/rateLimit';
 
 const router = Router();
 router.use(requireAuth);
+router.use(mutationLimiter);
 
 // GET /api/groups — list groups the current user is a member of
 router.get('/', async (req: Request, res: Response): Promise<void> => {

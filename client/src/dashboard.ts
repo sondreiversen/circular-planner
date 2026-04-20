@@ -3,6 +3,10 @@ import { escapeHtml, ymdToDmy, dmyToYmd } from './utils';
 import { PlannerSummary } from './types';
 import { initTheme, applyTheme, currentTheme } from './theme';
 import { applyBranding } from './branding';
+import { installOfflineBanner, installGlobalErrorHandlers } from './toast';
+
+installOfflineBanner();
+installGlobalErrorHandlers();
 
 interface GroupSummary {
   id: number;
@@ -97,7 +101,20 @@ async function loadPlanners(): Promise<void> {
     grid.innerHTML = '';
 
     if (planners.length === 0) {
-      grid.innerHTML = '<div class="loading-state">No planners yet. Create your first one!</div>';
+      grid.innerHTML = `
+        <div class="empty-state">
+          <svg class="empty-state-icon" width="56" height="56" viewBox="0 0 56 56" fill="none" aria-hidden="true">
+            <circle cx="28" cy="28" r="26" stroke="currentColor" stroke-width="2.5" fill="none"/>
+            <circle cx="28" cy="28" r="14" stroke="currentColor" stroke-width="2" fill="none" opacity="0.5"/>
+            <circle cx="28" cy="28" r="4" fill="currentColor" opacity="0.4"/>
+          </svg>
+          <h3>No planners yet</h3>
+          <p>Create your first planner to start organising your year.</p>
+          <button id="empty-new-planner-btn" class="btn btn-primary">+ New planner</button>
+        </div>`;
+      document.getElementById('empty-new-planner-btn')?.addEventListener('click', () => {
+        document.getElementById('new-planner-btn')?.click();
+      });
       return;
     }
 

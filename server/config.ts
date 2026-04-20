@@ -11,7 +11,10 @@ export const config = {
   jwtSecret: (() => {
     const s = process.env.JWT_SECRET;
     if (!s || s.length < 32) {
-      console.error('FATAL: JWT_SECRET must be set to a random string of at least 32 characters.');
+      console.error(
+        'FATAL: JWT_SECRET must be set to a random string of at least 32 characters.\n' +
+        '  Remediation: generate one with  openssl rand -hex 32  and set JWT_SECRET in your environment or .env file.'
+      );
       process.exit(1);
     }
     return s;
@@ -30,3 +33,32 @@ export const config = {
     scopes: process.env.GITLAB_SCOPES || 'read_user openid email',
   },
 };
+
+// --- Post-construction validation ---
+
+if (config.nodeEnv === 'production' && !process.env.ALLOWED_ORIGIN) {
+  console.error(
+    'FATAL: ALLOWED_ORIGIN must be set in production to prevent open CORS.\n' +
+    '  Remediation: set ALLOWED_ORIGIN to your application\'s public URL (e.g. https://planner.example.com).'
+  );
+  process.exit(1);
+}
+
+if (config.gitlab.enabled) {
+  const missing = (
+    [
+      ['GITLAB_INSTANCE_URL', config.gitlab.instanceUrl],
+      ['GITLAB_CLIENT_ID', config.gitlab.clientId],
+      ['GITLAB_CLIENT_SECRET', config.gitlab.clientSecret],
+      ['GITLAB_REDIRECT_URI', config.gitlab.redirectUri],
+    ] as [string, string][]
+  ).filter(([, v]) => !v).map(([k]) => k);
+
+  if (missing.length > 0) {
+    console.error(
+      `FATAL: GITLAB_SSO_ENABLED=true but the following required variables are not set: ${missing.join(', ')}.\n` +
+      '  Remediation: set all GitLab OAuth2 variables or disable SSO by unsetting GITLAB_SSO_ENABLED.'
+    );
+    process.exit(1);
+  }
+}

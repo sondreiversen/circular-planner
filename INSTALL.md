@@ -414,6 +414,8 @@ From the planner page, click **Share** in the top toolbar. Enter the recipient's
 
 ## 10. Upgrading
 
+Skim [CHANGELOG.md](CHANGELOG.md) before upgrading to see operator-visible changes that may require action.
+
 ### Docker
 
 ```bash
@@ -536,3 +538,87 @@ Set `HTTPS_PORT=443` in `.env` when exposing port 443 directly, or use a reverse
 - Self-signed certificates: enable **Allow self-signed certificate** in the import dialog
 - Basic auth must be enabled on the Exchange server (it is disabled by default in newer Exchange)
 - The import times out after 45 seconds total — if the Exchange server is slow, try again or increase the timeout in `server/ews/client.ts` (`NTLM_HANDSHAKE_TIMEOUT`)
+
+---
+
+## 13. Backups
+
+### `scripts/backup.sh`
+
+Creates a compressed custom-format `pg_dump`, verifies it with `pg_restore --list`, then prunes old dumps.
+
+```bash
+# One-off backup
+BACKUP_DIR=/var/backups/planner ./scripts/backup.sh
+
+# With explicit credentials (if DATABASE_URL is not set)
+PGHOST=db PGUSER=planner PGDATABASE=circular_planner \
+  BACKUP_DIR=/var/backups/planner ./scripts/backup.sh
+```
+
+**Environment variables**
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | — | Full Postgres connection string (takes precedence over `PG*` vars) |
+| `PGHOST` / `PGPORT` / `PGUSER` / `PGPASSWORD` / `PGDATABASE` | — | Individual Postgres connection settings |
+| `BACKUP_DIR` | `./data/backups` | Directory to write dump files |
+| `BACKUP_RETENTION_DAYS` | `14` | Dumps older than this many days are deleted |
+
+**Cron example** (daily at 02:00, keep 30 days):
+
+```cron
+0 2 * * * BACKUP_DIR=/var/backups/planner BACKUP_RETENTION_DAYS=30 /opt/planner/scripts/backup.sh >> /var/log/planner-backup.log 2>&1
+```
+
+### `scripts/restore.sh`
+
+Restores from a dump. Always takes a pre-restore safety dump first.
+
+```bash
+./scripts/restore.sh --yes /var/backups/planner/planner-20260101-020000.dump
+```
+
+The `--yes` flag is required to confirm the destructive restore. The path to the safety dump is printed on completion so you can roll back if needed.
+
+---
+
+## 14. Preflight check (`npm run doctor`)
+
+`scripts/doctor.ts` runs a series of checks and prints a human-readable summary.
+
+```bash
+npm run doctor
+```
+
+**Sample output**
+
+```
+Circular Planner — preflight check
+
+  ✓ PASS  Node version          Node 20.17.0
+  ✓ PASS  JWT_SECRET            Set (64 chars)
+  ✓ PASS  Postgres reachable    PostgreSQL 16.2
+  ✓ PASS  Migration state       All 6 migration(s) applied
+  ✓ PASS  Postgres connections  12 / 100 connections used (12%)
+  ✓ PASS  Disk (DATA_DIR)       48.3 GB free in /opt/planner/data
+  ✓ PASS  Disk (BACKUP_DIR)     120.5 GB free in /var/backups/planner
+
+  7 check(s): 7 passed, 0 warned, 0 failed
+```
+
+Exit code `0` if all checks pass or warn; `1` if any check fails.
+
+**Checks performed**
+
+| Check | FAIL condition | WARN condition |
+|---|---|---|
+| Node version | < 20 | — |
+| `JWT_SECRET` | Not set or < 32 chars | — |
+| Postgres reachable | Cannot connect | — |
+| Migration state | Skipped (Postgres down) | Pending migrations |
+| Postgres connections | Skipped (Postgres down) | > 80% of `max_connections` used |
+| Disk (`DATA_DIR`) | — | < 1 GB free |
+| Disk (`BACKUP_DIR`) | — | < 1 GB free (only checked if `BACKUP_DIR` is set) |
+
+Run `npm run doctor` as part of your deployment checklist or from a monitoring cron job.

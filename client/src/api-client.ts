@@ -4,15 +4,23 @@
 // Clear any stale token left over from the previous localStorage-based scheme.
 try { localStorage.removeItem('cp_token'); } catch { /* ignore */ }
 
+import { toast } from './toast';
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
-    method,
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    toast.error('Network error — check your connection');
+    throw new Error('Network error');
+  }
 
   if (res.status === 401) {
     window.location.href = '/index.html';
@@ -20,7 +28,14 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
 
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed: ${res.status}`);
+  if (!res.ok) {
+    const serverMsg = (data as { error?: string }).error;
+    const label = serverMsg
+      ? `${method} ${path} failed: ${serverMsg}`
+      : `${method} ${path} failed: ${res.status}`;
+    toast.error(label);
+    throw new Error(serverMsg || `Request failed: ${res.status}`);
+  }
   return data as T;
 }
 

@@ -1,6 +1,10 @@
 import { api } from './api-client';
 import { initTheme, applyTheme, currentTheme } from './theme';
 import { applyBranding } from './branding';
+import { installOfflineBanner, installGlobalErrorHandlers } from './toast';
+
+installOfflineBanner();
+installGlobalErrorHandlers();
 
 interface AuthResponse { token: string; user: { id: number; username: string; email: string } }
 

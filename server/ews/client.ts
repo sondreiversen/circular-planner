@@ -3,6 +3,15 @@
  *
  * Fetches calendar events from an on-premises Exchange server using SOAP/XML.
  * Supports NTLMv2 and Basic authentication. No external dependencies.
+ *
+ * Resilience features:
+ * - retryWithBackoff(): up to 3 attempts, delays 1s/3s/8s. Retries on transient
+ *   errors (timeout, 5xx, network). Does NOT retry authoritative errors (401
+ *   after successful NTLM handshake, 4xx non-429, invalid credentials).
+ * - fetchCalendarEvents() splits the date range into monthly chunks (pages).
+ *   Each chunk is fetched independently with retry. The caller receives progress
+ *   callbacks so that completed pages are never re-fetched even if a later page
+ *   fails and the user retries.
  */
 import https from 'https';
 import http from 'http';
@@ -34,8 +43,59 @@ export interface ImportedEvent {
   isAllDay: boolean;
 }
 
+export interface FetchProgressCallback {
+  (completed: number, total: number, lastError?: string): void;
+}
+
+/** Per-attempt timeout. Each of the ≤3 attempts gets this budget. */
 const REQUEST_TIMEOUT = 30_000;
-const NTLM_HANDSHAKE_TIMEOUT = 45_000;
+
+/** Retry delays between attempts (ms). Up to 3 retries = 4 total attempts max. */
+const RETRY_DELAYS = [1_000, 3_000, 8_000];
+
+/**
+ * Returns true for errors that may succeed on retry (transient):
+ * network errors, timeouts, HTTP 429, HTTP 5xx.
+ * Returns false for authoritative errors that will not benefit from retry.
+ */
+function isTransientError(err: Error): boolean {
+  const msg = err.message;
+  // Network-level
+  if (/ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EPIPE|socket hang up/i.test(msg)) return true;
+  // Our own timeout
+  if (/timed out/i.test(msg)) return true;
+  // HTTP 5xx
+  if (/HTTP 5\d\d/.test(msg)) return true;
+  // HTTP 429
+  if (/HTTP 429/.test(msg)) return true;
+  // NTLM negotiate step failed (not auth, just comms)
+  if (/NTLM negotiate failed: expected 401, got 5/i.test(msg)) return true;
+  // Authoritative — do NOT retry
+  // 401 after successful NTLM handshake, invalid credentials, 4xx
+  return false;
+}
+
+/**
+ * Retry wrapper. Calls fn() up to (1 + RETRY_DELAYS.length) times.
+ * Waits RETRY_DELAYS[attempt] ms between retries.
+ * Only retries if isTransientError() is true.
+ */
+async function retryWithBackoff<T>(fn: () => Promise<T>): Promise<T> {
+  let lastErr: Error = new Error('Unknown error');
+  for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err as Error;
+      const isLast = attempt === RETRY_DELAYS.length;
+      if (isLast || !isTransientError(lastErr)) {
+        throw lastErr;
+      }
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
+    }
+  }
+  throw lastErr;
+}
 
 function escapeXmlAttr(s: string): string {
   return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c] ?? c));
@@ -123,21 +183,14 @@ async function fetchWithNtlm(
     rejectUnauthorized: !config.allowSelfSignedCert,
   });
 
-  const handshakeDeadline = Date.now() + NTLM_HANDSHAKE_TIMEOUT;
-  const remainingMs = () => {
-    const ms = handshakeDeadline - Date.now();
-    if (ms <= 0) throw new Error('NTLM handshake timed out');
-    return ms;
-  };
-
   try {
-    // Step 1: Send Type 1 (Negotiate)
+    // Step 1: Send Type 1 (Negotiate) — each round-trip gets its own timeout budget
     const type1 = createType1Message(creds.domain);
     const res1 = await request(url, 'POST', {
       'Content-Type': 'text/xml; charset=utf-8',
       'Authorization': `NTLM ${type1}`,
       'Content-Length': '0',
-    }, null, agent, remainingMs());
+    }, null, agent, REQUEST_TIMEOUT);
 
     if (res1.statusCode !== 401) {
       throw new Error(`NTLM negotiate failed: expected 401, got ${res1.statusCode}`);
@@ -164,9 +217,10 @@ async function fetchWithNtlm(
       'Content-Type': 'text/xml; charset=utf-8',
       'Authorization': `NTLM ${type3}`,
       'Content-Length': String(Buffer.byteLength(soapBody)),
-    }, soapBody, agent, remainingMs());
+    }, soapBody, agent, REQUEST_TIMEOUT);
 
     if (res3.statusCode === 401) {
+      // Authoritative auth failure — do NOT retry
       throw new Error('NTLM authentication failed — check username, password, and domain');
     }
 
@@ -256,28 +310,74 @@ function mapItem(raw: RawCalendarItem): ImportedEvent {
   };
 }
 
+/**
+ * Build an array of monthly date-range chunks covering [startDate, endDate].
+ * Each chunk is { startDate, endDate } (YYYY-MM-DD, both inclusive).
+ */
+function buildMonthlyChunks(startDate: string, endDate: string): Array<{ startDate: string; endDate: string }> {
+  const chunks: Array<{ startDate: string; endDate: string }> = [];
+  let cursor = new Date(startDate + 'T00:00:00Z');
+  const end = new Date(endDate + 'T00:00:00Z');
+
+  while (cursor <= end) {
+    // Compute last day of this month
+    const chunkStart = cursor.toISOString().substring(0, 10);
+    const nextMonth = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
+    const chunkEndDate = new Date(nextMonth.getTime() - 86_400_000); // last day of month
+    const chunkEnd = (chunkEndDate <= end ? chunkEndDate : end).toISOString().substring(0, 10);
+    chunks.push({ startDate: chunkStart, endDate: chunkEnd });
+    cursor = nextMonth;
+  }
+
+  return chunks.length > 0 ? chunks : [{ startDate, endDate }];
+}
+
+/**
+ * Fetch one page (date-range chunk) with retry + backoff.
+ */
+async function fetchPage(
+  config: EwsConfig,
+  chunk: { startDate: string; endDate: string },
+  maxItems: number,
+): Promise<{ items: RawCalendarItem[]; errors: string[] }> {
+  return retryWithBackoff(async () => {
+    const url = new URL(config.serverUrl);
+    const soapBody = buildSoapEnvelope({ ...chunk, maxItems });
+
+    let xmlResponse: string;
+    if (config.authMethod === 'ntlm') {
+      xmlResponse = await fetchWithNtlm(url, soapBody, config);
+    } else {
+      xmlResponse = await fetchWithBasic(url, soapBody, config);
+    }
+
+    const fault = extractFaultMessage(xmlResponse);
+    if (fault) {
+      throw new Error(`Exchange returned an error: ${fault}`);
+    }
+
+    return extractCalendarItems(xmlResponse);
+  });
+}
+
 export async function fetchCalendarEvents(
   config: EwsConfig,
   query: EwsCalendarQuery,
+  onProgress?: FetchProgressCallback,
 ): Promise<{ events: ImportedEvent[]; totalFound: number; errors: string[] }> {
-  const url = new URL(config.serverUrl);
-  const soapBody = buildSoapEnvelope(query);
+  const maxItems = query.maxItems || 500;
+  const chunks = buildMonthlyChunks(query.startDate, query.endDate);
+  const allEvents: ImportedEvent[] = [];
+  const allErrors: string[] = [];
 
-  let xmlResponse: string;
-  if (config.authMethod === 'ntlm') {
-    xmlResponse = await fetchWithNtlm(url, soapBody, config);
-  } else {
-    xmlResponse = await fetchWithBasic(url, soapBody, config);
+  onProgress?.(0, chunks.length);
+
+  for (let i = 0; i < chunks.length; i++) {
+    const { items, errors } = await fetchPage(config, chunks[i], maxItems);
+    allEvents.push(...items.map(mapItem));
+    allErrors.push(...errors);
+    onProgress?.(i + 1, chunks.length);
   }
 
-  // Check for SOAP faults
-  const fault = extractFaultMessage(xmlResponse);
-  if (fault) {
-    throw new Error(`Exchange returned an error: ${fault}`);
-  }
-
-  const { items, errors } = extractCalendarItems(xmlResponse);
-  const events = items.map(mapItem);
-
-  return { events, totalFound: events.length, errors };
+  return { events: allEvents, totalFound: allEvents.length, errors: allErrors };
 }

@@ -29,7 +29,13 @@ export class Renderer {
 
   private onClickLane: ClickLaneHandler = () => {};
   private onClickActivity: ClickActivityHandler = () => {};
+  private onZoomIn: (() => void) | null = null;
+  private onZoomOut: (() => void) | null = null;
   private readonly arcGen = d3Arc<unknown>();
+
+  // Pinch-to-zoom state
+  private _pinchPointers = new Map<number, { x: number; y: number }>();
+  private _pinchStartDist = 0;
 
   constructor(container: HTMLElement, config: PlannerConfig, data: PlannerData, viewport: Viewport) {
     this.config = config;
@@ -41,7 +47,9 @@ export class Renderer {
       .append('svg')
       .attr('viewBox', `0 0 ${VIEWBOX_SIZE} ${VIEWBOX_SIZE}`)
       .attr('preserveAspectRatio', 'xMidYMid meet')
-      .attr('class', 'circular-planner-svg');
+      .attr('class', 'circular-planner-svg')
+      .attr('role', 'img')
+      .attr('aria-label', 'Circular planner');
 
     this.renderDefs(); // static — created once
     this.rebuildGeometry();
@@ -51,6 +59,61 @@ export class Renderer {
   setHandlers(onClickLane: ClickLaneHandler, onClickActivity: ClickActivityHandler): void {
     this.onClickLane = onClickLane;
     this.onClickActivity = onClickActivity;
+  }
+
+  /**
+   * Wire up pinch-to-zoom using Pointer Events.
+   * Call this once after construction, passing the same zoom handlers used by the wheel listener.
+   * Single-finger pan is not intercepted — touch-action CSS keeps native scroll alive.
+   */
+  setPinchZoomHandlers(onZoomIn: () => void, onZoomOut: () => void): void {
+    this.onZoomIn = onZoomIn;
+    this.onZoomOut = onZoomOut;
+
+    const svgEl = this.svg.node() as SVGSVGElement;
+
+    svgEl.addEventListener('pointerdown', (e: PointerEvent) => {
+      this._pinchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this._pinchPointers.size === 2) {
+        // Capture both pointers so we receive move/up even outside the element
+        svgEl.setPointerCapture(e.pointerId);
+        this._pinchStartDist = this._getPinchDist();
+      }
+    });
+
+    svgEl.addEventListener('pointermove', (e: PointerEvent) => {
+      if (!this._pinchPointers.has(e.pointerId)) return;
+      this._pinchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (this._pinchPointers.size === 2 && this._pinchStartDist > 0) {
+        const currentDist = this._getPinchDist();
+        const ratio = currentDist / this._pinchStartDist;
+
+        // Threshold: require a 25% change before firing zoom to avoid jitter
+        if (ratio > 1.25) {
+          this._pinchStartDist = currentDist;
+          if (this.onZoomIn) this.onZoomIn();
+        } else if (ratio < 0.75) {
+          this._pinchStartDist = currentDist;
+          if (this.onZoomOut) this.onZoomOut();
+        }
+      }
+    });
+
+    const endHandler = (e: PointerEvent) => {
+      this._pinchPointers.delete(e.pointerId);
+      this._pinchStartDist = 0;
+    };
+    svgEl.addEventListener('pointerup', endHandler);
+    svgEl.addEventListener('pointercancel', endHandler);
+  }
+
+  private _getPinchDist(): number {
+    const pts = [...this._pinchPointers.values()];
+    if (pts.length < 2) return 0;
+    const dx = pts[0].x - pts[1].x;
+    const dy = pts[0].y - pts[1].y;
+    return Math.sqrt(dx * dx + dy * dy);
   }
 
   setBorderOptions(showBorder: boolean): void {
@@ -179,6 +242,12 @@ export class Renderer {
   }
 
   private render(): void {
+    const visibleLanes = this.data.lanes.filter(l => !this.filterState.hiddenLaneIds.has(l.id));
+    const activityCount = visibleLanes.reduce((sum, l) => sum + l.activities.length, 0);
+    this.svg.attr('aria-label',
+      `Circular planner showing ${visibleLanes.length} lane${visibleLanes.length !== 1 ? 's' : ''} and ${activityCount} activit${activityCount !== 1 ? 'ies' : 'y'}`
+    );
+
     const g = this.svg
       .append('g')
       .attr('class', 'cp-main')

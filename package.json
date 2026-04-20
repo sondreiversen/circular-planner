@@ -11,6 +11,9 @@
     "start:go": "go run .",
     "build:go": "npm run build:client && go build -o planner .",
     "migrate": "ts-node server/migrations/migrate.ts",
+    "doctor": "ts-node scripts/doctor.ts",
+    "migrate:status": "ts-node --project tsconfig.server.json server/migrations/cli.ts status",
+    "migrate:dry-run": "ts-node --project tsconfig.server.json server/migrations/cli.ts dry-run",
     "create-admin": "node dist/server/scripts/create-admin.js",
     "test": "jest"
   },

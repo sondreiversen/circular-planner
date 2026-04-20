@@ -22,7 +22,9 @@
   </header>
 
   <main class="planner-main">
-    <div id="planner-loading" class="loading-state">Loading planner…</div>
+    <div id="planner-loading" class="skeleton-disc-wrap" aria-label="Loading planner…" role="status">
+      <div class="skeleton-disc"></div>
+    </div>
     <div id="planner-error" class="error-state hidden"></div>
     <div id="planner-container" class="hidden"></div>
   </main>

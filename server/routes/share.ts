@@ -2,9 +2,11 @@ import { Router, Request, Response } from 'express';
 import { query } from '../db';
 import { requireAuth } from '../middleware/auth';
 import { canAccess, sendError, handleRouteError } from '../middleware/access';
+import { mutationLimiter } from '../middleware/rateLimit';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
+router.use(mutationLimiter);
 
 // GET /api/planners/:plannerId/shares
 router.get('/', async (req: Request, res: Response): Promise<void> => {
