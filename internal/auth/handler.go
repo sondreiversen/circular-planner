@@ -54,6 +54,32 @@ func (h *Handler) makeToken(id int, username, email string) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString([]byte(h.cfg.JWTSecret))
 }
 
+// setSessionCookie writes the cp_token HttpOnly session cookie (7-day TTL).
+func (h *Handler) setSessionCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "cp_token",
+		Value:    token,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   h.cfg.TLSCertFile != "",
+		Path:     "/",
+		MaxAge:   7 * 24 * 60 * 60,
+	})
+}
+
+// clearSessionCookie removes the cp_token cookie.
+func (h *Handler) clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "cp_token",
+		Value:    "",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   h.cfg.TLSCertFile != "",
+		Path:     "/",
+		MaxAge:   -1,
+	})
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -119,6 +145,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "Token generation failed")
 		return
 	}
+	h.setSessionCookie(w, token)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token": token,
 		"user":  map[string]any{"id": id, "username": username, "email": email},
@@ -159,10 +186,18 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "Login failed")
 		return
 	}
+	h.setSessionCookie(w, token)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token": token,
 		"user":  map[string]any{"id": id, "username": username, "email": email},
 	})
+}
+
+// --- POST /api/auth/logout ---
+
+func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
+	h.clearSessionCookie(w)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // --- GET /api/auth/me ---
@@ -271,17 +306,8 @@ func (h *Handler) GitLabCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return a tiny page that stores the token and redirects
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store, no-cache")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html><head><title>Signing in…</title></head><body>
-<script>
-try { localStorage.setItem('cp_token', %s); } catch(e) {}
-location.replace('/dashboard.html');
-</script>
-<noscript>JavaScript is required to complete sign-in.</noscript>
-</body></html>`, jsonQuote(jwtToken))
+	h.setSessionCookie(w, jwtToken)
+	http.Redirect(w, r, "/dashboard.html", http.StatusFound)
 }
 
 // upsertGitLabUser finds or creates a user record for a GitLab OAuth login.
@@ -407,7 +433,3 @@ func isDuplicateError(err error) bool {
 		strings.Contains(s, "23505") // Postgres error code
 }
 
-func jsonQuote(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b)
-}

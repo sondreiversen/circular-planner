@@ -32,12 +32,15 @@ type plannerClaims struct {
 // On success it attaches the user to the request context via UserFrom.
 func RequireAuth(cfg *config.Config, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		header := r.Header.Get("Authorization")
-		if !strings.HasPrefix(header, "Bearer ") {
+		var tokenStr string
+		if header := r.Header.Get("Authorization"); strings.HasPrefix(header, "Bearer ") {
+			tokenStr = strings.TrimPrefix(header, "Bearer ")
+		} else if c, err := r.Cookie("cp_token"); err == nil {
+			tokenStr = c.Value
+		} else {
 			jsonError(w, http.StatusUnauthorized, "Authentication required")
 			return
 		}
-		tokenStr := strings.TrimPrefix(header, "Bearer ")
 
 		var claims plannerClaims
 		_, err := jwt.ParseWithClaims(tokenStr, &claims, func(t *jwt.Token) (any, error) {

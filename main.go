@@ -179,6 +179,7 @@ func main() {
 	authH := auth.NewHandler(database, cfg)
 	mux.HandleFunc("POST /api/auth/register", authH.Register)
 	mux.HandleFunc("POST /api/auth/login", authH.Login)
+	mux.HandleFunc("POST /api/auth/logout", authH.Logout)
 	mux.HandleFunc("GET /api/auth/me", middleware.RequireAuth(cfg, authH.Me))
 	mux.HandleFunc("GET /api/auth/gitlab/status", authH.GitLabStatus)
 	mux.HandleFunc("GET /api/auth/gitlab/authorize", authH.GitLabAuthorize)
