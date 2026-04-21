@@ -8,7 +8,122 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"time"
 )
+
+// AppliedMigration describes a migration that has already been applied.
+type AppliedMigration struct {
+	Filename  string
+	AppliedAt time.Time
+}
+
+// PendingMigration describes a migration that has not yet been applied.
+type PendingMigration struct {
+	Filename string
+	Bytes    int64
+}
+
+// ListApplied returns all migrations recorded in schema_migrations, sorted by filename.
+// It is read-only and safe to call at any time (including before any migrations have run).
+func ListApplied(database *DB) ([]AppliedMigration, error) {
+	ctx := context.Background()
+
+	// The table may not exist on a fresh DB; return empty list in that case.
+	rows, err := database.QueryContext(ctx,
+		"SELECT filename, applied_at FROM schema_migrations ORDER BY filename",
+	)
+	if err != nil {
+		// Table likely doesn't exist yet — treat as empty.
+		return []AppliedMigration{}, nil
+	}
+	defer rows.Close()
+
+	var out []AppliedMigration
+	for rows.Next() {
+		var m AppliedMigration
+		var appliedRaw string
+		if err := rows.Scan(&m.Filename, &appliedRaw); err != nil {
+			return nil, fmt.Errorf("scan applied migration: %w", err)
+		}
+		// Parse the timestamp — SQLite stores as TEXT, Postgres as TIMESTAMPTZ.
+		for _, layout := range []string{
+			time.RFC3339,
+			"2006-01-02T15:04:05Z",
+			"2006-01-02 15:04:05",
+			"2006-01-02 15:04:05Z",
+			"2006-01-02 15:04:05+00",
+		} {
+			if t, err := time.Parse(layout, appliedRaw); err == nil {
+				m.AppliedAt = t
+				break
+			}
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// ListPending returns SQL files from the embedded migrations/ directory that have
+// not yet been recorded in schema_migrations. It is read-only — no SQL is executed.
+func ListPending(database *DB) ([]PendingMigration, error) {
+	applied, err := ListApplied(database)
+	if err != nil {
+		return nil, err
+	}
+	appliedSet := make(map[string]bool, len(applied))
+	for _, m := range applied {
+		appliedSet[m.Filename] = true
+	}
+
+	entries, err := fs.ReadDir(migrationsFS, "migrations")
+	if err != nil {
+		return nil, fmt.Errorf("read migrations dir: %w", err)
+	}
+	var files []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			files = append(files, e.Name())
+		}
+	}
+	sort.Strings(files)
+
+	var out []PendingMigration
+	for _, name := range files {
+		if appliedSet[name] {
+			continue
+		}
+		data, err := migrationsFS.ReadFile("migrations/" + name)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", name, err)
+		}
+		out = append(out, PendingMigration{Filename: name, Bytes: int64(len(data))})
+	}
+	return out, nil
+}
+
+// FirstStatement returns the first meaningful SQL statement from a SQL string,
+// truncated to 80 characters. Useful for dry-run display.
+func FirstStatement(sql string) string {
+	lines := strings.Split(sql, "\n")
+	var meaningful []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+		meaningful = append(meaningful, trimmed)
+		joined := strings.Join(meaningful, " ")
+		if strings.Contains(joined, ";") || len(meaningful) >= 5 {
+			break
+		}
+	}
+	stmt := strings.Join(meaningful, " ")
+	stmt = strings.Join(strings.Fields(stmt), " ")
+	if len(stmt) > 80 {
+		return stmt[:77] + "..."
+	}
+	return stmt
+}
 
 //go:embed migrations
 var migrationsFS embed.FS

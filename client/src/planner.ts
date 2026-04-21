@@ -1,6 +1,9 @@
 import { PlannerConfig, PlannerData, Lane, Activity, Viewport, FilterState } from './types';
+import { toast } from './toast';
 import { Renderer } from './renderer';
 import { ListRenderer } from './list-renderer';
+import { History } from './history';
+import { openHelpOverlay } from './help-overlay';
 
 type ViewMode = 'disc' | 'list';
 
@@ -38,6 +41,8 @@ export class Planner {
   private sidebarCollapsed = false;
   private showBorder = true;
   private searchDebounce: ReturnType<typeof setTimeout> | null = null;
+  private history: History = new History();
+  private _globalKeyHandler: ((e: KeyboardEvent) => void) | null = null;
   private viewDiscBtn!: HTMLButtonElement;
   private viewListBtn!: HTMLButtonElement;
 
@@ -46,14 +51,31 @@ export class Planner {
   private yearSelEl!: HTMLSelectElement;
   private zoomOutBtnEl!: HTMLButtonElement;
   private zoomInBtnEl!: HTMLButtonElement;
+  private saveBadgeEl!: HTMLSpanElement;
+  private saveFadeTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(container: HTMLElement, config: PlannerConfig, initialData: PlannerData) {
+  constructor(container: HTMLElement, config: PlannerConfig, initialData: PlannerData, updatedAt?: string) {
     this.container = container;
     this.config = config;
     this.data = initialData;
     this.viewport = defaultViewport(this.config);
     this.filterState = { hiddenLaneIds: new Set(), searchTerm: '', activeLabels: new Set() };
     this.dataManager = new DataManager(this.config);
+    if (updatedAt) this.dataManager.setUpdatedAt(updatedAt);
+
+    this.dataManager.on('saving', () => this.setSaveBadge('saving'));
+    this.dataManager.on('saved', () => this.setSaveBadge('saved'));
+    this.dataManager.on('error', () => this.setSaveBadge('error'));
+    this.dataManager.on('conflict', () => {
+      this.setSaveBadge('error');
+      toast.error('Planner was modified elsewhere — reload?', { duration: 0 });
+      // Make the toast clickable to reload
+      const toastEl = document.querySelector('.cp-toast-error') as HTMLElement | null;
+      if (toastEl) {
+        toastEl.style.cursor = 'pointer';
+        toastEl.addEventListener('click', () => location.reload(), { once: true });
+      }
+    });
 
     // Restore sidebar collapsed state
     this.sidebarCollapsed = localStorage.getItem('cp_sidebar_collapsed') === 'true';
@@ -129,6 +151,10 @@ export class Planner {
       (laneId, date) => this.handleClickLane(laneId, date),
       (activity) => this.handleClickActivity(activity)
     );
+    this.renderer.setPinchZoomHandlers(
+      () => this.handleZoomIn(),
+      () => this.handleZoomOut()
+    );
     this.renderer.setBorderOptions(this.showBorder);
     this.renderer.update(this.data, this.filterState);
 
@@ -150,6 +176,72 @@ export class Planner {
     listContainer.addEventListener('keydown', keyHandler);
 
     this.applyViewMode();
+    this.installGlobalKeyHandler();
+  }
+
+  /** Returns true when focus is inside an editable element (input/textarea/contenteditable). */
+  private static isEditingText(): boolean {
+    const el = document.activeElement as HTMLElement | null;
+    if (!el) return false;
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+    if (el.isContentEditable) return true;
+    return false;
+  }
+
+  private installGlobalKeyHandler(): void {
+    const handler = (e: KeyboardEvent) => {
+      const isMac = navigator.platform.toUpperCase().includes('MAC');
+      const ctrl = isMac ? e.metaKey : e.ctrlKey;
+
+      // Ctrl/Cmd+Z — undo (always intercepted, even in inputs)
+      if (ctrl && !e.shiftKey && e.key === 'z') {
+        e.preventDefault();
+        const cmd = this.history.undo();
+        if (cmd) { toast.info(`Undone: ${cmd.label}`); this.save(); }
+        return;
+      }
+      // Ctrl/Cmd+Shift+Z or Ctrl+Y — redo
+      if ((ctrl && e.shiftKey && e.key === 'z') || (e.ctrlKey && !e.shiftKey && e.key === 'y')) {
+        e.preventDefault();
+        const cmd = this.history.redo();
+        if (cmd) { toast.info(`Redone: ${cmd.label}`); this.save(); }
+        return;
+      }
+      // Ctrl/Cmd+S — force save
+      if (ctrl && e.key === 's') {
+        e.preventDefault();
+        this.dataManager.save(this.data);
+        return;
+      }
+
+      // Guard: don't fire shortcut keys when typing in inputs
+      if (Planner.isEditingText()) return;
+
+      // Ctrl+N — new activity (open dialog for the first visible lane)
+      if (e.ctrlKey && !e.metaKey && e.key === 'n') {
+        e.preventDefault();
+        if (this.config.permission !== 'view') {
+          const firstLane = this.data.lanes[0];
+          if (firstLane) {
+            this.handleClickLane(firstLane.id, new Date());
+          } else {
+            this.handleAddLane();
+          }
+        }
+        return;
+      }
+
+      // ? — help overlay
+      if (e.key === '?') {
+        e.preventDefault();
+        openHelpOverlay();
+        return;
+      }
+    };
+
+    this._globalKeyHandler = handler;
+    document.addEventListener('keydown', handler);
   }
 
   private applyViewMode(): void {
@@ -318,11 +410,11 @@ export class Planner {
     body.appendChild(lanesSection);
 
     // Section: Labels (if any exist)
-    const allLabels = [...new Set(
-      this.data.lanes.flatMap(l => l.activities.map(a => a.label)).filter(Boolean)
-    )].sort();
+    const allActivities = this.data.lanes.flatMap(l => l.activities);
+    const allLabels = [...new Set(allActivities.map(a => a.label).filter(Boolean))].sort();
+    const hasUntagged = allActivities.some(a => !a.label);
 
-    if (allLabels.length > 0) {
+    if (allLabels.length > 0 || hasUntagged) {
       const labelsSection = document.createElement('div');
       labelsSection.className = 'cp-sidebar-section';
 
@@ -331,7 +423,7 @@ export class Planner {
       labelsHeading.textContent = 'Labels';
       labelsSection.appendChild(labelsHeading);
 
-      allLabels.forEach(lbl => {
+      const makeChip = (lbl: string, displayText: string) => {
         const row = document.createElement('label');
         row.className = 'cp-lane-toggle';
         row.style.cssText = 'cursor:pointer;gap:6px;';
@@ -343,13 +435,16 @@ export class Planner {
         cb.addEventListener('change', () => this.handleToggleLabel(lbl));
 
         const nameSpan = document.createElement('span');
-        nameSpan.textContent = lbl;
+        nameSpan.textContent = displayText;
         nameSpan.style.cssText = `flex:1;font-size:12px;opacity:${this.filterState.activeLabels.size > 0 && !this.filterState.activeLabels.has(lbl) ? '0.4' : '1'};`;
 
         row.appendChild(cb);
         row.appendChild(nameSpan);
         labelsSection.appendChild(row);
-      });
+      };
+
+      allLabels.forEach(lbl => makeChip(lbl, lbl));
+      if (hasUntagged) makeChip('', 'Untagged');
 
       body.appendChild(labelsSection);
     }
@@ -476,6 +571,9 @@ export class Planner {
   }
 
   private handleReorderLane(sourceId: string, targetIndex: number): void {
+    // Snapshot orders before the move
+    const before = this.data.lanes.map(l => ({ id: l.id, order: l.order }));
+
     // Sidebar shows outermost (highest order) at top
     const sidebarOrder = [...this.data.lanes].sort((a, b) => b.order - a.order);
     const srcIndex = sidebarOrder.findIndex(l => l.id === sourceId);
@@ -492,6 +590,19 @@ export class Planner {
     // Reassign orders: sidebar index 0 = outermost = highest order
     const N = sidebarOrder.length;
     sidebarOrder.forEach((lane, i) => { lane.order = N - 1 - i; });
+
+    const after = this.data.lanes.map(l => ({ id: l.id, order: l.order }));
+    this.history.push({
+      label: 'Reorder lane',
+      do: () => {
+        after.forEach(({ id, order }) => { const l = this.data.lanes.find(x => x.id === id); if (l) l.order = order; });
+        this.refresh();
+      },
+      undo: () => {
+        before.forEach(({ id, order }) => { const l = this.data.lanes.find(x => x.id === id); if (l) l.order = order; });
+        this.refresh();
+      },
+    });
 
     this.save();
     this.refresh();
@@ -514,6 +625,7 @@ export class Planner {
 
     // Title
     const title = document.createElement('span');
+    title.className = 'cp-toolbar-title';
     title.style.cssText = 'font-weight:600;font-size:14px;color:#1a2332;margin-right:4px;';
     title.textContent = this.config.title;
     this.toolbar.appendChild(title);
@@ -575,6 +687,13 @@ export class Planner {
     spacer.style.cssText = 'flex:1;';
     this.toolbar.appendChild(spacer);
 
+    // Save-state badge
+    const saveBadge = document.createElement('span');
+    saveBadge.id = 'cp-save-badge';
+    saveBadge.className = 'cp-save-badge cp-save-badge--idle';
+    this.toolbar.appendChild(saveBadge);
+    this.saveBadgeEl = saveBadge;
+
     // Navigation + zoom controls
     const zoomControls = document.createElement('div');
     zoomControls.className = 'cp-zoom-controls';
@@ -623,7 +742,7 @@ export class Planner {
   }
 
   private refresh(): void {
-    this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState);
+    this.renderer.update(this.data, this.filterState);
     this.listRenderer?.update(this.data, this.filterState);
     // Rebuild sidebar to reflect lane changes
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
@@ -739,24 +858,93 @@ export class Planner {
 
   private addActivity(activity: Activity): void {
     const lane = this.data.lanes.find(l => l.id === activity.laneId);
-    if (lane) { lane.activities.push(activity); this.save(); this.refresh(); }
+    if (!lane) return;
+    lane.activities.push(activity);
+    this.history.push({
+      label: `Add activity "${activity.title}"`,
+      do: () => {
+        const l = this.data.lanes.find(x => x.id === activity.laneId);
+        if (l && !l.activities.find(a => a.id === activity.id)) l.activities.push(JSON.parse(JSON.stringify(activity)));
+        this.refresh();
+      },
+      undo: () => {
+        for (const l of this.data.lanes) {
+          const i = l.activities.findIndex(a => a.id === activity.id);
+          if (i !== -1) { l.activities.splice(i, 1); break; }
+        }
+        this.refresh();
+      },
+    });
+    this.save();
+    this.refresh();
   }
 
   private updateActivity(updated: Activity): void {
+    // Find and capture the previous version before mutating
+    let prevActivity: Activity | null = null;
+    let prevLaneId: string | null = null;
     for (const lane of this.data.lanes) {
       const idx = lane.activities.findIndex(a => a.id === updated.id);
-      if (idx !== -1) { lane.activities.splice(idx, 1); break; }
+      if (idx !== -1) {
+        prevActivity = JSON.parse(JSON.stringify(lane.activities[idx]));
+        prevLaneId = lane.id;
+        lane.activities.splice(idx, 1);
+        break;
+      }
     }
     const targetLane = this.data.lanes.find(l => l.id === updated.laneId);
     if (targetLane) targetLane.activities.push(updated);
+    const snapshot = JSON.parse(JSON.stringify(updated));
+    if (prevActivity && prevLaneId) {
+      const prev = prevActivity;
+      const prevLane = prevLaneId;
+      this.history.push({
+        label: `Edit activity "${updated.title}"`,
+        do: () => {
+          for (const l of this.data.lanes) { const i = l.activities.findIndex(a => a.id === snapshot.id); if (i !== -1) { l.activities.splice(i, 1); break; } }
+          const tl = this.data.lanes.find(l => l.id === snapshot.laneId);
+          if (tl) tl.activities.push(JSON.parse(JSON.stringify(snapshot)));
+          this.refresh();
+        },
+        undo: () => {
+          for (const l of this.data.lanes) { const i = l.activities.findIndex(a => a.id === prev.id); if (i !== -1) { l.activities.splice(i, 1); break; } }
+          const ol = this.data.lanes.find(l => l.id === prevLane);
+          if (ol) ol.activities.push(JSON.parse(JSON.stringify(prev)));
+          this.refresh();
+        },
+      });
+    }
     this.save();
     this.refresh();
   }
 
   private deleteActivity(activityId: string): void {
+    let deletedActivity: Activity | null = null;
+    let deletedLaneId: string | null = null;
     for (const lane of this.data.lanes) {
       const idx = lane.activities.findIndex(a => a.id === activityId);
-      if (idx !== -1) { lane.activities.splice(idx, 1); break; }
+      if (idx !== -1) {
+        deletedActivity = JSON.parse(JSON.stringify(lane.activities[idx]));
+        deletedLaneId = lane.id;
+        lane.activities.splice(idx, 1);
+        break;
+      }
+    }
+    if (deletedActivity && deletedLaneId) {
+      const act = deletedActivity;
+      const laneId = deletedLaneId;
+      this.history.push({
+        label: `Delete activity "${act.title}"`,
+        do: () => {
+          for (const l of this.data.lanes) { const i = l.activities.findIndex(a => a.id === act.id); if (i !== -1) { l.activities.splice(i, 1); break; } }
+          this.refresh();
+        },
+        undo: () => {
+          const l = this.data.lanes.find(x => x.id === laneId);
+          if (l) l.activities.push(JSON.parse(JSON.stringify(act)));
+          this.refresh();
+        },
+      });
     }
     this.save();
     this.refresh();
@@ -765,6 +953,18 @@ export class Planner {
   private addLane(lane: Lane): void {
     if (!lane.color) lane.color = laneColor(lane.order);
     this.data.lanes.push(lane);
+    const snapshot: Lane = JSON.parse(JSON.stringify(lane));
+    this.history.push({
+      label: `Add lane "${lane.name}"`,
+      do: () => {
+        if (!this.data.lanes.find(l => l.id === snapshot.id)) this.data.lanes.push(JSON.parse(JSON.stringify(snapshot)));
+        this.refresh();
+      },
+      undo: () => {
+        this.data.lanes = this.data.lanes.filter(l => l.id !== snapshot.id);
+        this.refresh();
+      },
+    });
     this.save();
     this.refresh();
   }
@@ -772,18 +972,70 @@ export class Planner {
   private updateLane(updated: Lane): void {
     const idx = this.data.lanes.findIndex(l => l.id === updated.id);
     if (idx !== -1) {
+      const prev: Lane = JSON.parse(JSON.stringify(this.data.lanes[idx]));
       updated.activities = this.data.lanes[idx].activities;
       this.data.lanes[idx] = updated;
+      const snap: Lane = JSON.parse(JSON.stringify(updated));
+      this.history.push({
+        label: `Edit lane "${updated.name}"`,
+        do: () => {
+          const i = this.data.lanes.findIndex(l => l.id === snap.id);
+          if (i !== -1) { const acts = this.data.lanes[i].activities; this.data.lanes[i] = JSON.parse(JSON.stringify(snap)); this.data.lanes[i].activities = acts; }
+          this.refresh();
+        },
+        undo: () => {
+          const i = this.data.lanes.findIndex(l => l.id === prev.id);
+          if (i !== -1) { const acts = this.data.lanes[i].activities; this.data.lanes[i] = JSON.parse(JSON.stringify(prev)); this.data.lanes[i].activities = acts; }
+          this.refresh();
+        },
+      });
       this.save();
       this.refresh();
     }
   }
 
   private deleteLane(laneId: string): void {
+    const laneSnap = this.data.lanes.find(l => l.id === laneId);
+    if (!laneSnap) return;
+    const snapshot: Lane = JSON.parse(JSON.stringify(laneSnap));
     this.data.lanes = this.data.lanes.filter(l => l.id !== laneId);
     this.data.lanes.sort((a, b) => a.order - b.order).forEach((l, i) => l.order = i);
+    const ordersAfter = this.data.lanes.map(l => ({ id: l.id, order: l.order }));
+    this.history.push({
+      label: `Delete lane "${snapshot.name}"`,
+      do: () => {
+        this.data.lanes = this.data.lanes.filter(l => l.id !== snapshot.id);
+        ordersAfter.forEach(({ id, order }) => { const l = this.data.lanes.find(x => x.id === id); if (l) l.order = order; });
+        this.refresh();
+      },
+      undo: () => {
+        if (!this.data.lanes.find(l => l.id === snapshot.id)) this.data.lanes.push(JSON.parse(JSON.stringify(snapshot)));
+        this.data.lanes.sort((a, b) => a.order - b.order).forEach((l, i) => l.order = i);
+        this.refresh();
+      },
+    });
     this.save();
     this.refresh();
+  }
+
+  private setSaveBadge(state: 'saving' | 'saved' | 'error'): void {
+    if (!this.saveBadgeEl) return;
+    if (this.saveFadeTimer) { clearTimeout(this.saveFadeTimer); this.saveFadeTimer = null; }
+
+    this.saveBadgeEl.className = 'cp-save-badge cp-save-badge--' + state;
+
+    if (state === 'saving') {
+      this.saveBadgeEl.textContent = 'Saving\u2026';
+    } else if (state === 'saved') {
+      this.saveBadgeEl.textContent = 'Saved \u2713';
+      this.saveFadeTimer = setTimeout(() => {
+        if (this.saveBadgeEl) this.saveBadgeEl.className = 'cp-save-badge cp-save-badge--idle';
+        this.saveFadeTimer = null;
+      }, 2000);
+    } else {
+      this.saveBadgeEl.textContent = 'Save failed \u2014 retry';
+      this.saveBadgeEl.onclick = () => this.dataManager.save(this.data);
+    }
   }
 
   /** Called when the global theme changes — re-renders the SVG with new CSS var values. */

@@ -1,7 +1,20 @@
-import { api, isLoggedIn, parseJWT, logout } from './api-client';
+import { api, logout } from './api-client';
 import { escapeHtml, ymdToDmy, dmyToYmd } from './utils';
 import { PlannerSummary } from './types';
 import { initTheme, applyTheme, currentTheme } from './theme';
+import { applyBranding } from './branding';
+import { installOfflineBanner, installGlobalErrorHandlers } from './toast';
+
+installOfflineBanner();
+installGlobalErrorHandlers();
+
+interface GroupSummary {
+  id: number;
+  name: string;
+  description: string | null;
+  role: 'admin' | 'member';
+  member_count: number;
+}
 
 initTheme();
 
@@ -9,13 +22,17 @@ const today = new Date();
 const thisYear = today.getFullYear();
 
 document.addEventListener('DOMContentLoaded', async () => {
-  if (!isLoggedIn()) { window.location.href = '/index.html'; return; }
-
-  const token = localStorage.getItem('cp_token');
-  if (token) {
-    const payload = parseJWT(token);
+  applyBranding();
+  // Verify session via cookie; populate username from /api/auth/me.
+  try {
+    const meRes = await fetch('/api/auth/me', { credentials: 'include' });
+    if (!meRes.ok) { window.location.href = '/index.html'; return; }
+    const me = await meRes.json() as { user?: { username?: string } };
     const el = document.getElementById('header-username');
-    if (el && payload.username) el.textContent = payload.username as string;
+    if (el && me.user?.username) el.textContent = me.user.username;
+  } catch {
+    window.location.href = '/index.html';
+    return;
   }
 
   document.getElementById('logout-btn')?.addEventListener('click', logout);
@@ -69,6 +86,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   await loadPlanners();
+  await loadGroups();
 });
 
 function closeDialog(): void {
@@ -83,7 +101,20 @@ async function loadPlanners(): Promise<void> {
     grid.innerHTML = '';
 
     if (planners.length === 0) {
-      grid.innerHTML = '<div class="loading-state">No planners yet. Create your first one!</div>';
+      grid.innerHTML = `
+        <div class="empty-state">
+          <svg class="empty-state-icon" width="56" height="56" viewBox="0 0 56 56" fill="none" aria-hidden="true">
+            <circle cx="28" cy="28" r="26" stroke="currentColor" stroke-width="2.5" fill="none"/>
+            <circle cx="28" cy="28" r="14" stroke="currentColor" stroke-width="2" fill="none" opacity="0.5"/>
+            <circle cx="28" cy="28" r="4" fill="currentColor" opacity="0.4"/>
+          </svg>
+          <h3>No planners yet</h3>
+          <p>Create your first planner to start organising your year.</p>
+          <button id="empty-new-planner-btn" class="btn btn-primary">+ New planner</button>
+        </div>`;
+      document.getElementById('empty-new-planner-btn')?.addEventListener('click', () => {
+        document.getElementById('new-planner-btn')?.click();
+      });
       return;
     }
 
@@ -94,9 +125,9 @@ async function loadPlanners(): Promise<void> {
       const badgeText = p.isOwner ? 'Owner' : p.permission;
       card.innerHTML = `
         <div class="planner-card-title">${escapeHtml(p.title)}</div>
-        <div class="planner-card-dates">${p.startDate} → ${p.endDate}</div>
+        <div class="planner-card-dates">${escapeHtml(p.startDate)} → ${escapeHtml(p.endDate)}</div>
         <div class="planner-card-meta">
-          <span class="badge ${badge}">${badgeText}</span>
+          <span class="badge ${badge}">${escapeHtml(badgeText)}</span>
           ${!p.isOwner ? `<span style="font-size:11px;color:#8896a5;">by ${escapeHtml(p.ownerName)}</span>` : ''}
         </div>
       `;
@@ -104,7 +135,37 @@ async function loadPlanners(): Promise<void> {
       grid.appendChild(card);
     });
   } catch (err: unknown) {
-    if (grid) grid.innerHTML = `<div class="error-state">Failed to load planners: ${(err as Error).message}</div>`;
+    if (grid) grid.innerHTML = `<div class="error-state">Failed to load planners: ${escapeHtml((err as Error).message)}</div>`;
+  }
+}
+
+async function loadGroups(): Promise<void> {
+  const grid = document.getElementById('groups-grid');
+  if (!grid) return;
+  try {
+    const groups = await api.get<GroupSummary[]>('/api/groups');
+    grid.innerHTML = '';
+    if (groups.length === 0) {
+      grid.innerHTML = '<div class="loading-state">No groups yet. <a href="/groups.html">Create one!</a></div>';
+      return;
+    }
+    groups.forEach(g => {
+      const card = document.createElement('div');
+      card.className = 'planner-card';
+      const roleBadge = g.role === 'admin' ? 'badge-owner' : 'badge-view';
+      card.innerHTML = `
+        <div class="planner-card-title">${escapeHtml(g.name)}</div>
+        ${g.description ? `<div class="planner-card-dates">${escapeHtml(g.description)}</div>` : ''}
+        <div class="planner-card-meta">
+          <span class="badge ${roleBadge}">${escapeHtml(g.role)}</span>
+          <span style="font-size:11px;color:#8896a5;">${g.member_count} member${g.member_count !== 1 ? 's' : ''}</span>
+        </div>
+      `;
+      card.addEventListener('click', () => { window.location.href = `/groups.html?id=${g.id}`; });
+      grid.appendChild(card);
+    });
+  } catch (err: unknown) {
+    if (grid) grid.innerHTML = `<div class="error-state">Failed to load groups: ${escapeHtml((err as Error).message)}</div>`;
   }
 }
 

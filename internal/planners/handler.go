@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"planner/internal/config"
 	"planner/internal/db"
@@ -160,10 +161,11 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	var ownerID int
 	var title string
 	var startDate, endDate db.DateStr
+	var updatedAt string
 	err := h.db.QueryRowContext(r.Context(),
-		h.db.Rebind("SELECT owner_id, title, start_date, end_date FROM planners WHERE id = ?"),
+		h.db.Rebind("SELECT owner_id, title, start_date, end_date, updated_at FROM planners WHERE id = ?"),
 		plannerID,
-	).Scan(&ownerID, &title, &startDate, &endDate)
+	).Scan(&ownerID, &title, &startDate, &endDate, &updatedAt)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, "Planner not found")
 		return
@@ -248,12 +250,13 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"config": map[string]any{
-			"plannerId": plannerID,
-			"title":     title,
-			"startDate": startDate.String(),
-			"endDate":   endDate.String(),
-			"isOwner":   ownerID == userID,
+			"plannerId":  plannerID,
+			"title":      title,
+			"startDate":  startDate.String(),
+			"endDate":    endDate.String(),
+			"isOwner":    ownerID == userID,
 			"permission": perm,
+			"updated_at": updatedAt,
 		},
 		"data": map[string]any{"lanes": lanesJSON},
 	})
@@ -281,10 +284,11 @@ type laneInput struct {
 }
 
 type putBody struct {
-	Title     *string     `json:"title"`
-	StartDate *string     `json:"startDate"`
-	EndDate   *string     `json:"endDate"`
-	Lanes     []laneInput `json:"lanes"`
+	Title           *string     `json:"title"`
+	StartDate       *string     `json:"startDate"`
+	EndDate         *string     `json:"endDate"`
+	Lanes           []laneInput `json:"lanes"`
+	ClientUpdatedAt string      `json:"client_updated_at"` // optional; ISO8601; 409 if stale
 }
 
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
@@ -312,6 +316,38 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+
+	// Concurrent-edit detection: if client_updated_at is provided, check for staleness.
+	if body.ClientUpdatedAt != "" {
+		clientT, err := time.Parse(time.RFC3339, body.ClientUpdatedAt)
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, "client_updated_at must be RFC3339")
+			return
+		}
+
+		var serverUpdatedAt string
+		if err := tx.QueryRowContext(r.Context(),
+			h.db.Rebind("SELECT updated_at FROM planners WHERE id = ?"), plannerID,
+		).Scan(&serverUpdatedAt); err != nil {
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
+		serverT, err := time.Parse(time.RFC3339, serverUpdatedAt)
+		if err != nil {
+			// Try without timezone suffix (SQLite TEXT format)
+			serverT, err = time.Parse("2006-01-02T15:04:05Z", serverUpdatedAt)
+		}
+		if err == nil {
+			// Allow 1-second tolerance to absorb DB rounding.
+			if serverT.After(clientT.Add(time.Second)) {
+				writeJSON(w, http.StatusConflict, map[string]any{
+					"error":             "conflict",
+					"server_updated_at": serverUpdatedAt,
+				})
+				return
+			}
+		}
+	}
 
 	// Update planner metadata if provided
 	if body.Title != nil || body.StartDate != nil || body.EndDate != nil {

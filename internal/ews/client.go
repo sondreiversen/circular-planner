@@ -50,6 +50,79 @@ type Result struct {
 
 const requestTimeout = 30 * time.Second
 
+// retryDelays are the wait durations between successive attempts (1s, 3s, 8s).
+// Up to len(retryDelays)+1 total attempts.
+var retryDelays = []time.Duration{1 * time.Second, 3 * time.Second, 8 * time.Second}
+
+// isTransientError returns true for errors that may succeed on retry.
+func isTransientError(err error) bool {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "connection reset"),
+		strings.Contains(msg, "no such host"),
+		strings.Contains(msg, "EOF"),
+		strings.Contains(msg, "socket hang up"),
+		strings.Contains(msg, "timed out"),
+		strings.Contains(msg, "HTTP 5"), // 5xx
+		strings.Contains(msg, "HTTP 429"),
+		strings.Contains(msg, "NTLM negotiate failed: expected 401, got 5"):
+		return true
+	}
+	return false
+}
+
+// retryWithBackoff calls fn up to len(retryDelays)+1 times, waiting between attempts.
+// It only retries if isTransientError returns true for the returned error.
+func retryWithBackoff(fn func() error) error {
+	var lastErr error
+	for attempt := 0; attempt <= len(retryDelays); attempt++ {
+		if err := fn(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if attempt == len(retryDelays) || !isTransientError(lastErr) {
+			return lastErr
+		}
+		time.Sleep(retryDelays[attempt])
+	}
+	return lastErr
+}
+
+// ProgressCallback is called after each monthly chunk completes.
+type ProgressCallback func(completed, total int)
+
+// buildMonthlyChunks splits [startDate, endDate] into per-month Query slices.
+func buildMonthlyChunks(startDate, endDate string) []Query {
+	start, err1 := time.Parse("2006-01-02", startDate)
+	end, err2 := time.Parse("2006-01-02", endDate)
+	if err1 != nil || err2 != nil || !start.Before(end.AddDate(0, 0, 1)) {
+		return []Query{{StartDate: startDate, EndDate: endDate}}
+	}
+
+	var chunks []Query
+	cursor := start
+	for !cursor.After(end) {
+		chunkStart := cursor.Format("2006-01-02")
+		// Last day of current month
+		nextMonth := time.Date(cursor.Year(), cursor.Month()+1, 1, 0, 0, 0, 0, time.UTC)
+		lastOfMonth := nextMonth.AddDate(0, 0, -1)
+		var chunkEnd time.Time
+		if lastOfMonth.Before(end) {
+			chunkEnd = lastOfMonth
+		} else {
+			chunkEnd = end
+		}
+		chunks = append(chunks, Query{StartDate: chunkStart, EndDate: chunkEnd.Format("2006-01-02")})
+		cursor = nextMonth
+	}
+	if len(chunks) == 0 {
+		return []Query{{StartDate: startDate, EndDate: endDate}}
+	}
+	return chunks
+}
+
 func buildSoapEnvelope(q Query) string {
 	max := q.MaxItems
 	if max <= 0 {
@@ -181,46 +254,91 @@ func fetchWithBasic(ctx context.Context, cfg Config, soapBody string) (string, e
 	return string(body), nil
 }
 
+// fetchPage fetches one date-range chunk with per-attempt 30s timeout + retry.
+func fetchPage(parentCtx context.Context, cfg Config, chunk Query) ([]ImportedEvent, []string, error) {
+	u, err := url.Parse(cfg.ServerURL)
+	if err != nil || u.Scheme != "https" {
+		return nil, nil, errors.New("serverUrl must be a valid https URL")
+	}
+
+	var events []ImportedEvent
+	var errs []string
+
+	ferr := retryWithBackoff(func() error {
+		ctx, cancel := context.WithTimeout(parentCtx, requestTimeout)
+		defer cancel()
+
+		soap := buildSoapEnvelope(chunk)
+
+		var xmlResp string
+		var err error
+		if strings.EqualFold(cfg.AuthMethod, "basic") {
+			xmlResp, err = fetchWithBasic(ctx, cfg, soap)
+		} else {
+			xmlResp, err = fetchWithNTLM(ctx, cfg, soap)
+		}
+		if err != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return errors.New("request timed out after 30s")
+			}
+			return err
+		}
+
+		if fault := ExtractFaultMessage(xmlResp); fault != "" {
+			return fmt.Errorf("Exchange returned an error: %s", fault)
+		}
+
+		raw, parseErrs := ExtractCalendarItems(xmlResp)
+		events = make([]ImportedEvent, 0, len(raw))
+		for _, r := range raw {
+			events = append(events, mapItem(r))
+		}
+		errs = parseErrs
+		return nil
+	})
+	return events, errs, ferr
+}
+
 // FetchCalendarEvents performs the EWS FindItem/CalendarView request and returns
 // parsed events. Credentials live only in memory for the duration of the call.
-func FetchCalendarEvents(parentCtx context.Context, cfg Config, q Query) (Result, error) {
+// The date range is split into monthly chunks; each chunk is retried independently.
+// onProgress is called after each chunk completes (may be nil).
+func FetchCalendarEvents(parentCtx context.Context, cfg Config, q Query, onProgress ...ProgressCallback) (Result, error) {
 	// Validate the URL early so callers get a clean error rather than a 404/DNS failure.
 	u, err := url.Parse(cfg.ServerURL)
 	if err != nil || u.Scheme != "https" {
 		return Result{}, errors.New("serverUrl must be a valid https URL")
 	}
+	_ = u
 
-	ctx, cancel := context.WithTimeout(parentCtx, requestTimeout)
-	defer cancel()
-
-	soap := buildSoapEnvelope(q)
-
-	var xml string
-	if strings.EqualFold(cfg.AuthMethod, "basic") {
-		xml, err = fetchWithBasic(ctx, cfg, soap)
-	} else {
-		xml, err = fetchWithNTLM(ctx, cfg, soap)
+	chunks := buildMonthlyChunks(q.StartDate, q.EndDate)
+	var cb ProgressCallback
+	if len(onProgress) > 0 {
+		cb = onProgress[0]
 	}
-	if err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return Result{}, errors.New("request timed out after 30s")
+	if cb != nil {
+		cb(0, len(chunks))
+	}
+
+	var allEvents []ImportedEvent
+	var allErrs []string
+
+	for i, chunk := range chunks {
+		evts, errs, err := fetchPage(parentCtx, cfg, chunk)
+		if err != nil {
+			return Result{}, err
 		}
-		return Result{}, err
+		allEvents = append(allEvents, evts...)
+		allErrs = append(allErrs, errs...)
+		if cb != nil {
+			cb(i+1, len(chunks))
+		}
 	}
 
-	if fault := ExtractFaultMessage(xml); fault != "" {
-		return Result{}, fmt.Errorf("Exchange returned an error: %s", fault)
-	}
-
-	raw, errs := ExtractCalendarItems(xml)
-	events := make([]ImportedEvent, 0, len(raw))
-	for _, r := range raw {
-		events = append(events, mapItem(r))
-	}
 	return Result{
-		Events:     events,
-		TotalFound: len(events),
-		Errors:     errs,
+		Events:     allEvents,
+		TotalFound: len(allEvents),
+		Errors:     allErrs,
 	}, nil
 }
 

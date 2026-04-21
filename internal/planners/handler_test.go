@@ -102,3 +102,57 @@ func TestListRequiresAuth(t *testing.T) {
 		t.Errorf("unauthenticated list: got %d, want 401", resp.StatusCode)
 	}
 }
+
+func TestConcurrentEditConflict(t *testing.T) {
+	srv, _, _ := testutil.NewServer(t)
+
+	tok := registerHelper(t, srv.URL, "carol", "carol@example.com", "hunter2hunter2")
+
+	// Create a planner
+	resp, raw := do(t, "POST", srv.URL+"/api/planners", tok,
+		map[string]string{"title": "Conflict Test", "startDate": "2026-01-01", "endDate": "2026-12-31"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create: %d %s", resp.StatusCode, raw)
+	}
+	var created struct{ ID int }
+	json.Unmarshal(raw, &created)
+
+	// GET the planner to retrieve updated_at
+	resp, raw = do(t, "GET", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), tok, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get: %d %s", resp.StatusCode, raw)
+	}
+	var getResp struct {
+		Config struct {
+			UpdatedAt string `json:"updated_at"`
+		} `json:"config"`
+	}
+	json.Unmarshal(raw, &getResp)
+	if getResp.Config.UpdatedAt == "" {
+		t.Fatal("GET did not return updated_at in config")
+	}
+
+	// PUT with a stale client_updated_at (far in the past) → 409
+	resp, raw = do(t, "PUT", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), tok, map[string]any{
+		"title":             "Updated",
+		"startDate":         "2026-01-01",
+		"endDate":           "2026-12-31",
+		"lanes":             []any{},
+		"client_updated_at": "2000-01-01T00:00:00Z",
+	})
+	if resp.StatusCode != 409 {
+		t.Errorf("stale PUT: got %d, want 409 (body: %s)", resp.StatusCode, raw)
+	}
+
+	// PUT with correct client_updated_at → 200
+	resp, raw = do(t, "PUT", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), tok, map[string]any{
+		"title":             "Updated",
+		"startDate":         "2026-01-01",
+		"endDate":           "2026-12-31",
+		"lanes":             []any{},
+		"client_updated_at": getResp.Config.UpdatedAt,
+	})
+	if resp.StatusCode != 200 {
+		t.Errorf("fresh PUT: got %d, want 200 (body: %s)", resp.StatusCode, raw)
+	}
+}

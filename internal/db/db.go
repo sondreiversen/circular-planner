@@ -4,8 +4,11 @@
 package db
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -13,6 +16,24 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
+
+const slowQueryThreshold = 200 * time.Millisecond
+
+func logSlowQuery(ctx context.Context, start time.Time, query string, paramCount int) {
+	d := time.Since(start)
+	if d < slowQueryThreshold {
+		return
+	}
+	entry := map[string]any{
+		"ts":          time.Now().UTC().Format(time.RFC3339),
+		"request_id":  RequestIDFrom(ctx),
+		"duration_ms": d.Milliseconds(),
+		"query":       query,
+		"param_count": paramCount,
+	}
+	b, _ := json.Marshal(entry)
+	log.Println(string(b))
+}
 
 // Dialect identifies the underlying database engine.
 type Dialect int
@@ -110,3 +131,27 @@ func (d DateStr) String() string { return string(d) }
 
 // NullInt64 is a helper for nullable integer columns.
 type NullInt64 = sql.NullInt64
+
+// QueryContext overrides sql.DB.QueryContext to log slow queries.
+func (db *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	start := time.Now()
+	rows, err := db.DB.QueryContext(ctx, query, args...)
+	logSlowQuery(ctx, start, query, len(args))
+	return rows, err
+}
+
+// QueryRowContext overrides sql.DB.QueryRowContext to log slow queries.
+func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	start := time.Now()
+	row := db.DB.QueryRowContext(ctx, query, args...)
+	logSlowQuery(ctx, start, query, len(args))
+	return row
+}
+
+// ExecContext overrides sql.DB.ExecContext to log slow queries.
+func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	start := time.Now()
+	res, err := db.DB.ExecContext(ctx, query, args...)
+	logSlowQuery(ctx, start, query, len(args))
+	return res, err
+}

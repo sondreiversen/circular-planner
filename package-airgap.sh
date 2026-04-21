@@ -175,6 +175,12 @@ info "[4/5] Writing build info and installer..."
 cp "$SCRIPT_DIR/install-airgap.sh" "$STAGING/$ARCHIVE_NAME/"
 chmod +x "$STAGING/$ARCHIVE_NAME/install-airgap.sh"
 
+# Include scripts/ directory (backup, restore, doctor)
+if [ -d "$SCRIPT_DIR/scripts" ]; then
+  cp -r "$SCRIPT_DIR/scripts" "$STAGING/$ARCHIVE_NAME/bare-metal/scripts"
+  chmod +x "$STAGING/$ARCHIVE_NAME/bare-metal/scripts/"*.sh 2>/dev/null || true
+fi
+
 cat > "$STAGING/$ARCHIVE_NAME/BUILD_INFO" <<EOF
 Circular Planner — Air-Gapped Deployment Package (Go backend)
 =============================================================
@@ -188,7 +194,8 @@ Docker:       $(docker --version 2>/dev/null || echo "n/a")
 Postgres:     $([ "$WITH_POSTGRES" = true ] && echo "bundled" || echo "not bundled (SQLite default)")
 
 Contents:
-  bare-metal/        Statically-linked 'planner' binary + .env.example
+  bare-metal/        Statically-linked 'planner' binary + .env.example + scripts/
+  bare-metal/scripts/  backup.sh, restore.sh, doctor.sh
   images/            Docker images (app, and optionally postgres) as tar archives
   docker-compose.airgap.yml  Compose file for the Docker path
   install-airgap.sh  Interactive installer for the target machine

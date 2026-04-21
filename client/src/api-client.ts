@@ -1,64 +1,55 @@
-const TOKEN_KEY = 'cp_token';
+// Authentication is cookie-based (HttpOnly `cp_token` set by the server).
+// The client no longer reads or stores the JWT.
 
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
+// Clear any stale token left over from the previous localStorage-based scheme.
+try { localStorage.removeItem('cp_token'); } catch { /* ignore */ }
 
-export function setToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
-}
-
-export function isLoggedIn(): boolean {
-  return !!getToken();
-}
-
-function authHeaders(): Record<string, string> {
-  const token = getToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
+import { toast } from './toast';
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders(),
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    toast.error('Network error — check your connection');
+    throw new Error('Network error');
+  }
 
   if (res.status === 401) {
-    clearToken();
     window.location.href = '/index.html';
     throw new Error('Unauthorized');
   }
 
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed: ${res.status}`);
+  if (!res.ok) {
+    const serverMsg = (data as { error?: string }).error;
+    const label = serverMsg
+      ? `${method} ${path} failed: ${serverMsg}`
+      : `${method} ${path} failed: ${res.status}`;
+    toast.error(label);
+    throw new Error(serverMsg || `Request failed: ${res.status}`);
+  }
   return data as T;
 }
 
-export function parseJWT(token: string): Record<string, unknown> {
-  try { return JSON.parse(atob(token.split('.')[1])); }
-  catch { return {}; }
-}
-
-export function logout(): void {
-  clearToken();
+export async function logout(): Promise<void> {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+  } catch { /* ignore */ }
   window.location.href = '/index.html';
-}
-
-export function requireLogin(): void {
-  if (!isLoggedIn()) window.location.href = '/index.html';
 }
 
 export const api = {
   get:    <T>(path: string)                    => request<T>('GET',    path),
   post:   <T>(path: string, body: unknown)     => request<T>('POST',   path, body),
   put:    <T>(path: string, body: unknown)     => request<T>('PUT',    path, body),
+  patch:  <T>(path: string, body: unknown)     => request<T>('PATCH',  path, body),
   delete: <T>(path: string)                    => request<T>('DELETE', path),
 };
