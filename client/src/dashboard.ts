@@ -4,6 +4,7 @@ import { PlannerSummary } from './types';
 import { initTheme, applyTheme, currentTheme } from './theme';
 import { applyBranding } from './branding';
 import { installOfflineBanner, installGlobalErrorHandlers } from './toast';
+import { attachDatePicker } from './date-picker';
 
 installOfflineBanner();
 installGlobalErrorHandlers();
@@ -46,6 +47,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       themeBtn.textContent = next === 'dark' ? '☀️' : '🌙';
     });
   }
+
+  // Attach calendar pickers to the new-planner date inputs (already in HTML)
+  const npStart = document.getElementById('np-start') as HTMLInputElement | null;
+  const npEnd   = document.getElementById('np-end')   as HTMLInputElement | null;
+  if (npStart) attachDatePicker(npStart);
+  if (npEnd)   attachDatePicker(npEnd);
 
   document.getElementById('new-planner-btn')?.addEventListener('click', () => {
     // Set sensible defaults in the dialog

@@ -616,3 +616,141 @@
     animation: none !important;
   }
 }
+
+/* ── Date picker ───────────────────────────────────────────────────────────── */
+
+.cp-date-field {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+}
+
+/* Extra right padding so typed text never slides under the calendar button */
+.cp-date-field > input {
+  padding-right: 28px !important;
+}
+
+.cp-date-field__btn {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--cp-text-muted, #6b7280);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.cp-date-field__btn:hover {
+  background: var(--cp-surface-raised, #f4f4f4);
+  color: var(--cp-text, #2c3e50);
+}
+
+.cp-datepicker-popup {
+  position: absolute;
+  z-index: 10000;
+  width: 240px;
+  background: var(--cp-surface, #fff);
+  color: var(--cp-text, #2c3e50);
+  border: 1px solid var(--cp-border-strong, #d0d4db);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 8px;
+  font-family: var(--cp-font, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.cp-datepicker__head {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 6px 8px;
+}
+
+.cp-datepicker__nav {
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--cp-text, #2c3e50);
+  padding: 0;
+}
+
+.cp-datepicker__nav:hover {
+  background: var(--cp-surface-raised, #f4f4f4);
+}
+
+.cp-datepicker__label {
+  font-weight: 600;
+}
+
+.cp-datepicker__weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  font-size: 11px;
+  color: var(--cp-text-muted, #8896a5);
+  text-align: center;
+  padding-bottom: 4px;
+}
+
+.cp-datepicker__grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.cp-datepicker__day {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+
+.cp-datepicker__day:hover:not(.cp-datepicker__day--selected):not(.cp-datepicker__day--disabled) {
+  background: var(--cp-surface-raised, #f4f4f4);
+}
+
+.cp-datepicker__day--other-month {
+  opacity: 0.35;
+}
+
+.cp-datepicker__day--today {
+  box-shadow: inset 0 0 0 1px #0052cc;
+}
+
+.cp-datepicker__day--selected {
+  background: #0052cc;
+  color: #fff;
+  box-shadow: none;
+}
+
+.cp-datepicker__day--disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.cp-datepicker__day--focus {
+  outline: 2px solid #0052cc;
+  outline-offset: -2px;
+}

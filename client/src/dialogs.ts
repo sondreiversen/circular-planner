@@ -1,6 +1,7 @@
 import { Activity, Lane } from './types';
 import { COLOR_PALETTE, LANE_COLORS, randomId, formatDate, parseDate, escapeHtml, ymdToDmy, dmyToYmd, laneColor } from './utils';
 import { api } from './api-client';
+import { attachDatePicker } from './date-picker';
 
 type SaveActivityCallback = (activity: Activity) => void;
 type DeleteActivityCallback = (activityId: string) => void;
@@ -176,6 +177,11 @@ export function showActivityDialog(
   `;
 
   document.body.appendChild(dialog);
+
+  const actStartInput = document.getElementById('cp-act-start') as HTMLInputElement | null;
+  const actEndInput   = document.getElementById('cp-act-end')   as HTMLInputElement | null;
+  if (actStartInput) attachDatePicker(actStartInput);
+  if (actEndInput)   attachDatePicker(actEndInput);
 
   // Mount color picker
   const pickerSlot = document.getElementById('cp-color-picker-holder');
@@ -437,6 +443,11 @@ export function showOutlookImportDialog(
   `;
 
   document.body.appendChild(dialog);
+
+  const importStartInput = document.getElementById('cp-import-start') as HTMLInputElement | null;
+  const importEndInput   = document.getElementById('cp-import-end')   as HTMLInputElement | null;
+  if (importStartInput) attachDatePicker(importStartInput);
+  if (importEndInput)   attachDatePicker(importEndInput);
 
   const closeRaw = () => removeSafe(DIALOG_ID);
   const close = withFocusRestore(closeRaw, previouslyFocused);

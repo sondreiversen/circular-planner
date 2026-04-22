@@ -18,6 +18,7 @@ function hexToRgba(hex: string, alpha: number): string {
 import { DataManager } from './data-manager';
 import { showActivityDialog, showLaneDialog, showOutlookImportDialog } from './dialogs';
 import { randomId, laneColor, parseDate, formatDate, ymdToDmy, dmyToYmd } from './utils';
+import { attachDatePicker } from './date-picker';
 import { defaultViewport, zoomIn, zoomOut, navigate, canZoomIn, canZoomOut, viewportLabel, navigateToYear, navigateToRange } from './viewport';
 import { ZoomLevel } from './types';
 
@@ -554,6 +555,8 @@ export class Planner {
     rangeEnd.value = ymdToDmy(formatDate(this.viewport.windowEnd));
     rangeEnd.className = 'cp-filter-input cp-filter-input--full';
     rangeSection.appendChild(rangeEnd);
+    attachDatePicker(rangeStart);
+    attachDatePicker(rangeEnd);
 
     const applyBtn = document.createElement('button');
     applyBtn.textContent = 'Apply';
