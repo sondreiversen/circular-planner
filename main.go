@@ -221,7 +221,7 @@ func main() {
 	// Build the full middleware chain: RequestID → JSONLogger → securityHeaders → routes
 	chain := middleware.RequestID(
 		middleware.JSONLogger(
-			securityHeaders(cfg.AllowedOrigin)(mux),
+			securityHeaders(cfg.AllowedOrigin, cfg.TrustProxy)(mux),
 		),
 	)
 
@@ -363,7 +363,7 @@ func (rr *responseRecorder) Write(b []byte) (int, error) {
 	return rr.ResponseWriter.Write(b)
 }
 
-func securityHeaders(allowedOrigin string) func(http.Handler) http.Handler {
+func securityHeaders(allowedOrigin string, trustProxy bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -377,7 +377,7 @@ func securityHeaders(allowedOrigin string) func(http.Handler) http.Handler {
 			// actually serving from is treated as same-origin).
 			if origin := r.Header.Get("Origin"); origin != "" && strings.HasPrefix(r.URL.Path, "/api/") {
 				scheme := "http"
-				if r.TLS != nil {
+				if r.TLS != nil || (trustProxy && r.Header.Get("X-Forwarded-Proto") == "https") {
 					scheme = "https"
 				}
 				if origin != allowedOrigin && origin != scheme+"://"+r.Host {

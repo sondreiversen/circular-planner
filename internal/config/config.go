@@ -20,8 +20,10 @@ type Config struct {
 	HTTPSPort     int
 	TLSCertFile   string
 	TLSKeyFile    string
-	ForceHTTPS    bool
-	DatabaseURL   string
+	ForceHTTPS        bool
+	TrustProxy        bool
+	AllowRegistration bool
+	DatabaseURL       string
 	JWTSecret     string
 	NodeEnv       string
 	DataDir       string
@@ -48,6 +50,8 @@ func Load() *Config {
 	if v := os.Getenv("FORCE_HTTPS"); v == "false" {
 		forceHTTPS = false
 	}
+	trustProxy := os.Getenv("TRUST_PROXY") == "true"
+	allowRegistration := os.Getenv("ALLOW_REGISTRATION") != "false"
 
 	// GitLab SSO validation: when enabled all four vars are required.
 	gitlabEnabled := os.Getenv("GITLAB_SSO_ENABLED") == "true"
@@ -70,8 +74,10 @@ func Load() *Config {
 		HTTPSPort:     envInt("HTTPS_PORT", 3443),
 		TLSCertFile:   env("TLS_CERT_FILE", ""),
 		TLSKeyFile:    env("TLS_KEY_FILE", ""),
-		ForceHTTPS:    forceHTTPS,
-		DatabaseURL:   dbURL,
+		ForceHTTPS:        forceHTTPS,
+		TrustProxy:        trustProxy,
+		AllowRegistration: allowRegistration,
+		DatabaseURL:       dbURL,
 		JWTSecret:     jwtSecret,
 		NodeEnv:       env("NODE_ENV", "development"),
 		DataDir:       dataDir,

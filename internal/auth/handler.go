@@ -61,7 +61,7 @@ func (h *Handler) setSessionCookie(w http.ResponseWriter, token string) {
 		Value:    token,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   h.cfg.TLSCertFile != "",
+		Secure:   h.cfg.TLSCertFile != "" || h.cfg.TrustProxy,
 		Path:     "/",
 		MaxAge:   7 * 24 * 60 * 60,
 	})
@@ -74,7 +74,7 @@ func (h *Handler) clearSessionCookie(w http.ResponseWriter) {
 		Value:    "",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   h.cfg.TLSCertFile != "",
+		Secure:   h.cfg.TLSCertFile != "" || h.cfg.TrustProxy,
 		Path:     "/",
 		MaxAge:   -1,
 	})
@@ -97,6 +97,10 @@ func jsonError(w http.ResponseWriter, status int, msg string) {
 // --- POST /api/auth/register ---
 
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
+	if !h.cfg.AllowRegistration {
+		jsonError(w, http.StatusForbidden, "Registration is disabled")
+		return
+	}
 	var body struct {
 		Username string `json:"username"`
 		Email    string `json:"email"`
@@ -236,7 +240,7 @@ func (h *Handler) GitLabAuthorize(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600,
-		Secure:   h.cfg.TLSCertFile != "",
+		Secure:   h.cfg.TLSCertFile != "" || h.cfg.TrustProxy,
 		Path:     "/",
 	})
 
