@@ -181,6 +181,27 @@ if [ -d "$SCRIPT_DIR/scripts" ]; then
   chmod +x "$STAGING/$ARCHIVE_NAME/bare-metal/scripts/"*.sh 2>/dev/null || true
 fi
 
+# Generic systemd unit template (paths use /opt/circular-planner; installer generates
+# a path-substituted copy during bare-metal install)
+cat > "$STAGING/$ARCHIVE_NAME/bare-metal/circular-planner.service" <<'EOF'
+[Unit]
+Description=Circular Planner (Go backend)
+After=network.target
+
+[Service]
+Type=simple
+# Change User= and the paths below to match your actual install location
+User=planner
+WorkingDirectory=/opt/circular-planner
+EnvironmentFile=/opt/circular-planner/.env
+ExecStart=/opt/circular-planner/planner
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 cat > "$STAGING/$ARCHIVE_NAME/BUILD_INFO" <<EOF
 Circular Planner — Air-Gapped Deployment Package (Go backend)
 =============================================================
@@ -194,11 +215,12 @@ Docker:       $(docker --version 2>/dev/null || echo "n/a")
 Postgres:     $([ "$WITH_POSTGRES" = true ] && echo "bundled" || echo "not bundled (SQLite default)")
 
 Contents:
-  bare-metal/        Statically-linked 'planner' binary + .env.example + scripts/
-  bare-metal/scripts/  backup.sh, restore.sh, doctor.sh
-  images/            Docker images (app, and optionally postgres) as tar archives
-  docker-compose.airgap.yml  Compose file for the Docker path
-  install-airgap.sh  Interactive installer for the target machine
+  bare-metal/                  Statically-linked 'planner' binary + .env.example
+  bare-metal/scripts/          backup.sh, restore.sh, doctor.sh
+  bare-metal/circular-planner.service  systemd unit template (edit paths to match install location)
+  images/                      Docker images (app, and optionally postgres) as tar archives
+  docker-compose.airgap.yml    Compose file for the Docker path
+  install-airgap.sh            Interactive installer for the target machine
 
 Note: The binary is a single statically-linked executable with all static
 assets embedded. Deploy by copying 'planner' and running it — no runtime

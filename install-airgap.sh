@@ -195,9 +195,26 @@ warn "  set TLS_CERT_FILE and TLS_KEY_FILE in .env, or"
 warn "  put a reverse proxy in front and set TRUST_PROXY=true."
 echo ""
 if [ "$MODE" = "2" ]; then
-  echo "Start the server:"
-  echo "  cd ${INSTALL_DIR}"
-  echo "  ./planner"
+  # Generate a systemd service file with the actual install path baked in
+  WHO=$(whoami)
+  cat > "$INSTALL_DIR/circular-planner.service" <<EOF
+[Unit]
+Description=Circular Planner (Go backend)
+After=network.target
+
+[Service]
+Type=simple
+User=${WHO}
+WorkingDirectory=${INSTALL_DIR}
+EnvironmentFile=${INSTALL_DIR}/.env
+ExecStart=${INSTALL_DIR}/planner
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  info "Generated circular-planner.service (paths pre-filled for this install)"
   echo ""
 
   # Non-fatal preflight check — shows WARN/FAIL for operator review but does not abort install
@@ -205,5 +222,18 @@ if [ "$MODE" = "2" ]; then
     echo "Running preflight check..."
     echo ""
     (cd "$INSTALL_DIR" && bash scripts/doctor.sh) || true
+    echo ""
   fi
+
+  echo "Next steps — choose one:"
+  echo ""
+  echo "  Option A — systemd service (recommended for production):"
+  echo "    sudo cp ${INSTALL_DIR}/circular-planner.service /etc/systemd/system/"
+  echo "    sudo systemctl daemon-reload"
+  echo "    sudo systemctl enable --now circular-planner"
+  echo "    sudo journalctl -u circular-planner -f   # watch logs"
+  echo ""
+  echo "  Option B — run manually (foreground, for testing):"
+  echo "    cd ${INSTALL_DIR} && ./planner"
+  echo ""
 fi

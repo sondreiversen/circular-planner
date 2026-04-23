@@ -209,6 +209,8 @@ Migrations run automatically on startup regardless of which backend is used.
 
 ### Running as a systemd service
 
+Adjust the paths below to match wherever you installed the binary (e.g. `~/circular-planner` or `/opt/circular-planner`).
+
 ```bash
 sudo systemctl edit --force --full circular-planner
 ```
@@ -220,10 +222,11 @@ After=network.target
 
 [Service]
 Type=simple
-User=planner
-WorkingDirectory=/opt/circular-planner
-EnvironmentFile=/opt/circular-planner/.env
-ExecStart=/opt/circular-planner/planner
+# Change User= and paths to match your install location
+User=youruser
+WorkingDirectory=/path/to/circular-planner
+EnvironmentFile=/path/to/circular-planner/.env
+ExecStart=/path/to/circular-planner/planner
 Restart=on-failure
 RestartSec=5
 
@@ -236,6 +239,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now circular-planner
 ```
 
+The pre-built binary archive (`package-airgap.sh`) includes a `bare-metal/circular-planner.service` template. The air-gapped installer (`install-airgap.sh`) generates a copy with the actual install paths already filled in.
+
 ---
 
 ## 5. Air-gapped install
@@ -243,6 +248,8 @@ sudo systemctl enable --now circular-planner
 Use `package-airgap.sh` on an internet-connected machine to create a self-contained archive, then transfer and install it on the target.
 
 The archive contains a statically-linked `planner` binary with all frontend assets embedded — no npm, Node, or network access needed on the target machine.
+
+> **Bare-metal path:** The installer handles copying the binary, creating `.env`, running migrations, and seeding the admin account — the same steps as [Section 4](#4-bare-metal-install-no-docker). After the installer finishes, follow the **"After install completes"** steps below to register the systemd service.
 
 ### On the build machine (internet access)
 
@@ -274,7 +281,24 @@ The installer will:
 3. Copy the `scripts/` directory (backup, restore, doctor) alongside the binary.
 4. Run a preflight check via `./scripts/doctor.sh` after install completes (non-fatal — WARN/FAIL output is shown for operator review).
 
-### Managing the bare-metal service
+### After install completes (bare-metal)
+
+The installer generates a `circular-planner.service` file in your install directory with the correct paths already filled in. Register it with systemd:
+
+```bash
+sudo cp /path/to/install-dir/circular-planner.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now circular-planner
+sudo journalctl -u circular-planner -f   # watch startup logs
+```
+
+To test without systemd first (foreground, Ctrl-C to stop):
+
+```bash
+cd /path/to/install-dir && ./planner
+```
+
+**Ongoing service management**
 
 ```bash
 sudo systemctl status  circular-planner
@@ -456,6 +480,15 @@ Migrations run automatically on startup. To check migration status first:
 ```bash
 ./planner migrate status
 ```
+
+### Air-gapped upgrade
+
+1. On the build machine (internet access): run `./package-airgap.sh` again to produce a new archive.
+2. Transfer the new `.tar.gz` to the target machine.
+3. Extract and re-run `./install-airgap.sh` — it detects the existing `.env` and prompts before overwriting.
+4. Restart the service: `sudo systemctl restart circular-planner`
+
+Migrations run automatically on startup.
 
 ### Rollback
 
