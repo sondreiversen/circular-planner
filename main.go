@@ -371,10 +371,19 @@ func securityHeaders(allowedOrigin string) func(http.Handler) http.Handler {
 			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 			w.Header().Set("Content-Security-Policy",
 				"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'")
-			// Reject cross-origin API calls from unexpected origins
-			if origin := r.Header.Get("Origin"); origin != "" && origin != allowedOrigin && strings.HasPrefix(r.URL.Path, "/api/") {
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
+			// Reject cross-origin API calls from unexpected origins.
+			// Allow requests whose Origin matches either the configured ALLOWED_ORIGIN
+			// or the server's own scheme+host (so any IP/hostname the server is
+			// actually serving from is treated as same-origin).
+			if origin := r.Header.Get("Origin"); origin != "" && strings.HasPrefix(r.URL.Path, "/api/") {
+				scheme := "http"
+				if r.TLS != nil {
+					scheme = "https"
+				}
+				if origin != allowedOrigin && origin != scheme+"://"+r.Host {
+					http.Error(w, "Forbidden", http.StatusForbidden)
+					return
+				}
 			}
 			next.ServeHTTP(w, r)
 		})

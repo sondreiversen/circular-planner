@@ -525,6 +525,7 @@ For Postgres:
 | `GITLAB_CLIENT_ID` | — | SSO only | GitLab OAuth2 application ID. |
 | `GITLAB_CLIENT_SECRET` | — | SSO only | GitLab OAuth2 application secret. |
 | `GITLAB_REDIRECT_URI` | — | SSO only | OAuth2 callback URL (must match GitLab app config). |
+| `ALLOWED_ORIGIN` | `http://localhost:3000` | No | Origin permitted to make API calls. The server automatically allows requests from its own scheme + `Host` header, so this only needs to be set when the public-facing hostname differs from what the server sees (e.g. behind a reverse proxy with a different domain). |
 | `APP_NAME` | `Circular Planner` | No | Customize the application name shown in the UI. |
 | `APP_LOGO_URL` | — | No | URL to a custom logo image for white-label deployments. |
 
