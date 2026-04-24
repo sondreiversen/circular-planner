@@ -160,28 +160,40 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Identifier string `json:"identifier"` // username or email
+		Email      string `json:"email"`       // legacy alias — accepted for compatibility
+		Password   string `json:"password"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		jsonError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-	if body.Email == "" || body.Password == "" {
-		jsonError(w, http.StatusBadRequest, "email and password are required")
+	// Accept either the new "identifier" field or the legacy "email" field.
+	identifier := strings.TrimSpace(body.Identifier)
+	if identifier == "" {
+		identifier = strings.TrimSpace(body.Email)
+	}
+	if identifier == "" || body.Password == "" {
+		jsonError(w, http.StatusBadRequest, "identifier and password are required")
 		return
+	}
+
+	// Normalise: if it looks like an email, lowercase it.
+	normalised := identifier
+	if strings.Contains(identifier, "@") {
+		normalised = strings.ToLower(identifier)
 	}
 
 	var id int
 	var username, email string
 	var hashPtr *string
 	err := h.db.QueryRowContext(r.Context(),
-		h.db.Rebind("SELECT id, username, email, password_hash FROM users WHERE email = ?"),
-		strings.ToLower(strings.TrimSpace(body.Email)),
+		h.db.Rebind("SELECT id, username, email, password_hash FROM users WHERE email = ? OR username = ?"),
+		strings.ToLower(normalised), normalised,
 	).Scan(&id, &username, &email, &hashPtr)
 
 	if err != nil || hashPtr == nil || bcrypt.CompareHashAndPassword([]byte(*hashPtr), []byte(body.Password)) != nil {
-		jsonError(w, http.StatusUnauthorized, "Invalid email or password")
+		jsonError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
@@ -426,6 +438,59 @@ func randomHex(n int) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x", b), nil
+}
+
+// --- GET /api/users ---
+
+// SearchUsers handles GET /api/users?q=<query>.
+// Returns up to 20 users whose username or email contains the query string.
+// The current user is excluded from results.
+func (h *Handler) SearchUsers(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+
+	currentUserID := middleware.UserFrom(r).ID
+	pattern := "%" + strings.ToLower(q) + "%"
+
+	// SQLite uses LIKE (case-insensitive for ASCII by default);
+	// Postgres uses ILIKE. Use LOWER() for portability.
+	rows, err := h.db.QueryContext(r.Context(),
+		h.db.Rebind(`
+			SELECT id, username, email
+			FROM users
+			WHERE id != ?
+			  AND (LOWER(username) LIKE ? OR LOWER(email) LIKE ?)
+			ORDER BY username
+			LIMIT 20
+		`),
+		currentUserID, pattern, pattern,
+	)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	defer rows.Close()
+
+	type userResult struct {
+		ID       int    `json:"id"`
+		Username string `json:"username"`
+		Email    string `json:"email"`
+	}
+	var results []userResult
+	for rows.Next() {
+		var u userResult
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email); err != nil {
+			continue
+		}
+		results = append(results, u)
+	}
+	if results == nil {
+		results = []userResult{}
+	}
+	writeJSON(w, http.StatusOK, results)
 }
 
 // --- misc helpers ---

@@ -181,6 +181,7 @@ func main() {
 	mux.HandleFunc("POST /api/auth/login", authH.Login)
 	mux.HandleFunc("POST /api/auth/logout", authH.Logout)
 	mux.HandleFunc("GET /api/auth/me", middleware.RequireAuth(cfg, authH.Me))
+	mux.HandleFunc("GET /api/users", middleware.RequireAuth(cfg, authH.SearchUsers))
 	mux.HandleFunc("GET /api/auth/gitlab/status", authH.GitLabStatus)
 	mux.HandleFunc("GET /api/auth/gitlab/authorize", authH.GitLabAuthorize)
 	mux.HandleFunc("GET /api/auth/gitlab/callback", authH.GitLabCallback)
@@ -202,10 +203,9 @@ func main() {
 	mux.HandleFunc("POST /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(shareH.Create)).ServeHTTP))
 	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/{userID}", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(shareH.Delete)).ServeHTTP))
 
-	// --- Outlook / Exchange calendar import --------------------------------
+	// --- Calendar file import (.ics / .csv) --------------------------------
 	importH := importing.NewHandler(database, cfg)
-	mux.HandleFunc("POST /api/planners/{id}/import/outlook", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(importH.ImportOutlook)).ServeHTTP))
-	mux.HandleFunc("GET /api/planners/{id}/import/status/{jobId}", middleware.RequireAuth(cfg, importH.ImportStatus))
+	mux.HandleFunc("POST /api/planners/{id}/import", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(importH.Import)).ServeHTTP))
 
 	// --- Groups -----------------------------------------------------------
 	groupsH := groups.NewHandler(database, cfg)

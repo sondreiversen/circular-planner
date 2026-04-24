@@ -17,8 +17,7 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 import { DataManager } from './data-manager';
 import { showActivityDialog, showLaneDialog, showOutlookImportDialog } from './dialogs';
-import { randomId, laneColor, parseDate, formatDate, ymdToDmy, dmyToYmd } from './utils';
-import { attachDatePicker } from './date-picker';
+import { randomId, laneColor, parseDate, formatDate } from './utils';
 import { defaultViewport, zoomIn, zoomOut, navigate, canZoomIn, canZoomOut, viewportLabel, navigateToYear, navigateToRange } from './viewport';
 import { ZoomLevel } from './types';
 
@@ -536,10 +535,8 @@ export class Planner {
     rangeSection.appendChild(rangeHeading);
 
     const rangeStart = document.createElement('input');
-    rangeStart.type = 'text';
-    rangeStart.inputMode = 'numeric';
-    rangeStart.placeholder = 'DD/MM/YYYY';
-    rangeStart.value = ymdToDmy(formatDate(this.viewport.windowStart));
+    rangeStart.type = 'date';
+    rangeStart.value = formatDate(this.viewport.windowStart);
     rangeStart.className = 'cp-filter-input cp-filter-input--full';
     rangeSection.appendChild(rangeStart);
 
@@ -549,23 +546,19 @@ export class Planner {
     rangeSection.appendChild(rangeTo);
 
     const rangeEnd = document.createElement('input');
-    rangeEnd.type = 'text';
-    rangeEnd.inputMode = 'numeric';
-    rangeEnd.placeholder = 'DD/MM/YYYY';
-    rangeEnd.value = ymdToDmy(formatDate(this.viewport.windowEnd));
+    rangeEnd.type = 'date';
+    rangeEnd.value = formatDate(this.viewport.windowEnd);
     rangeEnd.className = 'cp-filter-input cp-filter-input--full';
     rangeSection.appendChild(rangeEnd);
-    attachDatePicker(rangeStart);
-    attachDatePicker(rangeEnd);
 
     const applyBtn = document.createElement('button');
     applyBtn.textContent = 'Apply';
     applyBtn.className = 'cp-btn cp-btn-primary';
     applyBtn.style.cssText = 'width:100%;margin-top:6px;';
     applyBtn.addEventListener('click', () => {
-      const startYmd = dmyToYmd(rangeStart.value);
-      const endYmd   = dmyToYmd(rangeEnd.value);
-      if (!startYmd || !endYmd) { alert('Dates must be in DD/MM/YYYY format.'); return; }
+      const startYmd = rangeStart.value;
+      const endYmd   = rangeEnd.value;
+      if (!startYmd || !endYmd) { alert('Please select start and end dates.'); return; }
       if (startYmd >= endYmd) { alert('Start must be before end date.'); return; }
       this.handleCustomRange(parseDate(startYmd), parseDate(endYmd));
     });

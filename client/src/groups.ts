@@ -285,7 +285,7 @@ function bindDetailEvents(groupId: number, isAdmin: boolean): void {
           searchResults.appendChild(item);
         });
         searchResults.classList.remove('hidden');
-      } catch { /* ignore */ }
+      } catch (err) { console.error('User search failed:', err); }
     }, 200);
   });
 

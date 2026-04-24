@@ -57,7 +57,7 @@ export interface Viewport {
 export interface GridSpec {
   majorTicks: Date[];   // prominent gridlines (darker)
   minorTicks: Date[];   // lighter sub-divisions
-  labels: Array<{ date: Date; text: string }>;
+  labels: Array<{ date: Date; text: string; anchor?: boolean }>;
   subLabels?: Array<{ date: Date; text: string }>; // inner day-number labels (Year zoom only)
 }
 

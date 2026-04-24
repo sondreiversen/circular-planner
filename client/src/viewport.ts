@@ -125,7 +125,7 @@ export function getGridSpec(viewport: Viewport): GridSpec {
   const { windowStart, windowEnd, zoomLevel } = viewport;
   const majorTicks: Date[] = [];
   const minorTicks: Date[] = [];
-  const labels: Array<{ date: Date; text: string }> = [];
+  const labels: Array<{ date: Date; text: string; anchor?: boolean }> = [];
   const subLabels: Array<{ date: Date; text: string }> = [];
 
   // Does the viewport span multiple calendar years?
@@ -144,7 +144,7 @@ export function getGridSpec(viewport: Viewport): GridSpec {
           const text = spansYears
             ? `${MONTHS_SHORT[d.getMonth()]} ${yearSuffix(d)}`
             : MONTHS_SHORT[d.getMonth()];
-          labels.push({ date: mid, text });
+          labels.push({ date: mid, text, anchor: true });
         }
       });
       // Day sub-labels: days 1, 8, 15, 22 as minor ticks + inner numeric labels
@@ -178,7 +178,7 @@ export function getGridSpec(viewport: Viewport): GridSpec {
           const text = spansYears
             ? `${MONTHS_SHORT[d.getMonth()]} ${yearSuffix(d)}`
             : MONTHS_SHORT[d.getMonth()];
-          labels.push({ date: mid, text });
+          labels.push({ date: mid, text, anchor: true });
         }
       });
       break;
@@ -187,7 +187,8 @@ export function getGridSpec(viewport: Viewport): GridSpec {
       iterateWeeks(windowStart, windowEnd, (d) => {
         majorTicks.push(d);
         const weekNum = getWeekNumber(d);
-        labels.push({ date: addDays(d, 3), text: `W${weekNum}` });
+        // W1 is anchor (start of year); all week labels act as anchors in Month zoom
+        labels.push({ date: addDays(d, 3), text: `W${weekNum}`, anchor: weekNum === 1 });
       });
       iterateDays(windowStart, windowEnd, (d) => {
         minorTicks.push(d);

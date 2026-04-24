@@ -1,11 +1,9 @@
 import { api, logout } from './api-client';
-import { escapeHtml, ymdToDmy, dmyToYmd } from './utils';
+import { escapeHtml } from './utils';
 import { PlannerSummary } from './types';
 import { initTheme, applyTheme, currentTheme } from './theme';
 import { applyBranding } from './branding';
 import { installOfflineBanner, installGlobalErrorHandlers } from './toast';
-import { attachDatePicker } from './date-picker';
-
 installOfflineBanner();
 installGlobalErrorHandlers();
 
@@ -48,18 +46,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Attach calendar pickers to the new-planner date inputs (already in HTML)
-  const npStart = document.getElementById('np-start') as HTMLInputElement | null;
-  const npEnd   = document.getElementById('np-end')   as HTMLInputElement | null;
-  if (npStart) attachDatePicker(npStart);
-  if (npEnd)   attachDatePicker(npEnd);
-
   document.getElementById('new-planner-btn')?.addEventListener('click', () => {
     // Set sensible defaults in the dialog
     const start = document.getElementById('np-start') as HTMLInputElement;
     const end   = document.getElementById('np-end')   as HTMLInputElement;
-    if (start && !start.value) start.value = ymdToDmy(`${thisYear}-01-01`);
-    if (end   && !end.value)   end.value   = ymdToDmy(`${thisYear}-12-31`);
+    if (start && !start.value) start.value = `${thisYear}-01-01`;
+    if (end   && !end.value)   end.value   = `${thisYear}-12-31`;
     document.getElementById('new-planner-overlay')?.classList.remove('hidden');
     (document.getElementById('np-title') as HTMLInputElement)?.focus();
   });
@@ -79,9 +71,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (errEl) { errEl.textContent = msg; errEl.classList.remove('hidden'); }
     };
     if (!title || !startRaw || !endRaw) return;
-    const start = dmyToYmd(startRaw);
-    const end   = dmyToYmd(endRaw);
-    if (!start || !end) { showErr('Dates must be in DD/MM/YYYY format.'); return; }
+    const start = startRaw;
+    const end   = endRaw;
     if (start >= end) { showErr('Start date must be before end date.'); return; }
     if (errEl) errEl.classList.add('hidden');
     try {

@@ -317,17 +317,36 @@ export class Renderer {
     const labelRadius = OUTER_RADIUS + 24;
     const labelsGroup = g.append('g').attr('class', 'grid-labels');
 
-    gridSpec.labels.forEach(({ date, text }) => {
+    // Compute minimum angular gap between labels to avoid overlap.
+    // Approximate label width: charCount * fontSize * 0.6 pixels; minAngle = width / labelRadius.
+    const zl = this.viewport.zoomLevel;
+    const labelFontSize = (zl === ZoomLevel.Month)
+      ? 8
+      : (zl === ZoomLevel.Year || zl === ZoomLevel.Quarter)
+        ? 9
+        : 11;
+    // Typical label: 3 chars (e.g. "Jan", "W12"). Use 3 chars as baseline.
+    const approxLabelPx = 3 * labelFontSize * 0.6;
+    const minAngleGap = approxLabelPx / labelRadius; // radians
+
+    let lastDrawnAngle = -Infinity;
+
+    gridSpec.labels.forEach(({ date, text, anchor }) => {
       const angle = this.angleScale(date);
       if (angle < MIN_ANGLE || angle > MAX_ANGLE) return;
+
+      // Skip overlapping labels unless they are anchor labels (month starts, week 1).
+      if (!anchor && (angle - lastDrawnAngle) < minAngleGap) return;
+
+      lastDrawnAngle = angle;
 
       const lx = Math.sin(angle) * labelRadius;
       const ly = -Math.cos(angle) * labelRadius;
       const rotateDeg = (angle * 180 / Math.PI);
 
-      const fontSize = this.viewport.zoomLevel === ZoomLevel.Month && text.length <= 2
+      const fontSize = zl === ZoomLevel.Month && text.length <= 2
         ? '8'
-        : (this.viewport.zoomLevel === ZoomLevel.Year || this.viewport.zoomLevel === ZoomLevel.Quarter)
+        : (zl === ZoomLevel.Year || zl === ZoomLevel.Quarter)
           ? '9'
           : '11';
 

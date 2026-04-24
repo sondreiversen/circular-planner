@@ -63,10 +63,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('login-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     clearError('login-error');
-    const email    = (document.getElementById('login-email')    as HTMLInputElement).value.trim();
-    const password = (document.getElementById('login-password') as HTMLInputElement).value;
+    const identifier = (document.getElementById('login-identifier') as HTMLInputElement).value.trim();
+    const password   = (document.getElementById('login-password')   as HTMLInputElement).value;
     try {
-      await api.post<AuthResponse>('/api/auth/login', { email, password });
+      await api.post<AuthResponse>('/api/auth/login', { identifier, password });
       window.location.href = '/dashboard.html';
     } catch (err: unknown) {
       showError('login-error', (err as Error).message || 'Login failed');
