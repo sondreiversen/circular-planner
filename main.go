@@ -202,6 +202,11 @@ func main() {
 	mux.HandleFunc("GET /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, shareH.List))
 	mux.HandleFunc("POST /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(shareH.Create)).ServeHTTP))
 	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/{userID}", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(shareH.Delete)).ServeHTTP))
+	mux.HandleFunc("GET /api/planners/{plannerID}/shares/group-shares", middleware.RequireAuth(cfg, shareH.ListGroupShares))
+	mux.HandleFunc("POST /api/planners/{plannerID}/shares/group-shares", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(shareH.CreateGroupShare)).ServeHTTP))
+	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/group-shares/{groupID}", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(shareH.DeleteGroupShare)).ServeHTTP))
+	mux.HandleFunc("PUT /api/planners/{plannerID}/shares/group-shares/{groupID}/overrides/{userID}", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(shareH.UpsertGroupMemberOverride)).ServeHTTP))
+	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/group-shares/{groupID}/overrides/{userID}", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(shareH.DeleteGroupMemberOverride)).ServeHTTP))
 
 	// --- Calendar file import (.ics / .csv) --------------------------------
 	importH := importing.NewHandler(database, cfg)
