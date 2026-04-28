@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"planner/internal/admin"
 	"planner/internal/auth"
 	"planner/internal/branding"
 	"planner/internal/clienterrors"
@@ -180,8 +181,8 @@ func main() {
 	mux.HandleFunc("POST /api/auth/register", authH.Register)
 	mux.HandleFunc("POST /api/auth/login", authH.Login)
 	mux.HandleFunc("POST /api/auth/logout", authH.Logout)
-	mux.HandleFunc("GET /api/auth/me", middleware.RequireAuth(cfg, authH.Me))
-	mux.HandleFunc("GET /api/users", middleware.RequireAuth(cfg, authH.SearchUsers))
+	mux.HandleFunc("GET /api/auth/me", middleware.RequireAuth(cfg, database, authH.Me))
+	mux.HandleFunc("GET /api/users", middleware.RequireAuth(cfg, database, authH.SearchUsers))
 	mux.HandleFunc("GET /api/auth/gitlab/status", authH.GitLabStatus)
 	mux.HandleFunc("GET /api/auth/gitlab/authorize", authH.GitLabAuthorize)
 	mux.HandleFunc("GET /api/auth/gitlab/callback", authH.GitLabCallback)
@@ -191,30 +192,44 @@ func main() {
 
 	// --- Planner CRUD routes -----------------------------------------------
 	planH := planners.NewHandler(database, cfg)
-	mux.HandleFunc("GET /api/planners", middleware.RequireAuth(cfg, planH.List))
-	mux.HandleFunc("POST /api/planners", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(planH.Create)).ServeHTTP))
-	mux.HandleFunc("GET /api/planners/{id}", middleware.RequireAuth(cfg, planH.Get))
-	mux.HandleFunc("PUT /api/planners/{id}", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(planH.Update)).ServeHTTP))
-	mux.HandleFunc("DELETE /api/planners/{id}", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(planH.Delete)).ServeHTTP))
+	mux.HandleFunc("GET /api/planners", middleware.RequireAuth(cfg, database, planH.List))
+	mux.HandleFunc("POST /api/planners", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(planH.Create)).ServeHTTP))
+	mux.HandleFunc("GET /api/planners/{id}", middleware.RequireAuth(cfg, database, planH.Get))
+	mux.HandleFunc("PUT /api/planners/{id}", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(planH.Update)).ServeHTTP))
+	mux.HandleFunc("DELETE /api/planners/{id}", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(planH.Delete)).ServeHTTP))
 
 	// --- Share management routes -------------------------------------------
 	shareH := share.NewHandler(database, cfg)
-	mux.HandleFunc("GET /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, shareH.List))
-	mux.HandleFunc("POST /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(shareH.Create)).ServeHTTP))
-	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/{userID}", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(shareH.Delete)).ServeHTTP))
-	mux.HandleFunc("GET /api/planners/{plannerID}/shares/group-shares", middleware.RequireAuth(cfg, shareH.ListGroupShares))
-	mux.HandleFunc("POST /api/planners/{plannerID}/shares/group-shares", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(shareH.CreateGroupShare)).ServeHTTP))
-	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/group-shares/{groupID}", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(shareH.DeleteGroupShare)).ServeHTTP))
-	mux.HandleFunc("PUT /api/planners/{plannerID}/shares/group-shares/{groupID}/overrides/{userID}", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(shareH.UpsertGroupMemberOverride)).ServeHTTP))
-	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/group-shares/{groupID}/overrides/{userID}", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(shareH.DeleteGroupMemberOverride)).ServeHTTP))
+	mux.HandleFunc("GET /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, database, shareH.List))
+	mux.HandleFunc("POST /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(shareH.Create)).ServeHTTP))
+	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/{userID}", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(shareH.Delete)).ServeHTTP))
+	mux.HandleFunc("GET /api/planners/{plannerID}/shares/group-shares", middleware.RequireAuth(cfg, database, shareH.ListGroupShares))
+	mux.HandleFunc("POST /api/planners/{plannerID}/shares/group-shares", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(shareH.CreateGroupShare)).ServeHTTP))
+	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/group-shares/{groupID}", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(shareH.DeleteGroupShare)).ServeHTTP))
+	mux.HandleFunc("PUT /api/planners/{plannerID}/shares/group-shares/{groupID}/overrides/{userID}", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(shareH.UpsertGroupMemberOverride)).ServeHTTP))
+	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/group-shares/{groupID}/overrides/{userID}", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(shareH.DeleteGroupMemberOverride)).ServeHTTP))
 
 	// --- Calendar file import (.ics / .csv) --------------------------------
 	importH := importing.NewHandler(database, cfg)
-	mux.HandleFunc("POST /api/planners/{id}/import", middleware.RequireAuth(cfg, mutLimit(http.HandlerFunc(importH.Import)).ServeHTTP))
+	mux.HandleFunc("POST /api/planners/{id}/import", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(importH.Import)).ServeHTTP))
 
 	// --- Groups -----------------------------------------------------------
 	groupsH := groups.NewHandler(database, cfg)
-	groupsH.Register(mux, cfg)
+	groupsH.Register(mux, cfg, database)
+
+	// --- Admin ------------------------------------------------------------
+	adminH := admin.NewHandler(database)
+	requireAdmin := func(fn http.HandlerFunc) http.HandlerFunc {
+		return middleware.RequireAdmin(cfg, database, fn)
+	}
+	mux.HandleFunc("GET /api/admin/users", requireAdmin(adminH.ListUsers))
+	mux.HandleFunc("PATCH /api/admin/users/{id}", requireAdmin(mutLimit(http.HandlerFunc(adminH.UpdateUser)).ServeHTTP))
+	mux.HandleFunc("DELETE /api/admin/users/{id}", requireAdmin(mutLimit(http.HandlerFunc(adminH.DeleteUser)).ServeHTTP))
+	mux.HandleFunc("GET /api/admin/groups", requireAdmin(adminH.ListGroups))
+	mux.HandleFunc("GET /api/admin/groups/{id}/members", requireAdmin(adminH.ListGroupMembers))
+	mux.HandleFunc("POST /api/admin/groups/{id}/members", requireAdmin(mutLimit(http.HandlerFunc(adminH.AddGroupMember)).ServeHTTP))
+	mux.HandleFunc("PATCH /api/admin/groups/{id}/members/{userID}", requireAdmin(mutLimit(http.HandlerFunc(adminH.UpdateGroupMember)).ServeHTTP))
+	mux.HandleFunc("DELETE /api/admin/groups/{id}/members/{userID}", requireAdmin(mutLimit(http.HandlerFunc(adminH.RemoveGroupMember)).ServeHTTP))
 
 	// Static files embedded from public/ (HTML, CSS, JS bundles)
 	sub, err := fs.Sub(publicFS, "public")

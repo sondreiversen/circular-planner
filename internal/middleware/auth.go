@@ -8,6 +8,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"planner/internal/config"
+	"planner/internal/db"
 )
 
 type contextKey int
@@ -16,9 +17,10 @@ const ctxUser contextKey = 0
 
 // AuthUser is the decoded JWT payload attached to authenticated requests.
 type AuthUser struct {
-	ID       int    `json:"id"`
+	ID      int    `json:"id"`
 	Username string `json:"username"`
-	Email    string `json:"email"`
+	Email   string `json:"email"`
+	IsAdmin bool   `json:"is_admin"`
 }
 
 type plannerClaims struct {
@@ -30,7 +32,8 @@ type plannerClaims struct {
 
 // RequireAuth wraps a handler with JWT authentication.
 // On success it attaches the user to the request context via UserFrom.
-func RequireAuth(cfg *config.Config, next http.HandlerFunc) http.HandlerFunc {
+// It performs a DB lookup to populate IsAdmin so demotion takes effect immediately.
+func RequireAuth(cfg *config.Config, database *db.DB, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var tokenStr string
 		if header := r.Header.Get("Authorization"); strings.HasPrefix(header, "Bearer ") {
@@ -54,9 +57,25 @@ func RequireAuth(cfg *config.Config, next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		user := &AuthUser{ID: claims.ID, Username: claims.Username, Email: claims.Email}
+		var isAdmin bool
+		_ = database.QueryRowContext(r.Context(),
+			database.Rebind("SELECT is_admin FROM users WHERE id = ?"), claims.ID,
+		).Scan(&isAdmin)
+
+		user := &AuthUser{ID: claims.ID, Username: claims.Username, Email: claims.Email, IsAdmin: isAdmin}
 		next(w, r.WithContext(context.WithValue(r.Context(), ctxUser, user)))
 	}
+}
+
+// RequireAdmin wraps a handler, requiring both valid auth and is_admin = true.
+func RequireAdmin(cfg *config.Config, database *db.DB, next http.HandlerFunc) http.HandlerFunc {
+	return RequireAuth(cfg, database, func(w http.ResponseWriter, r *http.Request) {
+		if !UserFrom(r).IsAdmin {
+			jsonError(w, http.StatusForbidden, "Admin access required")
+			return
+		}
+		next(w, r)
+	})
 }
 
 // UserFrom extracts the authenticated user from the request context.

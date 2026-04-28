@@ -40,19 +40,19 @@ func NewServer(t *testing.T) (*httptest.Server, *config.Config, *db.DB) {
 	authH := auth.NewHandler(database, cfg)
 	mux.HandleFunc("POST /api/auth/register", authH.Register)
 	mux.HandleFunc("POST /api/auth/login", authH.Login)
-	mux.HandleFunc("GET /api/auth/me", middleware.RequireAuth(cfg, authH.Me))
+	mux.HandleFunc("GET /api/auth/me", middleware.RequireAuth(cfg, database, authH.Me))
 
 	planH := planners.NewHandler(database, cfg)
-	mux.HandleFunc("GET /api/planners", middleware.RequireAuth(cfg, planH.List))
-	mux.HandleFunc("POST /api/planners", middleware.RequireAuth(cfg, planH.Create))
-	mux.HandleFunc("GET /api/planners/{id}", middleware.RequireAuth(cfg, planH.Get))
-	mux.HandleFunc("PUT /api/planners/{id}", middleware.RequireAuth(cfg, planH.Update))
-	mux.HandleFunc("DELETE /api/planners/{id}", middleware.RequireAuth(cfg, planH.Delete))
+	mux.HandleFunc("GET /api/planners", middleware.RequireAuth(cfg, database, planH.List))
+	mux.HandleFunc("POST /api/planners", middleware.RequireAuth(cfg, database, planH.Create))
+	mux.HandleFunc("GET /api/planners/{id}", middleware.RequireAuth(cfg, database, planH.Get))
+	mux.HandleFunc("PUT /api/planners/{id}", middleware.RequireAuth(cfg, database, planH.Update))
+	mux.HandleFunc("DELETE /api/planners/{id}", middleware.RequireAuth(cfg, database, planH.Delete))
 
 	shareH := share.NewHandler(database, cfg)
-	mux.HandleFunc("GET /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, shareH.List))
-	mux.HandleFunc("POST /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, shareH.Create))
-	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/{userID}", middleware.RequireAuth(cfg, shareH.Delete))
+	mux.HandleFunc("GET /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, database, shareH.List))
+	mux.HandleFunc("POST /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, database, shareH.Create))
+	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/{userID}", middleware.RequireAuth(cfg, database, shareH.Delete))
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(func() {

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin — Circular Planner</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <style>
+    .admin-page { max-width: 960px; margin: 0 auto; padding: 28px 20px; }
+
+    .tab-bar { display: flex; gap: 4px; margin-bottom: 28px; border-bottom: 1px solid var(--cp-border); }
+    .tab-btn {
+      padding: 8px 20px;
+      border: none;
+      background: none;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--cp-text-muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .tab-btn.active { color: var(--cp-accent); border-bottom-color: var(--cp-accent); }
+
+    .admin-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .admin-table th {
+      text-align: left;
+      padding: 8px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--cp-text-muted);
+      border-bottom: 1px solid var(--cp-border);
+    }
+    .admin-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--cp-border);
+      vertical-align: middle;
+    }
+    .admin-table tr:last-child td { border-bottom: none; }
+    .admin-table tr:hover td { background: var(--cp-surface-2); }
+
+    .table-wrap {
+      background: var(--cp-surface);
+      border: 1px solid var(--cp-border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .badge-admin  { background: #fef3c7; color: #92400e; }
+    .badge-member { background: #f0f2f5; color: #5a6b7a; }
+
+    .action-cell { display: flex; gap: 6px; justify-content: flex-end; }
+
+    .group-row-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: var(--cp-surface);
+      border: 1px solid var(--cp-border);
+      border-radius: 8px;
+      margin-bottom: 6px;
+      cursor: pointer;
+    }
+    .group-row-header:hover { background: var(--cp-surface-2); }
+    .group-row-name { font-weight: 600; font-size: 14px; }
+    .group-row-meta { font-size: 12px; color: var(--cp-text-muted); }
+    .group-members-panel {
+      background: var(--cp-surface-2);
+      border: 1px solid var(--cp-border);
+      border-radius: 8px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+
+    .add-member-form {
+      background: var(--cp-surface-2);
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 12px;
+    }
+    .add-member-form h4 { font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+    .add-member-fields { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+    .add-member-fields label { flex: 1; min-width: 180px; }
+
+    .search-results {
+      border: 1px solid var(--cp-border-strong);
+      border-radius: 6px;
+      background: var(--cp-surface);
+      max-height: 200px;
+      overflow-y: auto;
+      margin-top: 4px;
+    }
+    .search-result-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 13px;
+      border-bottom: 1px solid var(--cp-border);
+    }
+    .search-result-item:last-child { border-bottom: none; }
+    .search-result-item:hover { background: var(--cp-surface-2); }
+    .search-result-name { font-weight: 500; }
+    .search-result-email { font-size: 12px; color: var(--cp-text-muted); }
+
+    .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .section-header h2 { margin: 0; }
+  </style>
+</head>
+<body class="app-page">
+  <header class="app-header">
+    <div class="header-left">
+      <a href="/dashboard.html" class="back-link">← Dashboard</a>
+    </div>
+    <div class="header-right">
+      <span id="header-username" class="header-user"></span>
+      <button id="theme-toggle" class="btn-theme" title="Toggle dark mode">🌙</button>
+      <button id="logout-btn" class="btn btn-ghost">Sign Out</button>
+    </div>
+  </header>
+
+  <main class="admin-page">
+    <div class="tab-bar">
+      <button class="tab-btn active" id="tab-users">Users</button>
+      <button class="tab-btn" id="tab-groups">Groups</button>
+    </div>
+
+    <!-- Users tab -->
+    <section id="section-users">
+      <div class="section-header">
+        <h2>All Users</h2>
+      </div>
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Username</th>
+              <th>Email</th>
+              <th>Provider</th>
+              <th>Admin</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="users-tbody">
+            <tr><td colspan="7" class="loading-state">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Groups tab -->
+    <section id="section-groups" class="hidden">
+      <div class="section-header">
+        <h2>All Groups</h2>
+      </div>
+      <div id="groups-list">
+        <div class="loading-state">Loading…</div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/js/admin-bundle.js"></script>
+</body>
+</html>

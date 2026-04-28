@@ -26,10 +26,9 @@ func NewHandler(database *db.DB, cfg *config.Config) *Handler {
 }
 
 // Register mounts group routes on mux. All routes require authentication.
-// Callers should wrap with middleware.RequireAuth as appropriate in main.go.
-func (h *Handler) Register(mux *http.ServeMux, cfg *config.Config) {
+func (h *Handler) Register(mux *http.ServeMux, cfg *config.Config, database *db.DB) {
 	auth := func(fn http.HandlerFunc) http.HandlerFunc {
-		return middleware.RequireAuth(cfg, fn)
+		return middleware.RequireAuth(cfg, database, fn)
 	}
 	mux.HandleFunc("GET /api/groups", auth(h.List))
 	mux.HandleFunc("POST /api/groups", auth(h.Create))

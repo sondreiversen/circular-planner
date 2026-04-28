@@ -40,19 +40,24 @@ func runCreateAdmin(database *db.DB, args []string) error {
 
 	ctx := context.Background()
 
-	// Idempotent: if the email already exists, leave the record alone and report success.
+	// Idempotent: if the email already exists, promote to admin and report success.
 	var existingID int
 	if err := database.QueryRowContext(ctx,
 		database.Rebind("SELECT id FROM users WHERE email = ?"), e,
 	).Scan(&existingID); err == nil {
-		fmt.Printf("Admin user %q (%s) already exists — skipping.\n", u, e)
+		if _, err := database.ExecContext(ctx,
+			database.Rebind("UPDATE users SET is_admin = 1 WHERE id = ?"), existingID,
+		); err != nil {
+			return fmt.Errorf("promote existing user: %w", err)
+		}
+		fmt.Printf("Admin user %q (%s) already exists — promoted to admin.\n", u, e)
 		return nil
 	}
 
 	var id int
 	if err := database.QueryRowContext(ctx,
-		database.Rebind(`INSERT INTO users(username, email, password_hash)
-		                 VALUES (?, ?, ?) RETURNING id`),
+		database.Rebind(`INSERT INTO users(username, email, password_hash, is_admin)
+		                 VALUES (?, ?, ?, 1) RETURNING id`),
 		u, e, string(hash),
 	).Scan(&id); err != nil {
 		return fmt.Errorf("insert user: %w", err)

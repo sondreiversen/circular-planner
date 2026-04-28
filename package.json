@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build:client": "esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts groups=client/src/groups.ts --bundle --outdir=public/js --entry-names=[name]-bundle --minify --target=es2020",
-    "dev:client": "esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts groups=client/src/groups.ts --bundle --outdir=public/js --entry-names=[name]-bundle --sourcemap=inline --target=es2020 --watch",
+    "build:client": "esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts groups=client/src/groups.ts admin=client/src/admin.ts --bundle --outdir=public/js --entry-names=[name]-bundle --minify --target=es2020",
+    "dev:client": "esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts groups=client/src/groups.ts admin=client/src/admin.ts --bundle --outdir=public/js --entry-names=[name]-bundle --sourcemap=inline --target=es2020 --watch",
     "start:go": "go run .",
     "build:go": "npm run build:client && go build -o planner .",
     "test": "jest"
