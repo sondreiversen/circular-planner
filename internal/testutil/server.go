@@ -32,8 +32,9 @@ func NewServer(t *testing.T) (*httptest.Server, *config.Config, *db.DB) {
 	}
 
 	cfg := &config.Config{
-		JWTSecret:     "test-secret-at-least-32-characters-long-x",
-		AllowedOrigin: "http://localhost:3000",
+		JWTSecret:         "test-secret-at-least-32-characters-long-x",
+		AllowedOrigin:     "http://localhost:3000",
+		AllowRegistration: true,
 	}
 
 	mux := http.NewServeMux()
