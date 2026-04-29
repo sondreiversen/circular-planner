@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -36,27 +37,6 @@ func readJSON(r *http.Request, v any) error {
 	return json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(v)
 }
 
-// guardLastGlobalAdmin returns an error if targetUserID is an admin and they
-// are the only remaining global admin.
-func (h *Handler) guardLastGlobalAdmin(r *http.Request, targetUserID int) error {
-	var isAdmin bool
-	err := h.db.QueryRowContext(r.Context(),
-		h.db.Rebind("SELECT is_admin FROM users WHERE id = ?"), targetUserID,
-	).Scan(&isAdmin)
-	if errors.Is(err, sql.ErrNoRows) || !isAdmin {
-		return nil
-	}
-	var count int
-	if err := h.db.QueryRowContext(r.Context(),
-		h.db.Rebind("SELECT COUNT(*) FROM users WHERE is_admin = 1"),
-	).Scan(&count); err != nil {
-		return errors.New("internal server error")
-	}
-	if count <= 1 {
-		return errors.New("cannot remove or demote the last global admin")
-	}
-	return nil
-}
 
 // --- GET /api/admin/users ---
 
@@ -95,7 +75,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 // --- PATCH /api/admin/users/{id} ---
 
 func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
-	caller := middleware.UserFrom(r)
+	_ = middleware.UserFrom(r)
 	targetID, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "Invalid user ID")
@@ -115,27 +95,27 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !*body.IsAdmin {
-		if err := h.guardLastGlobalAdmin(r, targetID); err != nil {
-			jsonError(w, http.StatusConflict, err.Error())
+		// Atomic: only demote if more than one admin exists, preventing TOCTOU races.
+		res, err := h.db.ExecContext(r.Context(), h.db.Rebind(
+			`UPDATE users SET is_admin = 0 WHERE id = ?
+			  AND (SELECT COUNT(*) FROM users WHERE is_admin = 1) > 1`,
+		), targetID)
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
 			return
 		}
-		if caller.ID == targetID {
-			if err := h.guardLastGlobalAdmin(r, targetID); err != nil {
-				jsonError(w, http.StatusConflict, err.Error())
-				return
-			}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			jsonError(w, http.StatusConflict, "cannot remove or demote the last global admin")
+			return
 		}
-	}
-
-	val := 0
-	if *body.IsAdmin {
-		val = 1
-	}
-	if _, err := h.db.ExecContext(r.Context(),
-		h.db.Rebind("UPDATE users SET is_admin = ? WHERE id = ?"), val, targetID,
-	); err != nil {
-		jsonError(w, http.StatusInternalServerError, "Internal server error")
-		return
+	} else {
+		if _, err := h.db.ExecContext(r.Context(),
+			h.db.Rebind("UPDATE users SET is_admin = 1 WHERE id = ?"), targetID,
+		); err != nil {
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
@@ -153,15 +133,34 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "Cannot delete your own account")
 		return
 	}
-	if err := h.guardLastGlobalAdmin(r, targetID); err != nil {
-		jsonError(w, http.StatusConflict, err.Error())
+
+	var ownedPlanners int
+	if err := h.db.QueryRowContext(r.Context(),
+		h.db.Rebind("SELECT COUNT(*) FROM planners WHERE owner_id = ?"), targetID,
+	).Scan(&ownedPlanners); err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	if ownedPlanners > 0 {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":          fmt.Sprintf("user owns %d planner(s); transfer or delete them first", ownedPlanners),
+			"owned_planners": ownedPlanners,
+		})
 		return
 	}
 
-	if _, err := h.db.ExecContext(r.Context(),
-		h.db.Rebind("DELETE FROM users WHERE id = ?"), targetID,
-	); err != nil {
+
+	res, err := h.db.ExecContext(r.Context(), h.db.Rebind(
+		`DELETE FROM users WHERE id = ?
+		  AND (is_admin = 0 OR (SELECT COUNT(*) FROM users WHERE is_admin = 1) > 1)`,
+	), targetID)
+	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		jsonError(w, http.StatusConflict, "cannot remove or demote the last global admin")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})

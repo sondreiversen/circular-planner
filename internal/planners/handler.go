@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"planner/internal/config"
 	"planner/internal/db"
@@ -317,36 +316,20 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	// Concurrent-edit detection: if client_updated_at is provided, check for staleness.
-	if body.ClientUpdatedAt != "" {
-		clientT, err := time.Parse(time.RFC3339, body.ClientUpdatedAt)
-		if err != nil {
-			jsonError(w, http.StatusBadRequest, "client_updated_at must be RFC3339")
-			return
-		}
+	var serverUpdatedAt string
+	if err := tx.QueryRowContext(r.Context(),
+		h.db.Rebind("SELECT updated_at FROM planners WHERE id = ?"), plannerID,
+	).Scan(&serverUpdatedAt); err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
 
-		var serverUpdatedAt string
-		if err := tx.QueryRowContext(r.Context(),
-			h.db.Rebind("SELECT updated_at FROM planners WHERE id = ?"), plannerID,
-		).Scan(&serverUpdatedAt); err != nil {
-			jsonError(w, http.StatusInternalServerError, "Internal server error")
-			return
-		}
-		serverT, err := time.Parse(time.RFC3339, serverUpdatedAt)
-		if err != nil {
-			// Try without timezone suffix (SQLite TEXT format)
-			serverT, err = time.Parse("2006-01-02T15:04:05Z", serverUpdatedAt)
-		}
-		if err == nil {
-			// Allow 1-second tolerance to absorb DB rounding.
-			if serverT.After(clientT.Add(time.Second)) {
-				writeJSON(w, http.StatusConflict, map[string]any{
-					"error":             "conflict",
-					"server_updated_at": serverUpdatedAt,
-				})
-				return
-			}
-		}
+	if body.ClientUpdatedAt != "" && body.ClientUpdatedAt != serverUpdatedAt {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":             "conflict",
+			"server_updated_at": serverUpdatedAt,
+		})
+		return
 	}
 
 	// Update planner metadata if provided
@@ -377,10 +360,71 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if body.Lanes != nil {
-		// Collect IDs
+		incomingLaneIDs := make(map[string]struct{}, len(body.Lanes))
 		laneIDs := make([]string, len(body.Lanes))
 		for i, l := range body.Lanes {
+			incomingLaneIDs[l.ID] = struct{}{}
 			laneIDs[i] = l.ID
+		}
+
+		existingLaneRows, err := tx.QueryContext(r.Context(),
+			h.db.Rebind("SELECT id FROM lanes WHERE planner_id = ?"), plannerID)
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
+		var willDeleteLane bool
+		for existingLaneRows.Next() {
+			var eid string
+			existingLaneRows.Scan(&eid)
+			if _, ok := incomingLaneIDs[eid]; !ok {
+				willDeleteLane = true
+				break
+			}
+		}
+		existingLaneRows.Close()
+
+		// Also check activities.
+		existingActRows, err := tx.QueryContext(r.Context(),
+			h.db.Rebind("SELECT id FROM activities WHERE planner_id = ?"), plannerID)
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
+		incomingActIDs := make(map[string]struct{})
+		for _, l := range body.Lanes {
+			for _, a := range l.Activities {
+				incomingActIDs[a.ID] = struct{}{}
+			}
+		}
+		var willDeleteAct bool
+		for existingActRows.Next() {
+			var eid string
+			existingActRows.Scan(&eid)
+			if _, ok := incomingActIDs[eid]; !ok {
+				willDeleteAct = true
+				break
+			}
+		}
+		existingActRows.Close()
+
+		if willDeleteLane || willDeleteAct {
+			var ownerID int
+			if err := tx.QueryRowContext(r.Context(),
+				h.db.Rebind("SELECT owner_id FROM planners WHERE id = ?"), plannerID,
+			).Scan(&ownerID); err != nil || ownerID != userID {
+				jsonError(w, http.StatusForbidden, "only the owner can delete lanes or activities")
+				return
+			}
+		}
+
+		for _, l := range body.Lanes {
+			for _, a := range l.Activities {
+				if _, ok := incomingLaneIDs[a.LaneID]; !ok {
+					jsonError(w, http.StatusBadRequest, "activity references unknown lane_id")
+					return
+				}
+			}
 		}
 
 		// Delete lanes not in incoming set
@@ -427,6 +471,16 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 				      description = excluded.description, start_date = excluded.start_date,
 				      end_date = excluded.end_date, color = excluded.color, label = excluded.label
 			`), a.ID, a.LaneID, plannerID, a.Title, desc, a.StartDate, a.EndDate, a.Color, label); err != nil {
+				jsonError(w, http.StatusInternalServerError, "Internal server error")
+				return
+			}
+		}
+
+		// Always bump updated_at when lanes/activities change (even if metadata unchanged).
+		if body.Title == nil && body.StartDate == nil && body.EndDate == nil {
+			if _, err := tx.ExecContext(r.Context(),
+				h.db.Rebind("UPDATE planners SET updated_at = "+nowExpr(h.db)+" WHERE id = ?"),
+				plannerID); err != nil {
 				jsonError(w, http.StatusInternalServerError, "Internal server error")
 				return
 			}

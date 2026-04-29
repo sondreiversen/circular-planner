@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"planner/internal/admin"
 	"planner/internal/auth"
 	"planner/internal/config"
 	"planner/internal/db"
@@ -54,6 +55,11 @@ func NewServer(t *testing.T) (*httptest.Server, *config.Config, *db.DB) {
 	mux.HandleFunc("GET /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, database, shareH.List))
 	mux.HandleFunc("POST /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, database, shareH.Create))
 	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/{userID}", middleware.RequireAuth(cfg, database, shareH.Delete))
+
+	adminH := admin.NewHandler(database)
+	mux.HandleFunc("GET /api/admin/users", middleware.RequireAdmin(cfg, database, adminH.ListUsers))
+	mux.HandleFunc("PATCH /api/admin/users/{id}", middleware.RequireAdmin(cfg, database, adminH.UpdateUser))
+	mux.HandleFunc("DELETE /api/admin/users/{id}", middleware.RequireAdmin(cfg, database, adminH.DeleteUser))
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(func() {

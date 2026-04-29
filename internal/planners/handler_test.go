@@ -11,6 +11,29 @@ import (
 	"planner/internal/testutil"
 )
 
+// sharePlanner grants edit access to editEmail via the share API.
+func sharePlanner(t *testing.T, base string, ownerTok string, plannerID int, editEmail string) {
+	t.Helper()
+	resp, raw := do(t, "POST", fmt.Sprintf("%s/api/planners/%d/shares", base, plannerID), ownerTok,
+		map[string]any{"email": editEmail, "permission": "edit"})
+	if resp.StatusCode != 201 && resp.StatusCode != 200 {
+		t.Fatalf("share: %d %s", resp.StatusCode, raw)
+	}
+}
+
+func getUserID(t *testing.T, base, tok string) int {
+	t.Helper()
+	resp, raw := do(t, "GET", base+"/api/auth/me", tok, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("me: %d %s", resp.StatusCode, raw)
+	}
+	var out struct {
+		User struct{ ID int }
+	}
+	json.Unmarshal(raw, &out)
+	return out.User.ID
+}
+
 func do(t *testing.T, method, url, token string, body any) (*http.Response, []byte) {
 	t.Helper()
 	var r io.Reader
@@ -154,5 +177,88 @@ func TestConcurrentEditConflict(t *testing.T) {
 	})
 	if resp.StatusCode != 200 {
 		t.Errorf("fresh PUT: got %d, want 200 (body: %s)", resp.StatusCode, raw)
+	}
+}
+
+// TestR1EditUserCannotDestroyContent verifies that a user with edit permission
+// cannot wipe lanes/activities, but can make additive-only changes.
+func TestR1EditUserCannotDestroyContent(t *testing.T) {
+	srv, _, _ := testutil.NewServer(t)
+
+	ownerTok := registerHelper(t, srv.URL, "owner1", "owner1@example.com", "hunter2hunter2")
+	editTok := registerHelper(t, srv.URL, "editor1", "editor1@example.com", "hunter2hunter2")
+
+	// Owner creates planner
+	resp, raw := do(t, "POST", srv.URL+"/api/planners", ownerTok,
+		map[string]string{"title": "Shared", "startDate": "2026-01-01", "endDate": "2026-12-31"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create: %d %s", resp.StatusCode, raw)
+	}
+	var created struct{ ID int }
+	json.Unmarshal(raw, &created)
+
+	// Add a lane via PUT (as owner)
+	resp, raw = do(t, "PUT", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), ownerTok, map[string]any{
+		"lanes": []any{
+			map[string]any{"id": "lane1", "name": "Lane One", "order": 1, "color": "#ff0000", "activities": []any{}},
+		},
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("owner PUT with lane: %d %s", resp.StatusCode, raw)
+	}
+
+	// Share with editor1 using email
+	sharePlanner(t, srv.URL, ownerTok, created.ID, "editor1@example.com")
+
+	// Editor PUTs empty lanes → 403 (would delete lane1)
+	resp, raw = do(t, "PUT", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), editTok, map[string]any{
+		"lanes": []any{},
+	})
+	if resp.StatusCode != 403 {
+		t.Errorf("edit wipe: got %d, want 403 (body: %s)", resp.StatusCode, raw)
+	}
+
+	// Editor adds a new lane without removing lane1 → 200
+	resp, raw = do(t, "PUT", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), editTok, map[string]any{
+		"lanes": []any{
+			map[string]any{"id": "lane1", "name": "Lane One", "order": 1, "color": "#ff0000", "activities": []any{}},
+			map[string]any{"id": "lane2", "name": "Lane Two", "order": 2, "color": "#00ff00", "activities": []any{}},
+		},
+	})
+	if resp.StatusCode != 200 {
+		t.Errorf("edit additive: got %d, want 200 (body: %s)", resp.StatusCode, raw)
+	}
+}
+
+// TestR4UnknownLaneID verifies that an activity referencing a non-existent lane returns 400.
+func TestR4UnknownLaneID(t *testing.T) {
+	srv, _, _ := testutil.NewServer(t)
+	tok := registerHelper(t, srv.URL, "owner2", "owner2@example.com", "hunter2hunter2")
+
+	resp, raw := do(t, "POST", srv.URL+"/api/planners", tok,
+		map[string]string{"title": "P", "startDate": "2026-01-01", "endDate": "2026-12-31"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create: %d %s", resp.StatusCode, raw)
+	}
+	var created struct{ ID int }
+	json.Unmarshal(raw, &created)
+
+	// Activity references lane "ghost" which is not in body.Lanes → 400
+	resp, raw = do(t, "PUT", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), tok, map[string]any{
+		"lanes": []any{
+			map[string]any{
+				"id": "lane1", "name": "L", "order": 1, "color": "#000",
+				"activities": []any{
+					map[string]any{
+						"id": "act1", "laneId": "ghost", "title": "X",
+						"description": "", "startDate": "2026-01-01", "endDate": "2026-01-31",
+						"color": "#000", "label": "",
+					},
+				},
+			},
+		},
+	})
+	if resp.StatusCode != 400 {
+		t.Errorf("unknown laneId: got %d, want 400 (body: %s)", resp.StatusCode, raw)
 	}
 }

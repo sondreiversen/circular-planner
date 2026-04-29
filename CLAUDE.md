@@ -177,6 +177,8 @@ Four zoom levels: **Year → Quarter → Month → Week**
 | `TLS_CERT_FILE` | — | TLS certificate path |
 | `TLS_KEY_FILE` | — | TLS private key path |
 | `FORCE_HTTPS` | `true` | HTTP → HTTPS redirect when TLS active |
+| `ALLOW_REGISTRATION` | `true` | Allow new user self-registration. **Set to `false` for any publicly reachable instance.** Default `true` only because most deployments are private/LAN. |
+| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` headers (set `true` behind a reverse proxy) |
 | `GITLAB_SSO_ENABLED` | `false` | Enable GitLab OAuth2 |
 | `GITLAB_INSTANCE_URL` | — | GitLab base URL |
 | `GITLAB_CLIENT_ID` | — | GitLab OAuth2 app ID |
