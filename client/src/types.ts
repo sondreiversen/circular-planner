@@ -29,6 +29,15 @@ export interface Lane {
   activities: Activity[];
 }
 
+export type RecurrenceType = 'daily' | 'weekly';
+
+export interface Recurrence {
+  type: RecurrenceType;
+  interval: number;     // >= 1; for 'daily' = every N days, for 'weekly' = every N weeks
+  weekdays?: number[];  // 0=Sun..6=Sat; required & non-empty when type='weekly'
+  until?: string;       // YYYY-MM-DD; optional cap
+}
+
 export interface Activity {
   id: string;
   laneId: string;
@@ -39,6 +48,7 @@ export interface Activity {
   color: string;     // arc fill color
   label: string;     // free-text label, e.g. "vacation" — empty = none
   createdBy?: string | null;
+  recurrence?: Recurrence | null;
 }
 
 export enum ZoomLevel {
@@ -71,6 +81,7 @@ export interface User {
   id: number;
   username: string;
   email: string;
+  fullName?: string | null;
 }
 
 export interface PlannerSummary {
@@ -87,6 +98,7 @@ export interface ShareEntry {
   user_id: number;
   username: string;
   email: string;
+  fullName?: string | null;
   permission: 'view' | 'edit';
 }
 

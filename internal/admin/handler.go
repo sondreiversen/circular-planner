@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"planner/internal/db"
 	"planner/internal/middleware"
@@ -42,7 +43,7 @@ func readJSON(r *http.Request, v any) error {
 
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.db.QueryContext(r.Context(),
-		`SELECT id, username, email, auth_provider, is_admin, created_at FROM users ORDER BY id`,
+		h.db.Rebind(`SELECT id, username, email, COALESCE(full_name,'') AS full_name, auth_provider, is_admin, created_at FROM users ORDER BY id`),
 	)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "Internal server error")
@@ -54,6 +55,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		ID           int     `json:"id"`
 		Username     string  `json:"username"`
 		Email        string  `json:"email"`
+		FullName     string  `json:"full_name"`
 		AuthProvider *string `json:"auth_provider"`
 		IsAdmin      bool    `json:"is_admin"`
 		CreatedAt    string  `json:"created_at"`
@@ -62,7 +64,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var u userRow
 		var isAdminInt int
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.AuthProvider, &isAdminInt, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.FullName, &u.AuthProvider, &isAdminInt, &u.CreatedAt); err != nil {
 			jsonError(w, http.StatusInternalServerError, "Internal server error")
 			return
 		}
@@ -209,11 +211,11 @@ func (h *Handler) ListGroupMembers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.QueryContext(r.Context(),
-		h.db.Rebind(`SELECT u.id, u.username, u.email, gm.role
+		h.db.Rebind(`SELECT u.id, u.username, u.email, COALESCE(u.full_name,'') AS full_name, gm.role
 		FROM group_members gm
 		JOIN users u ON u.id = gm.user_id
 		WHERE gm.group_id = ?
-		ORDER BY u.username`),
+		ORDER BY COALESCE(NULLIF(u.full_name,''), u.username)`),
 		groupID,
 	)
 	if err != nil {
@@ -226,12 +228,13 @@ func (h *Handler) ListGroupMembers(w http.ResponseWriter, r *http.Request) {
 		UserID   int    `json:"user_id"`
 		Username string `json:"username"`
 		Email    string `json:"email"`
+		FullName string `json:"fullName,omitempty"`
 		Role     string `json:"role"`
 	}
 	result := make([]member, 0)
 	for rows.Next() {
 		var m member
-		if err := rows.Scan(&m.UserID, &m.Username, &m.Email, &m.Role); err != nil {
+		if err := rows.Scan(&m.UserID, &m.Username, &m.Email, &m.FullName, &m.Role); err != nil {
 			jsonError(w, http.StatusInternalServerError, "Internal server error")
 			return
 		}
@@ -250,16 +253,20 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		UserID int    `json:"user_id"`
-		Role   string `json:"role"`
+		UserIDs []int  `json:"user_ids"`
+		Role    string `json:"role"`
 	}
 	body.Role = "member"
 	if err := readJSON(r, &body); err != nil {
 		jsonError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-	if body.UserID == 0 {
-		jsonError(w, http.StatusBadRequest, "user_id is required")
+	if len(body.UserIDs) == 0 {
+		jsonError(w, http.StatusBadRequest, "user_ids is required")
+		return
+	}
+	if len(body.UserIDs) > 100 {
+		jsonError(w, http.StatusBadRequest, "too many users")
 		return
 	}
 	if body.Role != "admin" && body.Role != "member" {
@@ -267,13 +274,37 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var exists int
+	// Deduplicate
+	seen := make(map[int]struct{}, len(body.UserIDs))
+	unique := body.UserIDs[:0]
+	for _, id := range body.UserIDs {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			unique = append(unique, id)
+		}
+	}
+	body.UserIDs = unique
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(body.UserIDs)), ",")
+	args := make([]any, len(body.UserIDs))
+	for i, id := range body.UserIDs {
+		args[i] = id
+	}
+	var count int
 	if err := h.db.QueryRowContext(r.Context(),
-		h.db.Rebind("SELECT COUNT(*) FROM users WHERE id = ?"), body.UserID,
-	).Scan(&exists); err != nil || exists == 0 {
-		jsonError(w, http.StatusNotFound, "User not found")
+		h.db.Rebind("SELECT COUNT(*) FROM users WHERE id IN ("+placeholders+")"),
+		args...,
+	).Scan(&count); err != nil || count != len(body.UserIDs) {
+		jsonError(w, http.StatusNotFound, "one or more users not found")
 		return
 	}
+
+	tx, err := h.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
 
 	var upsertSQL string
 	if h.db.Dialect == db.SQLite {
@@ -281,7 +312,13 @@ func (h *Handler) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 	} else {
 		upsertSQL = "INSERT INTO group_members(group_id, user_id, role) VALUES($1,$2,$3) ON CONFLICT (group_id, user_id) DO UPDATE SET role=$3"
 	}
-	if _, err := h.db.ExecContext(r.Context(), upsertSQL, groupID, body.UserID, body.Role); err != nil {
+	for _, uid := range body.UserIDs {
+		if _, err := tx.ExecContext(r.Context(), upsertSQL, groupID, uid, body.Role); err != nil {
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		jsonError(w, http.StatusInternalServerError, "Internal server error")
 		return
 	}

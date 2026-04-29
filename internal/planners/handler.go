@@ -56,7 +56,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserFrom(r).ID
 	rows, err := h.db.QueryContext(r.Context(), h.db.Rebind(`
 		SELECT p.id, p.title, p.start_date, p.end_date, p.owner_id,
-		       u.username AS owner_username,
+		       COALESCE(NULLIF(u.full_name, ''), u.username) AS owner_username,
 		       CASE WHEN p.owner_id = ? THEN 'owner' ELSE ps.permission END AS permission
 		FROM planners p
 		JOIN users u ON u.id = p.owner_id
@@ -202,7 +202,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch activities
 	actRows, err := h.db.QueryContext(r.Context(),
-		h.db.Rebind("SELECT id, lane_id, title, description, start_date, end_date, color, label FROM activities WHERE planner_id = ?"),
+		h.db.Rebind("SELECT id, lane_id, title, description, start_date, end_date, color, label, recurrence_type, recurrence_interval, recurrence_weekdays, recurrence_until FROM activities WHERE planner_id = ?"),
 		plannerID,
 	)
 	if err != nil {
@@ -214,20 +214,39 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	for actRows.Next() {
 		var id, laneID, title, description, color, label string
 		var startDate, endDate db.DateStr
-		if err := actRows.Scan(&id, &laneID, &title, &description, &startDate, &endDate, &color, &label); err != nil {
+		var recType sql.NullString
+		var recInterval sql.NullInt64
+		var recWeekdays sql.NullString
+		var recUntil sql.NullString
+		if err := actRows.Scan(&id, &laneID, &title, &description, &startDate, &endDate, &color, &label,
+			&recType, &recInterval, &recWeekdays, &recUntil); err != nil {
 			continue
 		}
+		act := map[string]any{
+			"id":          id,
+			"laneId":      laneID,
+			"title":       title,
+			"description": description,
+			"startDate":   startDate.String(),
+			"endDate":     endDate.String(),
+			"color":       color,
+			"label":       label,
+		}
+		if recType.Valid {
+			rec := map[string]any{
+				"type":     recType.String,
+				"interval": int(recInterval.Int64),
+			}
+			if recWeekdays.Valid && recWeekdays.String != "" {
+				rec["weekdays"] = parseWeekdaysCSV(recWeekdays.String)
+			}
+			if recUntil.Valid {
+				rec["until"] = recUntil.String
+			}
+			act["recurrence"] = rec
+		}
 		if l, ok := laneMap[laneID]; ok {
-			l.Activities = append(l.Activities, map[string]any{
-				"id":          id,
-				"laneId":      laneID,
-				"title":       title,
-				"description": description,
-				"startDate":   startDate.String(),
-				"endDate":     endDate.String(),
-				"color":       color,
-				"label":       label,
-			})
+			l.Activities = append(l.Activities, act)
 		}
 	}
 
@@ -263,15 +282,23 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 
 // --- PUT /api/planners/{id} ---
 
+type recurrenceInput struct {
+	Type     string  `json:"type"`
+	Interval int     `json:"interval"`
+	Weekdays []int   `json:"weekdays,omitempty"`
+	Until    *string `json:"until,omitempty"`
+}
+
 type activityInput struct {
-	ID          string `json:"id"`
-	LaneID      string `json:"laneId"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	StartDate   string `json:"startDate"`
-	EndDate     string `json:"endDate"`
-	Color       string `json:"color"`
-	Label       string `json:"label"`
+	ID          string           `json:"id"`
+	LaneID      string           `json:"laneId"`
+	Title       string           `json:"title"`
+	Description string           `json:"description"`
+	StartDate   string           `json:"startDate"`
+	EndDate     string           `json:"endDate"`
+	Color       string           `json:"color"`
+	Label       string           `json:"label"`
+	Recurrence  *recurrenceInput `json:"recurrence,omitempty"`
 }
 
 type laneInput struct {
@@ -463,14 +490,45 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		for _, a := range allActivities {
 			desc := a.Description
 			label := a.Label
+
+			var recType, recWeekdays, recUntil sql.NullString
+			var recInterval sql.NullInt64
+
+			if a.Recurrence != nil {
+				rec := a.Recurrence
+				if rec.Type != "daily" && rec.Type != "weekly" {
+					jsonError(w, http.StatusBadRequest, "recurrence.type must be 'daily' or 'weekly'")
+					return
+				}
+				if rec.Interval < 1 {
+					jsonError(w, http.StatusBadRequest, "recurrence.interval must be >= 1")
+					return
+				}
+				if rec.Type == "weekly" && len(rec.Weekdays) == 0 {
+					jsonError(w, http.StatusBadRequest, "recurrence.weekdays must not be empty for weekly recurrence")
+					return
+				}
+				recType = sql.NullString{String: rec.Type, Valid: true}
+				recInterval = sql.NullInt64{Int64: int64(rec.Interval), Valid: true}
+				if len(rec.Weekdays) > 0 {
+					recWeekdays = sql.NullString{String: formatWeekdaysCSV(rec.Weekdays), Valid: true}
+				}
+				if rec.Until != nil {
+					recUntil = sql.NullString{String: *rec.Until, Valid: true}
+				}
+			}
+
 			if _, err := tx.ExecContext(r.Context(), h.db.Rebind(`
-				INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color, label)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color, label, recurrence_type, recurrence_interval, recurrence_weekdays, recurrence_until)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(id, planner_id) DO UPDATE
 				  SET lane_id = excluded.lane_id, title = excluded.title,
 				      description = excluded.description, start_date = excluded.start_date,
-				      end_date = excluded.end_date, color = excluded.color, label = excluded.label
-			`), a.ID, a.LaneID, plannerID, a.Title, desc, a.StartDate, a.EndDate, a.Color, label); err != nil {
+				      end_date = excluded.end_date, color = excluded.color, label = excluded.label,
+				      recurrence_type = excluded.recurrence_type, recurrence_interval = excluded.recurrence_interval,
+				      recurrence_weekdays = excluded.recurrence_weekdays, recurrence_until = excluded.recurrence_until
+			`), a.ID, a.LaneID, plannerID, a.Title, desc, a.StartDate, a.EndDate, a.Color, label,
+				recType, recInterval, recWeekdays, recUntil); err != nil {
 				jsonError(w, http.StatusInternalServerError, "Internal server error")
 				return
 			}
@@ -542,4 +600,29 @@ func nowExpr(database *db.DB) string {
 		return "NOW()"
 	}
 	return "(strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
+}
+
+// formatWeekdaysCSV serializes a slice of weekday ints to a CSV string like "1,3,5".
+func formatWeekdaysCSV(days []int) string {
+	parts := make([]string, len(days))
+	for i, d := range days {
+		parts[i] = strconv.Itoa(d)
+	}
+	return strings.Join(parts, ",")
+}
+
+// parseWeekdaysCSV deserializes a CSV string like "1,3,5" to a slice of ints.
+func parseWeekdaysCSV(csv string) []int {
+	parts := strings.Split(csv, ",")
+	result := make([]int, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if n, err := strconv.Atoi(p); err == nil {
+			result = append(result, n)
+		}
+	}
+	return result
 }

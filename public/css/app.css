@@ -806,3 +806,38 @@ input:focus, select:focus {
   outline: 2px solid var(--cp-text, #1a2332);
   outline-offset: 1px;
 }
+
+/* Member chips for multi-select add-member UI */
+.member-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  min-height: 0;
+}
+.member-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--cp-accent);
+  color: #fff;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.chip-remove {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0.8;
+}
+.chip-remove:hover { opacity: 1; }
+
+/* Admin panel: member display name + username sub */
+.member-display-name { font-weight: 500; }
+.member-sub { font-size: 11px; color: var(--cp-text-muted); }

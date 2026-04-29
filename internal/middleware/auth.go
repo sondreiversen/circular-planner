@@ -17,10 +17,19 @@ const ctxUser contextKey = 0
 
 // AuthUser is the decoded JWT payload attached to authenticated requests.
 type AuthUser struct {
-	ID      int    `json:"id"`
+	ID       int    `json:"id"`
 	Username string `json:"username"`
-	Email   string `json:"email"`
-	IsAdmin bool   `json:"is_admin"`
+	Email    string `json:"email"`
+	FullName string `json:"full_name,omitempty"`
+	IsAdmin  bool   `json:"is_admin"`
+}
+
+// DisplayName returns FullName if non-empty, otherwise Username.
+func (u *AuthUser) DisplayName() string {
+	if s := strings.TrimSpace(u.FullName); s != "" {
+		return s
+	}
+	return u.Username
 }
 
 type plannerClaims struct {
@@ -58,11 +67,12 @@ func RequireAuth(cfg *config.Config, database *db.DB, next http.HandlerFunc) htt
 		}
 
 		var isAdmin bool
+		var fullName string
 		_ = database.QueryRowContext(r.Context(),
-			database.Rebind("SELECT is_admin FROM users WHERE id = ?"), claims.ID,
-		).Scan(&isAdmin)
+			database.Rebind("SELECT is_admin, COALESCE(full_name,'') FROM users WHERE id = ?"), claims.ID,
+		).Scan(&isAdmin, &fullName)
 
-		user := &AuthUser{ID: claims.ID, Username: claims.Username, Email: claims.Email, IsAdmin: isAdmin}
+		user := &AuthUser{ID: claims.ID, Username: claims.Username, Email: claims.Email, FullName: fullName, IsAdmin: isAdmin}
 		next(w, r.WithContext(context.WithValue(r.Context(), ctxUser, user)))
 	}
 }

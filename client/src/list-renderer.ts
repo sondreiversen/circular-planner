@@ -189,8 +189,9 @@ export class ListRenderer {
         box.style.top = `${ROW_PADDING_Y + subRow * SUB_ROW_HEIGHT}px`;
         box.style.height = `${SUB_ROW_HEIGHT - 4}px`;
         box.style.background = activity.color || '#4c8bf5';
-        box.title = `${activity.title}\n${formatDate(start)} → ${formatDate(end)}${activity.description ? '\n' + activity.description : ''}`;
-        box.textContent = activity.title;
+        const recurBadge = activity.recurrence ? ' ↻' : '';
+        box.title = `${activity.title}${recurBadge}\n${formatDate(start)} → ${formatDate(end)}${activity.description ? '\n' + activity.description : ''}`;
+        box.textContent = activity.title + recurBadge;
         box.addEventListener('click', (e) => {
           e.stopPropagation();
           this.onClickActivity(activity);

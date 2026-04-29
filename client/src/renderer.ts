@@ -1,7 +1,7 @@
 import { select, Selection } from 'd3-selection';
 import 'd3-transition'; // extends Selection with .transition()
 import { arc as d3Arc } from 'd3-shape';
-import { createAngleScale, parseDate, formatDate, xyToAngle, FONT_FAMILY } from './utils';
+import { createAngleScale, parseDate, formatDate, xyToAngle, FONT_FAMILY, expandOccurrences } from './utils';
 import { PlannerConfig, PlannerData, Lane, Activity, DiscGeometry, Viewport, ZoomLevel, GridSpec, FilterState } from './types';
 import { getGridSpec, viewportLabel } from './viewport';
 
@@ -493,37 +493,44 @@ export class Renderer {
         return true;
       });
 
-      // Greedy interval colouring: assign each activity a sub-row
-      const sortedActs = [...visibleActivities].sort(
-        (a, b) => parseDate(a.startDate).getTime() - parseDate(b.startDate).getTime()
-      );
+      // Expand recurring activities into per-viewport occurrences.
+      // Each occurrence record carries a reference to the master activity for click handling.
+      type Occurrence = { start: Date; end: Date; master: typeof visibleActivities[0] };
+      const allOccurrences: Occurrence[] = [];
+      for (const activity of visibleActivities) {
+        const occ = expandOccurrences(activity, this.viewport.windowStart, this.viewport.windowEnd);
+        for (const o of occ) {
+          allOccurrences.push({ start: o.start, end: o.end, master: activity });
+        }
+      }
+
+      // Greedy interval colouring: assign each occurrence a sub-row
+      const sortedOcc = [...allOccurrences].sort((a, b) => a.start.getTime() - b.start.getTime());
       const rowEnds: Date[] = [];
-      const subRows: number[] = sortedActs.map(activity => {
-        const start = parseDate(activity.startDate);
-        const row = rowEnds.findIndex(end => end <= start);
+      const subRows: number[] = sortedOcc.map(occ => {
+        const row = rowEnds.findIndex(end => end <= occ.start);
         const assigned = row === -1 ? rowEnds.length : row;
-        rowEnds[assigned] = parseDate(activity.endDate);
+        rowEnds[assigned] = occ.end;
         return assigned;
       });
       const totalSubRows = Math.max(rowEnds.length, 1);
 
-      sortedActs.forEach((activity, i) => {
-        this.renderActivity(laneGroup, activity, innerR, borderInner, subRows[i], totalSubRows);
+      sortedOcc.forEach((occ, i) => {
+        this.renderOccurrence(laneGroup, occ.master, occ.start, occ.end, innerR, borderInner, subRows[i], totalSubRows);
       });
     });
   }
 
-  private renderActivity(
+  private renderOccurrence(
     laneGroup: Selection<SVGGElement, unknown, null, undefined>,
     activity: Activity,
+    startDate: Date,
+    endDate: Date,
     innerR: number,
     outerR: number,
     subRow = 0,
     totalSubRows = 1
   ): void {
-    const startDate = parseDate(activity.startDate);
-    const endDate   = parseDate(activity.endDate);
-
     if (endDate < this.viewport.windowStart || startDate > this.viewport.windowEnd) return;
 
     let startAngle = this.angleScale(startDate);

@@ -1,9 +1,14 @@
 import { scaleTime } from 'd3-scale';
+import { Activity } from './types';
 
 export const FONT_FAMILY = '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif';
 
 export function escapeHtml(s: string): string {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+export function displayName(user: { fullName?: string | null; username: string }): string {
+  return user.fullName?.trim() || user.username;
 }
 
 /**
@@ -111,4 +116,83 @@ export const LANE_COLORS: string[] = [
 
 export function laneColor(index: number): string {
   return LANE_COLORS[index % LANE_COLORS.length];
+}
+
+const MAX_OCCURRENCES = 1000;
+
+/**
+ * Expand an activity into concrete {start, end} occurrence pairs within [rangeStart, rangeEnd].
+ *
+ * Non-recurring: returns a single occurrence with the activity's own dates, provided it
+ * overlaps the range. Returns [] if entirely outside.
+ *
+ * Daily: walks from the activity's startDate by interval days, emitting each occurrence
+ * (preserving the original duration) until min(recurrence.until, rangeEnd).
+ *
+ * Weekly: for each week-anchor (every interval weeks from the week containing startDate),
+ * emits one occurrence for each selected weekday that falls >= startDate and <= until/rangeEnd.
+ *
+ * Output is capped at MAX_OCCURRENCES as a safety guard.
+ */
+export function expandOccurrences(
+  activity: Activity,
+  rangeStart: Date,
+  rangeEnd: Date
+): Array<{ start: Date; end: Date }> {
+  const actStart = parseDate(activity.startDate);
+  const actEnd = parseDate(activity.endDate);
+  const durationMs = actEnd.getTime() - actStart.getTime();
+
+  if (!activity.recurrence) {
+    if (actEnd < rangeStart || actStart > rangeEnd) return [];
+    return [{ start: actStart, end: actEnd }];
+  }
+
+  const rec = activity.recurrence;
+  const until = rec.until ? parseDate(rec.until) : null;
+  const hardEnd = until && until < rangeEnd ? until : rangeEnd;
+
+  const results: Array<{ start: Date; end: Date }> = [];
+
+  if (rec.type === 'daily') {
+    const step = rec.interval;
+    let cur = new Date(actStart.getTime());
+    while (cur <= hardEnd && results.length < MAX_OCCURRENCES) {
+      const occEnd = new Date(cur.getTime() + durationMs);
+      if (occEnd >= rangeStart) {
+        results.push({ start: new Date(cur.getTime()), end: occEnd });
+      }
+      cur = addDays(cur, step);
+    }
+    return results;
+  }
+
+  if (rec.type === 'weekly') {
+    const weekdays = rec.weekdays ?? [];
+    if (weekdays.length === 0) return [];
+
+    const weekStepDays = rec.interval * 7;
+    // Anchor to the Monday of the week containing actStart so that week-stepping is uniform.
+    const anchorMonday = getMonday(actStart);
+    let weekAnchor = new Date(anchorMonday.getTime());
+
+    while (weekAnchor <= hardEnd && results.length < MAX_OCCURRENCES) {
+      for (const wd of weekdays) {
+        // Sunday=0 in JS; anchor is Monday (day 1), so offset = wd === 0 ? 6 : wd - 1
+        const dayOffset = wd === 0 ? 6 : wd - 1;
+        const occStart = addDays(weekAnchor, dayOffset);
+        if (occStart < actStart) continue;
+        if (occStart > hardEnd) continue;
+        if (occStart > rangeEnd) continue;
+        const occEnd = new Date(occStart.getTime() + durationMs);
+        if (occEnd < rangeStart) continue;
+        results.push({ start: new Date(occStart.getTime()), end: occEnd });
+        if (results.length >= MAX_OCCURRENCES) break;
+      }
+      weekAnchor = addDays(weekAnchor, weekStepDays);
+    }
+    return results;
+  }
+
+  return [];
 }

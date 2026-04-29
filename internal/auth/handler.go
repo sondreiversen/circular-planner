@@ -220,7 +220,15 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	u := middleware.UserFrom(r)
-	writeJSON(w, http.StatusOK, map[string]any{"user": u})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user": map[string]any{
+			"id":        u.ID,
+			"username":  u.Username,
+			"email":     u.Email,
+			"fullName":  u.FullName,
+			"is_admin":  u.IsAdmin,
+		},
+	})
 }
 
 // --- GET /api/auth/gitlab/status ---
@@ -338,8 +346,8 @@ func (h *Handler) upsertGitLabUser(r *http.Request, u *gitlabProfile) (id int, u
 	if err == nil {
 		// Known user — update email/username
 		err = h.db.QueryRowContext(ctx,
-			h.db.Rebind(`UPDATE users SET gitlab_username = ?, email = ? WHERE gitlab_id = ? RETURNING id, username, email`),
-			u.Username, u.Email, u.ID,
+			h.db.Rebind(`UPDATE users SET gitlab_username = ?, email = ?, full_name = ? WHERE gitlab_id = ? RETURNING id, username, email`),
+			u.Username, u.Email, u.Name, u.ID,
 		).Scan(&id, &username, &email)
 		return
 	}
@@ -366,10 +374,10 @@ func (h *Handler) upsertGitLabUser(r *http.Request, u *gitlabProfile) (id int, u
 	}
 
 	err = h.db.QueryRowContext(ctx,
-		h.db.Rebind(`INSERT INTO users(username, email, gitlab_id, gitlab_username, auth_provider)
-		             VALUES (?, ?, ?, ?, 'gitlab')
+		h.db.Rebind(`INSERT INTO users(username, email, gitlab_id, gitlab_username, auth_provider, full_name)
+		             VALUES (?, ?, ?, ?, 'gitlab', ?)
 		             RETURNING id, username, email`),
-		uname, u.Email, u.ID, u.Username,
+		uname, u.Email, u.ID, u.Username, u.Name,
 	).Scan(&id, &username, &email)
 	return
 }
@@ -459,14 +467,14 @@ func (h *Handler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 	// Postgres uses ILIKE. Use LOWER() for portability.
 	rows, err := h.db.QueryContext(r.Context(),
 		h.db.Rebind(`
-			SELECT id, username, email
+			SELECT id, username, email, COALESCE(full_name,'') AS full_name
 			FROM users
 			WHERE id != ?
-			  AND (LOWER(username) LIKE ? OR LOWER(email) LIKE ?)
-			ORDER BY username
+			  AND (LOWER(username) LIKE ? OR LOWER(email) LIKE ? OR LOWER(COALESCE(full_name,'')) LIKE ?)
+			ORDER BY COALESCE(NULLIF(full_name,''), username)
 			LIMIT 20
 		`),
-		currentUserID, pattern, pattern,
+		currentUserID, pattern, pattern, pattern,
 	)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "Internal server error")
@@ -478,11 +486,12 @@ func (h *Handler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 		ID       int    `json:"id"`
 		Username string `json:"username"`
 		Email    string `json:"email"`
+		FullName string `json:"fullName,omitempty"`
 	}
 	var results []userResult
 	for rows.Next() {
 		var u userResult
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.FullName); err != nil {
 			continue
 		}
 		results = append(results, u)

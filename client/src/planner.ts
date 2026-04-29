@@ -832,12 +832,12 @@ export class Planner {
     const lane = this.data.lanes.find(l => l.id === laneId);
     if (!lane) return;
     showActivityDialog(laneId, this.data.lanes, date, null,
-      (activity) => this.addActivity(activity), () => {});
+      (activity) => this.addActivity(activity), () => {}, this.config.endDate);
   }
 
   private handleClickActivity(activity: Activity): void {
     showActivityDialog(activity.laneId, this.data.lanes, parseDate(activity.startDate), activity,
-      (updated) => this.updateActivity(updated), (id) => this.deleteActivity(id));
+      (updated) => this.updateActivity(updated), (id) => this.deleteActivity(id), this.config.endDate);
   }
 
   private handleAddLane(): void {

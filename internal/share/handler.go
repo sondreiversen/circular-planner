@@ -63,7 +63,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.QueryContext(r.Context(), h.db.Rebind(`
-		SELECT u.id AS user_id, u.username, u.email, ps.permission
+		SELECT u.id AS user_id, u.username, u.email, COALESCE(u.full_name,'') AS full_name, ps.permission
 		FROM planner_shares ps
 		JOIN users u ON u.id = ps.user_id
 		WHERE ps.planner_id = ?
@@ -78,12 +78,13 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		UserID     int    `json:"user_id"`
 		Username   string `json:"username"`
 		Email      string `json:"email"`
+		FullName   string `json:"fullName,omitempty"`
 		Permission string `json:"permission"`
 	}
 	var result []share
 	for rows.Next() {
 		var s share
-		if err := rows.Scan(&s.UserID, &s.Username, &s.Email, &s.Permission); err != nil {
+		if err := rows.Scan(&s.UserID, &s.Username, &s.Email, &s.FullName, &s.Permission); err != nil {
 			continue
 		}
 		result = append(result, s)

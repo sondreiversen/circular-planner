@@ -230,6 +230,207 @@ func TestR1EditUserCannotDestroyContent(t *testing.T) {
 	}
 }
 
+// TestActivityRecurrence verifies that recurrence fields round-trip through PUT→GET correctly.
+func TestActivityRecurrence(t *testing.T) {
+	srv, _, _ := testutil.NewServer(t)
+	tok := registerHelper(t, srv.URL, "recurrer", "recurrer@example.com", "hunter2hunter2")
+
+	resp, raw := do(t, "POST", srv.URL+"/api/planners", tok,
+		map[string]string{"title": "RecurTest", "startDate": "2026-01-01", "endDate": "2026-12-31"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create: %d %s", resp.StatusCode, raw)
+	}
+	var created struct{ ID int }
+	json.Unmarshal(raw, &created)
+
+	// PUT with weekly recurrence
+	weeklyActivity := map[string]any{
+		"id": "act-weekly", "laneId": "lane1", "title": "Weekly Meeting",
+		"description": "", "startDate": "2026-01-05", "endDate": "2026-01-05",
+		"color": "#E53935", "label": "",
+		"recurrence": map[string]any{
+			"type":     "weekly",
+			"interval": 1,
+			"weekdays": []int{1, 3, 5},
+			"until":    "2026-12-31",
+		},
+	}
+	dailyActivity := map[string]any{
+		"id": "act-daily", "laneId": "lane1", "title": "Daily Standup",
+		"description": "", "startDate": "2026-01-01", "endDate": "2026-01-01",
+		"color": "#43A047", "label": "",
+		"recurrence": map[string]any{
+			"type":     "daily",
+			"interval": 2,
+		},
+	}
+	noRecurActivity := map[string]any{
+		"id": "act-norecur", "laneId": "lane1", "title": "One-off Event",
+		"description": "", "startDate": "2026-03-15", "endDate": "2026-03-20",
+		"color": "#1E88E5", "label": "",
+	}
+
+	resp, raw = do(t, "PUT", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), tok, map[string]any{
+		"lanes": []any{
+			map[string]any{
+				"id": "lane1", "name": "Work", "order": 1, "color": "#ccc",
+				"activities": []any{weeklyActivity, dailyActivity, noRecurActivity},
+			},
+		},
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("PUT with recurrence: %d %s", resp.StatusCode, raw)
+	}
+
+	// GET and verify round-trip
+	resp, raw = do(t, "GET", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), tok, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET after PUT: %d %s", resp.StatusCode, raw)
+	}
+
+	var getResp struct {
+		Data struct {
+			Lanes []struct {
+				Activities []struct {
+					ID         string `json:"id"`
+					Title      string `json:"title"`
+					Recurrence *struct {
+						Type     string  `json:"type"`
+						Interval int     `json:"interval"`
+						Weekdays []int   `json:"weekdays"`
+						Until    *string `json:"until"`
+					} `json:"recurrence"`
+				} `json:"activities"`
+			} `json:"lanes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &getResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if len(getResp.Data.Lanes) == 0 {
+		t.Fatal("no lanes in response")
+	}
+	acts := getResp.Data.Lanes[0].Activities
+	byID := make(map[string]int)
+	for i, a := range acts {
+		byID[a.ID] = i
+	}
+
+	// Check weekly recurrence
+	wi, ok := byID["act-weekly"]
+	if !ok {
+		t.Fatal("act-weekly not found")
+	}
+	wa := acts[wi]
+	if wa.Recurrence == nil {
+		t.Fatal("act-weekly: expected recurrence, got nil")
+	}
+	if wa.Recurrence.Type != "weekly" {
+		t.Errorf("act-weekly type: got %q, want %q", wa.Recurrence.Type, "weekly")
+	}
+	if wa.Recurrence.Interval != 1 {
+		t.Errorf("act-weekly interval: got %d, want 1", wa.Recurrence.Interval)
+	}
+	if len(wa.Recurrence.Weekdays) != 3 || wa.Recurrence.Weekdays[0] != 1 || wa.Recurrence.Weekdays[1] != 3 || wa.Recurrence.Weekdays[2] != 5 {
+		t.Errorf("act-weekly weekdays: got %v, want [1 3 5]", wa.Recurrence.Weekdays)
+	}
+	if wa.Recurrence.Until == nil || *wa.Recurrence.Until != "2026-12-31" {
+		t.Errorf("act-weekly until: got %v, want 2026-12-31", wa.Recurrence.Until)
+	}
+
+	// Check daily recurrence
+	di, ok := byID["act-daily"]
+	if !ok {
+		t.Fatal("act-daily not found")
+	}
+	da := acts[di]
+	if da.Recurrence == nil {
+		t.Fatal("act-daily: expected recurrence, got nil")
+	}
+	if da.Recurrence.Type != "daily" {
+		t.Errorf("act-daily type: got %q, want %q", da.Recurrence.Type, "daily")
+	}
+	if da.Recurrence.Interval != 2 {
+		t.Errorf("act-daily interval: got %d, want 2", da.Recurrence.Interval)
+	}
+	if da.Recurrence.Until != nil {
+		t.Errorf("act-daily until: got %v, want nil", da.Recurrence.Until)
+	}
+
+	// Check non-recurring
+	ni, ok := byID["act-norecur"]
+	if !ok {
+		t.Fatal("act-norecur not found")
+	}
+	if acts[ni].Recurrence != nil {
+		t.Errorf("act-norecur: expected nil recurrence, got %+v", acts[ni].Recurrence)
+	}
+}
+
+// TestActivityRecurrenceValidation verifies server-side validation for recurrence.
+func TestActivityRecurrenceValidation(t *testing.T) {
+	srv, _, _ := testutil.NewServer(t)
+	tok := registerHelper(t, srv.URL, "recvalid", "recvalid@example.com", "hunter2hunter2")
+
+	resp, raw := do(t, "POST", srv.URL+"/api/planners", tok,
+		map[string]string{"title": "ValTest", "startDate": "2026-01-01", "endDate": "2026-12-31"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create: %d %s", resp.StatusCode, raw)
+	}
+	var created struct{ ID int }
+	json.Unmarshal(raw, &created)
+
+	base := map[string]any{
+		"lanes": []any{
+			map[string]any{
+				"id": "lane1", "name": "L", "order": 1, "color": "#ccc",
+				"activities": []any{},
+			},
+		},
+	}
+
+	actWith := func(rec map[string]any) map[string]any {
+		body := make(map[string]any)
+		for k, v := range base {
+			body[k] = v
+		}
+		act := map[string]any{
+			"id": "act1", "laneId": "lane1", "title": "X",
+			"description": "", "startDate": "2026-01-01", "endDate": "2026-01-01",
+			"color": "#000", "label": "", "recurrence": rec,
+		}
+		body["lanes"] = []any{
+			map[string]any{
+				"id": "lane1", "name": "L", "order": 1, "color": "#ccc",
+				"activities": []any{act},
+			},
+		}
+		return body
+	}
+
+	// Invalid type
+	resp, raw = do(t, "PUT", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), tok,
+		actWith(map[string]any{"type": "monthly", "interval": 1}))
+	if resp.StatusCode != 400 {
+		t.Errorf("invalid type: got %d, want 400 (body: %s)", resp.StatusCode, raw)
+	}
+
+	// Interval < 1
+	resp, raw = do(t, "PUT", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), tok,
+		actWith(map[string]any{"type": "daily", "interval": 0}))
+	if resp.StatusCode != 400 {
+		t.Errorf("interval 0: got %d, want 400 (body: %s)", resp.StatusCode, raw)
+	}
+
+	// Weekly with empty weekdays
+	resp, raw = do(t, "PUT", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), tok,
+		actWith(map[string]any{"type": "weekly", "interval": 1, "weekdays": []int{}}))
+	if resp.StatusCode != 400 {
+		t.Errorf("weekly empty weekdays: got %d, want 400 (body: %s)", resp.StatusCode, raw)
+	}
+}
+
 // TestR4UnknownLaneID verifies that an activity referencing a non-existent lane returns 400.
 func TestR4UnknownLaneID(t *testing.T) {
 	srv, _, _ := testutil.NewServer(t)

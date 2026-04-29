@@ -1,5 +1,5 @@
 import { api, logout } from './api-client';
-import { escapeHtml } from './utils';
+import { escapeHtml, displayName } from './utils';
 import { initTheme, applyTheme, currentTheme } from './theme';
 import { applyBranding } from './branding';
 import { installOfflineBanner, installGlobalErrorHandlers } from './toast';
@@ -12,6 +12,7 @@ interface AdminUser {
   id: number;
   username: string;
   email: string;
+  full_name: string | null;
   auth_provider: string | null;
   is_admin: boolean;
   created_at: string;
@@ -28,6 +29,7 @@ interface GroupMember {
   user_id: number;
   username: string;
   email: string;
+  fullName?: string | null;
   role: 'admin' | 'member';
 }
 
@@ -35,6 +37,7 @@ interface UserSearchResult {
   id: number;
   username: string;
   email: string;
+  fullName?: string | null;
 }
 
 let currentMeID = 0;
@@ -46,11 +49,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const meRes = await fetch('/api/auth/me', { credentials: 'include' });
     if (!meRes.ok) { window.location.href = '/index.html'; return; }
-    const me = await meRes.json() as { user?: { username?: string; id?: number; is_admin?: boolean } };
+    const me = await meRes.json() as { user?: { username?: string; fullName?: string; id?: number; is_admin?: boolean } };
     if (!me.user?.is_admin) { window.location.href = '/dashboard.html'; return; }
     currentMeID = me.user.id ?? 0;
     const el = document.getElementById('header-username');
-    if (el && me.user?.username) el.textContent = me.user.username;
+    if (el && me.user?.username) el.textContent = displayName({ username: me.user.username, fullName: me.user.fullName });
   } catch {
     window.location.href = '/index.html';
     return;
@@ -106,8 +109,10 @@ async function loadUsers(): Promise<void> {
         ? `<span class="badge badge-admin">admin</span>`
         : `<span class="badge badge-member">user</span>`;
       const isSelf = u.id === currentMeID;
+      const nameDisplay = u.full_name ? escapeHtml(u.full_name) : '<span style="color:var(--cp-text-muted)">—</span>';
       tr.innerHTML = `
         <td>${u.id}</td>
+        <td>${nameDisplay}</td>
         <td>${escapeHtml(u.username)}</td>
         <td>${escapeHtml(u.email)}</td>
         <td>${escapeHtml(u.auth_provider ?? 'local')}</td>
@@ -121,7 +126,7 @@ async function loadUsers(): Promise<void> {
               ${u.is_admin ? 'Revoke admin' : 'Make admin'}
             </button>
             <button class="btn btn-danger btn-sm delete-user-btn"
-              data-id="${u.id}" data-username="${escapeHtml(u.username)}"
+              data-id="${u.id}" data-username="${escapeHtml(u.username)}" data-fullname="${escapeHtml(u.full_name ?? '')}"
               ${isSelf ? 'disabled title="Cannot delete your own account"' : ''}>
               Delete
             </button>
@@ -145,8 +150,10 @@ async function loadUsers(): Promise<void> {
     tbody.querySelectorAll<HTMLButtonElement>('.delete-user-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const id = parseInt(btn.dataset.id ?? '0', 10);
-        const name = btn.dataset.username ?? '';
-        if (!confirm(`Delete user "${name}"? This cannot be undone.`)) return;
+        const username = btn.dataset.username ?? '';
+        const fullName = btn.dataset.fullname ?? '';
+        const label = fullName ? `${fullName} (${username})` : username;
+        if (!confirm(`Delete user "${label}"? This cannot be undone.`)) return;
         try {
           await api.delete('/api/admin/users/' + id);
           await loadUsers();
@@ -208,7 +215,7 @@ async function loadGroupPanel(panel: HTMLElement, groupID: number): Promise<void
 
     const table = document.createElement('table');
     table.className = 'admin-table';
-    table.innerHTML = `<thead><tr><th>Username</th><th>Email</th><th>Role</th><th></th></tr></thead>`;
+    table.innerHTML = `<thead><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr></thead>`;
     const tbody = document.createElement('tbody');
 
     members.forEach(m => {
@@ -216,8 +223,9 @@ async function loadGroupPanel(panel: HTMLElement, groupID: number): Promise<void
       const roleBadge = m.role === 'admin'
         ? `<span class="badge badge-admin">admin</span>`
         : `<span class="badge badge-member">member</span>`;
+      const dn = displayName({ username: m.username, fullName: m.fullName });
       tr.innerHTML = `
-        <td>${escapeHtml(m.username)}</td>
+        <td><span class="member-display-name">${escapeHtml(dn)}</span><br><span class="member-sub">@${escapeHtml(m.username)}</span></td>
         <td>${escapeHtml(m.email)}</td>
         <td>${roleBadge}</td>
         <td>
@@ -305,10 +313,11 @@ async function loadGroupPanel(panel: HTMLElement, groupID: number): Promise<void
             results.forEach(u => {
               const item = document.createElement('div');
               item.className = 'search-result-item';
-              item.innerHTML = `<div class="search-result-name">${escapeHtml(u.username)}</div><div class="search-result-email">${escapeHtml(u.email)}</div>`;
+              const dn = displayName({ username: u.username, fullName: u.fullName });
+              item.innerHTML = `<div class="search-result-name">${escapeHtml(dn)} &lt;${escapeHtml(u.email)}&gt;</div>`;
               item.addEventListener('click', () => {
                 selected = u;
-                searchInput.value = u.username;
+                searchInput.value = `${displayName({ username: u.username, fullName: u.fullName })} (${u.username})`;
                 addBtn.disabled = false;
                 resultsDiv.classList.add('hidden');
               });
@@ -323,7 +332,7 @@ async function loadGroupPanel(panel: HTMLElement, groupID: number): Promise<void
     addBtn.addEventListener('click', async () => {
       if (!selected) return;
       try {
-        await api.post(`/api/admin/groups/${groupID}/members`, { user_id: selected.id, role: roleSelect.value });
+        await api.post(`/api/admin/groups/${groupID}/members`, { user_ids: [selected.id], role: roleSelect.value });
         searchInput.value = '';
         selected = null;
         addBtn.disabled = true;

@@ -11,6 +11,7 @@ import (
 	"planner/internal/auth"
 	"planner/internal/config"
 	"planner/internal/db"
+	"planner/internal/groups"
 	"planner/internal/middleware"
 	"planner/internal/planners"
 	"planner/internal/share"
@@ -43,6 +44,7 @@ func NewServer(t *testing.T) (*httptest.Server, *config.Config, *db.DB) {
 	mux.HandleFunc("POST /api/auth/register", authH.Register)
 	mux.HandleFunc("POST /api/auth/login", authH.Login)
 	mux.HandleFunc("GET /api/auth/me", middleware.RequireAuth(cfg, database, authH.Me))
+	mux.HandleFunc("GET /api/users", middleware.RequireAuth(cfg, database, authH.SearchUsers))
 
 	planH := planners.NewHandler(database, cfg)
 	mux.HandleFunc("GET /api/planners", middleware.RequireAuth(cfg, database, planH.List))
@@ -55,6 +57,9 @@ func NewServer(t *testing.T) (*httptest.Server, *config.Config, *db.DB) {
 	mux.HandleFunc("GET /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, database, shareH.List))
 	mux.HandleFunc("POST /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, database, shareH.Create))
 	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/{userID}", middleware.RequireAuth(cfg, database, shareH.Delete))
+
+	groupH := groups.NewHandler(database, cfg)
+	groupH.Register(mux, cfg, database)
 
 	adminH := admin.NewHandler(database)
 	mux.HandleFunc("GET /api/admin/users", middleware.RequireAdmin(cfg, database, adminH.ListUsers))

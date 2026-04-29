@@ -1,4 +1,4 @@
-import { Activity, Lane } from './types';
+import { Activity, Lane, Recurrence } from './types';
 import { COLOR_PALETTE, LANE_COLORS, randomId, formatDate, parseDate, escapeHtml, laneColor } from './utils';
 import { api } from './api-client';
 
@@ -87,7 +87,8 @@ export function showActivityDialog(
   initialDate: Date,
   existingActivity: Activity | null,
   onSave: SaveActivityCallback,
-  onDelete: DeleteActivityCallback
+  onDelete: DeleteActivityCallback,
+  plannerEndDate?: string
 ): void {
   const DIALOG_ID = 'cp-activity-dialog';
   removeSafe(DIALOG_ID);
@@ -107,6 +108,23 @@ export function showActivityDialog(
   const colorPicker = createColorPicker(defaultColor, COLOR_PALETTE);
   const colorPickerHolder = document.createElement('div');
   colorPickerHolder.id = 'cp-color-picker-holder';
+
+  const existingRec = existingActivity?.recurrence ?? null;
+  const recType = existingRec?.type ?? 'none';
+  const recInterval = existingRec?.interval ?? 1;
+  const recUntil = existingRec?.until ?? plannerEndDate ?? '';
+  const recWeekdays: Set<number> = new Set(existingRec?.weekdays ?? []);
+
+  const weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  // JS weekday numbers for Mon..Sun: 1,2,3,4,5,6,0
+  const weekdayValues = [1, 2, 3, 4, 5, 6, 0];
+  const weekdayCheckboxes = weekdayLabels.map((label, idx) => {
+    const val = weekdayValues[idx];
+    const checked = recWeekdays.has(val) ? 'checked' : '';
+    return `<label style="display:inline-flex;align-items:center;gap:2px;font-size:12px;cursor:pointer;">
+      <input type="checkbox" name="cp-act-wd" value="${val}" ${checked}> ${label}
+    </label>`;
+  }).join('');
 
   const dialog = document.createElement('section');
   dialog.id = DIALOG_ID;
@@ -150,6 +168,33 @@ export function showActivityDialog(
         <input id="cp-act-label" type="text" value="${escapeHtml(existingActivity?.label || '')}" placeholder="optional tag"
           class="cp-dialog-input">
       </label>
+      <label class="cp-dialog-label">
+        Repeat
+        <select id="cp-act-recur-type" class="cp-dialog-select">
+          <option value="none" ${recType === 'none' ? 'selected' : ''}>Does not repeat</option>
+          <option value="daily" ${recType === 'daily' ? 'selected' : ''}>Daily</option>
+          <option value="weekly" ${recType === 'weekly' ? 'selected' : ''}>Weekly</option>
+        </select>
+      </label>
+      <div id="cp-act-recur-opts" style="${recType === 'none' ? 'display:none' : ''}">
+        <div class="cp-dialog-row" style="align-items:center;gap:6px;">
+          <span style="font-size:13px;">Every</span>
+          <input id="cp-act-recur-interval" type="number" min="1" value="${recInterval}"
+            class="cp-dialog-input" style="width:56px;">
+          <span id="cp-act-recur-unit" style="font-size:13px;">${recType === 'weekly' ? 'week(s)' : 'day(s)'}</span>
+        </div>
+        <div id="cp-act-weekdays-row" style="${recType !== 'weekly' ? 'display:none' : ''}margin-top:6px;">
+          <div style="font-size:12px;color:#5f6b7a;margin-bottom:4px;">Repeat on</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;">
+            ${weekdayCheckboxes}
+          </div>
+        </div>
+        <label class="cp-dialog-label" style="margin-top:6px;">
+          Repeat until
+          <input id="cp-act-recur-until" type="date" value="${recUntil}"
+            class="cp-dialog-input">
+        </label>
+      </div>
       <label class="cp-dialog-label cp-dialog-label--last">
         Colour
         <div id="cp-color-picker-holder"></div>
@@ -178,6 +223,19 @@ export function showActivityDialog(
   const removeTrap = installFocusTrap(dialog);
   const closeAndCleanup = () => { removeTrap(); close(); };
 
+  // Wire recurrence type select
+  const recurTypeEl = document.getElementById('cp-act-recur-type') as HTMLSelectElement;
+  const recurOptsEl = document.getElementById('cp-act-recur-opts') as HTMLElement;
+  const recurUnitEl = document.getElementById('cp-act-recur-unit') as HTMLElement;
+  const weekdaysRowEl = document.getElementById('cp-act-weekdays-row') as HTMLElement;
+
+  recurTypeEl?.addEventListener('change', () => {
+    const val = recurTypeEl.value;
+    recurOptsEl.style.display = val === 'none' ? 'none' : '';
+    recurUnitEl.textContent = val === 'weekly' ? 'week(s)' : 'day(s)';
+    weekdaysRowEl.style.display = val === 'weekly' ? '' : 'none';
+  });
+
   dialog.addEventListener('click', (e) => { if (e.target === dialog) closeAndCleanup(); });
   document.getElementById('cp-act-cancel')?.addEventListener('click', closeAndCleanup);
 
@@ -195,6 +253,24 @@ export function showActivityDialog(
     const end   = endRaw;
     if (start > end) { alert('Start date must be before end date.'); return; }
 
+    let recurrence: Recurrence | null = null;
+    const selectedRecurType = (document.getElementById('cp-act-recur-type') as HTMLSelectElement)?.value;
+    if (selectedRecurType && selectedRecurType !== 'none') {
+      const intervalVal = parseInt((document.getElementById('cp-act-recur-interval') as HTMLInputElement)?.value || '1', 10);
+      if (isNaN(intervalVal) || intervalVal < 1) { alert('Repeat interval must be at least 1.'); return; }
+
+      const untilVal = (document.getElementById('cp-act-recur-until') as HTMLInputElement)?.value || undefined;
+
+      if (selectedRecurType === 'weekly') {
+        const checkedBoxes = Array.from(dialog.querySelectorAll<HTMLInputElement>('input[name="cp-act-wd"]:checked'));
+        const selectedWeekdays = checkedBoxes.map(cb => parseInt(cb.value, 10));
+        if (selectedWeekdays.length === 0) { alert('Please select at least one weekday for weekly recurrence.'); return; }
+        recurrence = { type: 'weekly', interval: intervalVal, weekdays: selectedWeekdays, until: untilVal || undefined };
+      } else {
+        recurrence = { type: 'daily', interval: intervalVal, until: untilVal || undefined };
+      }
+    }
+
     const activity: Activity = {
       id: existingActivity?.id || randomId(),
       laneId: lane,
@@ -204,6 +280,7 @@ export function showActivityDialog(
       endDate: end,
       color,
       label,
+      recurrence,
     };
     onSave(activity);
     closeAndCleanup();

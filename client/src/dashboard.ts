@@ -1,5 +1,5 @@
 import { api, logout } from './api-client';
-import { escapeHtml } from './utils';
+import { escapeHtml, displayName } from './utils';
 import { PlannerSummary } from './types';
 import { initTheme, applyTheme, currentTheme } from './theme';
 import { applyBranding } from './branding';
@@ -26,9 +26,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const meRes = await fetch('/api/auth/me', { credentials: 'include' });
     if (!meRes.ok) { window.location.href = '/index.html'; return; }
-    const me = await meRes.json() as { user?: { username?: string; is_admin?: boolean } };
+    const me = await meRes.json() as { user?: { username?: string; fullName?: string; is_admin?: boolean } };
     const el = document.getElementById('header-username');
-    if (el && me.user?.username) el.textContent = me.user.username;
+    if (el && me.user?.username) el.textContent = displayName({ username: me.user.username, fullName: me.user.fullName });
     if (me.user?.is_admin) {
       const headerRight = document.querySelector('.header-right');
       if (headerRight) {

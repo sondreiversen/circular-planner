@@ -1,5 +1,5 @@
 import { api, logout } from './api-client';
-import { escapeHtml } from './utils';
+import { escapeHtml, displayName } from './utils';
 import { initTheme, applyTheme, currentTheme } from './theme';
 import { applyBranding } from './branding';
 import { installOfflineBanner, installGlobalErrorHandlers } from './toast';
@@ -20,6 +20,7 @@ interface GroupMember {
   user_id: number;
   username: string;
   email: string;
+  fullName?: string | null;
   role: 'admin' | 'member';
 }
 
@@ -35,10 +36,11 @@ interface UserSearchResult {
   id: number;
   username: string;
   email: string;
+  fullName?: string | null;
 }
 
 let currentGroup: GroupDetail | null = null;
-let selectedUser: UserSearchResult | null = null;
+let selectedUsers: UserSearchResult[] = [];
 let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -46,9 +48,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const meRes = await fetch('/api/auth/me', { credentials: 'include' });
     if (!meRes.ok) { window.location.href = '/index.html'; return; }
-    const me = await meRes.json() as { user?: { username?: string } };
+    const me = await meRes.json() as { user?: { username?: string; fullName?: string } };
     const el = document.getElementById('header-username');
-    if (el && me.user?.username) el.textContent = me.user.username;
+    if (el && me.user?.username) el.textContent = displayName({ username: me.user.username, fullName: me.user.fullName });
   } catch {
     window.location.href = '/index.html';
     return;
@@ -151,10 +153,11 @@ function renderMembers(members: GroupMember[], isAdmin: boolean): void {
     const row = document.createElement('div');
     row.className = 'member-row';
     const roleBadge = m.role === 'admin' ? 'badge-admin' : 'badge-member';
+    const dn = displayName({ username: m.username, fullName: m.fullName });
     row.innerHTML = `
       <div class="member-info">
-        <span class="member-name">${escapeHtml(m.username)}</span>
-        <span class="member-email">${escapeHtml(m.email)}</span>
+        <span class="member-name">${escapeHtml(dn)}</span>
+        <span class="member-email">@${escapeHtml(m.username)} &middot; ${escapeHtml(m.email)}</span>
       </div>
       <div class="member-actions">
         <span class="badge ${roleBadge}">${m.role}</span>
@@ -238,7 +241,8 @@ function bindDetailEvents(groupId: number, isAdmin: boolean): void {
     if (!btn) return;
     const uid = parseInt(btn.dataset.uid || '', 10);
     const member = currentGroup?.members.find(m => m.user_id === uid);
-    if (!confirm(`Remove ${member?.username ?? 'this user'} from the group?`)) return;
+    const memberDisplay = member ? displayName({ username: member.username, fullName: member.fullName }) : 'this user';
+    if (!confirm(`Remove ${memberDisplay} from the group?`)) return;
     try {
       await api.delete(`/api/groups/${groupId}/members/${uid}`);
       currentGroup = await api.get<GroupDetail>(`/api/groups/${groupId}`);
@@ -250,16 +254,46 @@ function bindDetailEvents(groupId: number, isAdmin: boolean): void {
 
   if (!isAdmin) return;
 
-  // Member search
+  // Member search (multi-select)
   const searchInput = document.getElementById('member-search') as HTMLInputElement;
   const searchResults = document.getElementById('member-search-results');
   const addBtn = document.getElementById('add-member-btn') as HTMLButtonElement;
   const addError = document.getElementById('add-member-error');
+  const chipsContainer = document.getElementById('member-chips');
+
+  selectedUsers = [];
+
+  function updateAddBtn(): void {
+    const n = selectedUsers.length;
+    if (addBtn) {
+      addBtn.textContent = n === 0 ? 'Add' : `Add ${n} user${n === 1 ? '' : 's'}`;
+      addBtn.disabled = n === 0;
+    }
+  }
+
+  function renderChips(): void {
+    if (!chipsContainer) return;
+    chipsContainer.innerHTML = '';
+    selectedUsers.forEach(u => {
+      const chip = document.createElement('span');
+      chip.className = 'member-chip';
+      const dn = displayName({ username: u.username, fullName: u.fullName });
+      chip.innerHTML = `${escapeHtml(dn)} <button class="chip-remove" aria-label="Remove" data-id="${u.id}">&times;</button>`;
+      chipsContainer.appendChild(chip);
+    });
+  }
+
+  chipsContainer?.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest('.chip-remove') as HTMLElement | null;
+    if (!btn) return;
+    const id = parseInt(btn.dataset.id ?? '0', 10);
+    selectedUsers = selectedUsers.filter(u => u.id !== id);
+    renderChips();
+    updateAddBtn();
+  });
 
   searchInput?.addEventListener('input', () => {
     const q = searchInput.value.trim();
-    selectedUser = null;
-    addBtn.disabled = true;
     if (searchDebounce) clearTimeout(searchDebounce);
     if (q.length < 2) { searchResults?.classList.add('hidden'); return; }
     searchDebounce = setTimeout(async () => {
@@ -275,12 +309,17 @@ function bindDetailEvents(groupId: number, isAdmin: boolean): void {
         users.forEach(u => {
           const item = document.createElement('div');
           item.className = 'search-result-item';
-          item.innerHTML = `<div class="search-result-name">${escapeHtml(u.username)}</div><div class="search-result-email">${escapeHtml(u.email)}</div>`;
+          const dn = displayName({ username: u.username, fullName: u.fullName });
+          item.innerHTML = `<div class="search-result-name">${escapeHtml(dn)} &lt;${escapeHtml(u.email)}&gt;</div>`;
           item.addEventListener('click', () => {
-            selectedUser = u;
-            searchInput.value = `${u.username} (${u.email})`;
+            if (!selectedUsers.find(s => s.id === u.id)) {
+              selectedUsers.push(u);
+              renderChips();
+              updateAddBtn();
+            }
+            searchInput.value = '';
             searchResults.classList.add('hidden');
-            addBtn.disabled = false;
+            searchInput.focus();
           });
           searchResults.appendChild(item);
         });
@@ -290,20 +329,23 @@ function bindDetailEvents(groupId: number, isAdmin: boolean): void {
   });
 
   addBtn?.addEventListener('click', async () => {
-    if (!selectedUser) return;
+    if (selectedUsers.length === 0) return;
     const role = (document.getElementById('member-role') as HTMLSelectElement).value;
     if (addError) addError.classList.add('hidden');
     try {
-      await api.post(`/api/groups/${groupId}/members`, { user_id: selectedUser.id, role });
-      selectedUser = null;
-      searchInput.value = '';
-      addBtn.disabled = true;
+      await api.post(`/api/groups/${groupId}/members`, { user_ids: selectedUsers.map(u => u.id), role });
+      selectedUsers = [];
+      renderChips();
+      updateAddBtn();
+      if (searchInput) searchInput.value = '';
       currentGroup = await api.get<GroupDetail>(`/api/groups/${groupId}`);
       renderMembers(currentGroup.members, isAdmin);
     } catch (err) {
       if (addError) { addError.textContent = (err as Error).message; addError.classList.remove('hidden'); }
     }
   });
+
+  updateAddBtn();
 }
 
 function bindNewGroupDialog(): void {
