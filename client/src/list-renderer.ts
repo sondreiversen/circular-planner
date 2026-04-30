@@ -216,6 +216,10 @@ export class ListRenderer {
         !a.title.toLowerCase().includes(this.filterState.searchTerm)) return false;
     if (this.filterState.activeLabels.size > 0 &&
         !this.filterState.activeLabels.has(a.label)) return false;
+    if (this.filterState.activeTaggedUserIds.size > 0) {
+      const tagged = a.taggedUsers ?? [];
+      if (!tagged.some(u => this.filterState.activeTaggedUserIds.has(u.id))) return false;
+    }
     return true;
   }
 

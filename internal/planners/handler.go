@@ -200,9 +200,14 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		laneOrder = append(laneOrder, l.ID)
 	}
 
-	// Fetch activities
+	// Fetch activities (LEFT JOIN users to get creator display name)
 	actRows, err := h.db.QueryContext(r.Context(),
-		h.db.Rebind("SELECT id, lane_id, title, description, start_date, end_date, color, label, recurrence_type, recurrence_interval, recurrence_weekdays, recurrence_until FROM activities WHERE planner_id = ?"),
+		h.db.Rebind(`SELECT a.id, a.lane_id, a.title, a.description, a.start_date, a.end_date,
+		             a.color, a.label, a.recurrence_type, a.recurrence_interval, a.recurrence_weekdays, a.recurrence_until,
+		             COALESCE(NULLIF(u.full_name, ''), u.username) AS created_by_name
+		      FROM activities a
+		      LEFT JOIN users u ON u.id = a.created_by
+		      WHERE a.planner_id = ?`),
 		plannerID,
 	)
 	if err != nil {
@@ -211,6 +216,9 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	defer actRows.Close()
 
+	// activityByID maps activity ID → the map entry (for tag attachment after loop)
+	activityByID := map[string]map[string]any{}
+
 	for actRows.Next() {
 		var id, laneID, title, description, color, label string
 		var startDate, endDate db.DateStr
@@ -218,8 +226,9 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		var recInterval sql.NullInt64
 		var recWeekdays sql.NullString
 		var recUntil sql.NullString
+		var createdByName sql.NullString
 		if err := actRows.Scan(&id, &laneID, &title, &description, &startDate, &endDate, &color, &label,
-			&recType, &recInterval, &recWeekdays, &recUntil); err != nil {
+			&recType, &recInterval, &recWeekdays, &recUntil, &createdByName); err != nil {
 			continue
 		}
 		act := map[string]any{
@@ -231,6 +240,9 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 			"endDate":     endDate.String(),
 			"color":       color,
 			"label":       label,
+		}
+		if createdByName.Valid {
+			act["createdBy"] = createdByName.String
 		}
 		if recType.Valid {
 			rec := map[string]any{
@@ -245,8 +257,48 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 			}
 			act["recurrence"] = rec
 		}
+		activityByID[id] = act
 		if l, ok := laneMap[laneID]; ok {
 			l.Activities = append(l.Activities, act)
+		}
+	}
+
+	// Fetch tagged users per activity for this planner
+	tagRows, err := h.db.QueryContext(r.Context(),
+		h.db.Rebind(`SELECT t.activity_id, u.id, u.username, COALESCE(NULLIF(u.full_name, ''), '') AS full_name
+		      FROM activity_user_tags t JOIN users u ON u.id = t.user_id
+		      WHERE t.planner_id = ?
+		      ORDER BY u.username`),
+		plannerID,
+	)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	defer tagRows.Close()
+
+	// tagsByActivity accumulates tagged user entries keyed by activity_id
+	tagsByActivity := map[string][]map[string]any{}
+	for tagRows.Next() {
+		var activityID, username, fullName string
+		var uid int
+		if err := tagRows.Scan(&activityID, &uid, &username, &fullName); err != nil {
+			continue
+		}
+		entry := map[string]any{
+			"id":       uid,
+			"username": username,
+		}
+		if fullName != "" {
+			entry["fullName"] = fullName
+		}
+		tagsByActivity[activityID] = append(tagsByActivity[activityID], entry)
+	}
+
+	// Attach tagged users to activity maps (only when non-empty)
+	for actID, tags := range tagsByActivity {
+		if act, ok := activityByID[actID]; ok {
+			act["taggedUsers"] = tags
 		}
 	}
 
@@ -290,15 +342,16 @@ type recurrenceInput struct {
 }
 
 type activityInput struct {
-	ID          string           `json:"id"`
-	LaneID      string           `json:"laneId"`
-	Title       string           `json:"title"`
-	Description string           `json:"description"`
-	StartDate   string           `json:"startDate"`
-	EndDate     string           `json:"endDate"`
-	Color       string           `json:"color"`
-	Label       string           `json:"label"`
-	Recurrence  *recurrenceInput `json:"recurrence,omitempty"`
+	ID             string           `json:"id"`
+	LaneID         string           `json:"laneId"`
+	Title          string           `json:"title"`
+	Description    string           `json:"description"`
+	StartDate      string           `json:"startDate"`
+	EndDate        string           `json:"endDate"`
+	Color          string           `json:"color"`
+	Label          string           `json:"label"`
+	Recurrence     *recurrenceInput `json:"recurrence,omitempty"`
+	TaggedUserIDs  []int            `json:"taggedUserIds"`
 }
 
 type laneInput struct {
@@ -519,18 +572,46 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if _, err := tx.ExecContext(r.Context(), h.db.Rebind(`
-				INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color, label, recurrence_type, recurrence_interval, recurrence_weekdays, recurrence_until)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color, label, recurrence_type, recurrence_interval, recurrence_weekdays, recurrence_until, created_by)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(id, planner_id) DO UPDATE
 				  SET lane_id = excluded.lane_id, title = excluded.title,
 				      description = excluded.description, start_date = excluded.start_date,
 				      end_date = excluded.end_date, color = excluded.color, label = excluded.label,
 				      recurrence_type = excluded.recurrence_type, recurrence_interval = excluded.recurrence_interval,
 				      recurrence_weekdays = excluded.recurrence_weekdays, recurrence_until = excluded.recurrence_until
+				      -- created_by deliberately excluded: original creator is preserved on update
 			`), a.ID, a.LaneID, plannerID, a.Title, desc, a.StartDate, a.EndDate, a.Color, label,
-				recType, recInterval, recWeekdays, recUntil); err != nil {
+				recType, recInterval, recWeekdays, recUntil, userID); err != nil {
 				jsonError(w, http.StatusInternalServerError, "Internal server error")
 				return
+			}
+		}
+
+		// Sync activity_user_tags: replace all tags for this planner atomically.
+		if _, err := tx.ExecContext(r.Context(),
+			h.db.Rebind("DELETE FROM activity_user_tags WHERE planner_id = ?"), plannerID); err != nil {
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
+		for _, l := range body.Lanes {
+			for _, a := range l.Activities {
+				seen := make(map[int]struct{}, len(a.TaggedUserIDs))
+				for _, uid := range a.TaggedUserIDs {
+					if uid <= 0 {
+						continue
+					}
+					if _, dup := seen[uid]; dup {
+						continue
+					}
+					seen[uid] = struct{}{}
+					if _, err := tx.ExecContext(r.Context(), h.db.Rebind(
+						"INSERT INTO activity_user_tags(activity_id, planner_id, user_id) VALUES (?, ?, ?)"),
+						a.ID, plannerID, uid); err != nil {
+						jsonError(w, http.StatusBadRequest, "invalid taggedUserIds")
+						return
+					}
+				}
 			}
 		}
 

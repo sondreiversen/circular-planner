@@ -1,5 +1,5 @@
-import { Activity, Lane, Recurrence } from './types';
-import { COLOR_PALETTE, LANE_COLORS, randomId, formatDate, parseDate, escapeHtml, laneColor } from './utils';
+import { Activity, Lane, Recurrence, TaggedUser } from './types';
+import { COLOR_PALETTE, LANE_COLORS, randomId, formatDate, parseDate, escapeHtml, laneColor, displayName } from './utils';
 import { api } from './api-client';
 
 type SaveActivityCallback = (activity: Activity) => void;
@@ -56,11 +56,15 @@ function createColorPicker(selectedColor: string, palette: string[]): HTMLElemen
   wrapper.className = 'cp-planner-color-picker';
   wrapper.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;';
 
+  // Track whether the selected color matches any preset swatch
+  let presetMatched = false;
+
   palette.forEach(color => {
     const swatch = document.createElement('span');
     swatch.style.cssText = `width:22px;height:22px;border-radius:50%;background:${color};cursor:pointer;display:inline-block;border:2px solid transparent;`;
     if (color === selectedColor) {
       swatch.setAttribute('data-selected', 'true');
+      presetMatched = true;
     }
     swatch.setAttribute('data-color', color);
     swatch.addEventListener('click', () => {
@@ -71,6 +75,25 @@ function createColorPicker(selectedColor: string, palette: string[]): HTMLElemen
     });
     wrapper.appendChild(swatch);
   });
+
+  // Custom hex color input
+  const hexInput = document.createElement('input');
+  hexInput.type = 'color';
+  hexInput.title = 'Custom colour';
+  hexInput.setAttribute('data-color', presetMatched ? palette[0] : selectedColor);
+  hexInput.value = presetMatched ? palette[0] : selectedColor;
+  hexInput.style.cssText = 'width:28px;height:22px;padding:0;border:2px solid transparent;border-radius:4px;cursor:pointer;background:none;vertical-align:middle;';
+  if (!presetMatched) {
+    hexInput.setAttribute('data-selected', 'true');
+  }
+  hexInput.addEventListener('input', () => {
+    wrapper.querySelectorAll('[data-color]').forEach(s => {
+      s.removeAttribute('data-selected');
+    });
+    hexInput.setAttribute('data-color', hexInput.value);
+    hexInput.setAttribute('data-selected', 'true');
+  });
+  wrapper.appendChild(hexInput);
 
   return wrapper;
 }
@@ -90,6 +113,9 @@ export function showActivityDialog(
   onDelete: DeleteActivityCallback,
   plannerEndDate?: string
 ): void {
+  // Tag-picker state — initialised from existing activity
+  let selectedTags: TaggedUser[] = [...(existingActivity?.taggedUsers ?? [])];
+  let tagSearchDebounce: ReturnType<typeof setTimeout> | null = null;
   const DIALOG_ID = 'cp-activity-dialog';
   removeSafe(DIALOG_ID);
   const previouslyFocused = document.activeElement;
@@ -168,6 +194,15 @@ export function showActivityDialog(
         <input id="cp-act-label" type="text" value="${escapeHtml(existingActivity?.label || '')}" placeholder="optional tag"
           class="cp-dialog-input">
       </label>
+      <div class="cp-dialog-label">
+        Tagged users <span class="cp-dialog-hint">(search by name or username)</span>
+        <div id="cp-act-tag-chips" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;min-height:24px;"></div>
+        <div style="position:relative;">
+          <input id="cp-act-tag-input" type="text" placeholder="Type to search users…"
+            class="cp-dialog-input" style="margin-top:4px;" autocomplete="off">
+          <div id="cp-act-tag-dropdown" style="display:none;position:absolute;z-index:200;left:0;right:0;background:var(--cp-surface,#fff);border:1px solid var(--cp-border,#d1d5db);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.12);max-height:180px;overflow-y:auto;"></div>
+        </div>
+      </div>
       <label class="cp-dialog-label">
         Repeat
         <select id="cp-act-recur-type" class="cp-dialog-select">
@@ -217,6 +252,86 @@ export function showActivityDialog(
   // Mount color picker
   const pickerSlot = document.getElementById('cp-color-picker-holder');
   if (pickerSlot) pickerSlot.replaceWith(colorPicker);
+
+  // Wire tag picker
+  const tagChipsEl = document.getElementById('cp-act-tag-chips') as HTMLElement;
+  const tagInputEl = document.getElementById('cp-act-tag-input') as HTMLInputElement;
+  const tagDropdownEl = document.getElementById('cp-act-tag-dropdown') as HTMLElement;
+
+  function renderTagChips(): void {
+    tagChipsEl.innerHTML = '';
+    selectedTags.forEach(u => {
+      const chip = document.createElement('span');
+      chip.style.cssText = 'display:inline-flex;align-items:center;gap:3px;background:var(--cp-accent-light,#e0edff);color:var(--cp-accent,#1e55c0);border-radius:12px;padding:2px 8px;font-size:12px;';
+      const dn = displayName({ username: u.username, fullName: u.fullName });
+      chip.textContent = dn;
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.textContent = '×';
+      removeBtn.setAttribute('aria-label', `Remove ${dn}`);
+      removeBtn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:14px;line-height:1;padding:0 0 0 2px;color:inherit;';
+      removeBtn.addEventListener('click', () => {
+        selectedTags = selectedTags.filter(t => t.id !== u.id);
+        renderTagChips();
+      });
+      chip.appendChild(removeBtn);
+      tagChipsEl.appendChild(chip);
+    });
+  }
+
+  function hideTagDropdown(): void {
+    tagDropdownEl.style.display = 'none';
+    tagDropdownEl.innerHTML = '';
+  }
+
+  renderTagChips();
+
+  tagInputEl?.addEventListener('input', () => {
+    const q = tagInputEl.value.trim();
+    if (tagSearchDebounce) clearTimeout(tagSearchDebounce);
+    if (q.length < 1) { hideTagDropdown(); return; }
+    tagSearchDebounce = setTimeout(async () => {
+      try {
+        const users = await api.get<Array<{ id: number; username: string; email: string; fullName?: string | null }>>(`/api/users?q=${encodeURIComponent(q)}`);
+        tagDropdownEl.innerHTML = '';
+        if (users.length === 0) {
+          const noResult = document.createElement('div');
+          noResult.style.cssText = 'padding:8px 12px;font-size:13px;color:var(--cp-text-muted,#6b7280);';
+          noResult.textContent = 'No users found';
+          tagDropdownEl.appendChild(noResult);
+          tagDropdownEl.style.display = '';
+          return;
+        }
+        users.forEach(u => {
+          if (selectedTags.find(t => t.id === u.id)) return; // already selected
+          const item = document.createElement('div');
+          item.style.cssText = 'padding:8px 12px;font-size:13px;cursor:pointer;';
+          item.addEventListener('mouseenter', () => { item.style.background = 'var(--cp-accent-bg,#f0f4ff)'; });
+          item.addEventListener('mouseleave', () => { item.style.background = ''; });
+          const dn = displayName({ username: u.username, fullName: u.fullName ?? undefined });
+          item.textContent = dn + (u.email ? ` <${u.email}>` : '');
+          item.addEventListener('mousedown', (e) => {
+            e.preventDefault(); // prevent blur on input
+            const tag: TaggedUser = { id: u.id, username: u.username, fullName: u.fullName ?? undefined };
+            if (!selectedTags.find(t => t.id === tag.id)) {
+              selectedTags.push(tag);
+              renderTagChips();
+            }
+            tagInputEl.value = '';
+            hideTagDropdown();
+            tagInputEl.focus();
+          });
+          tagDropdownEl.appendChild(item);
+        });
+        tagDropdownEl.style.display = '';
+      } catch { hideTagDropdown(); }
+    }, 200);
+  });
+
+  tagInputEl?.addEventListener('blur', () => {
+    // Small delay so mousedown on a dropdown item fires first
+    setTimeout(() => hideTagDropdown(), 150);
+  });
 
   const closeRaw = () => removeSafe(DIALOG_ID);
   const close = withFocusRestore(closeRaw, previouslyFocused);
@@ -281,6 +396,7 @@ export function showActivityDialog(
       color,
       label,
       recurrence,
+      taggedUsers: selectedTags.length > 0 ? selectedTags : undefined,
     };
     onSave(activity);
     closeAndCleanup();

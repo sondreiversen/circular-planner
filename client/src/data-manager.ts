@@ -1,4 +1,4 @@
-import { PlannerConfig, PlannerData } from './types';
+import { PlannerConfig, PlannerData, Lane, Activity } from './types';
 import { api } from './api-client';
 
 export type SaveEvent = 'saving' | 'saved' | 'error' | 'conflict';
@@ -35,6 +35,21 @@ export class DataManager {
     this.saveTimer = setTimeout(() => this.save(data), 800);
   }
 
+  /** Serialise PlannerData for the wire: strip client-only fields, convert taggedUsers → taggedUserIds */
+  private serialiseLanes(data: PlannerData): unknown {
+    return data.lanes.map((lane: Lane) => ({
+      ...lane,
+      activities: lane.activities.map((a: Activity) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { taggedUsers, createdBy, ...rest } = a;
+        return {
+          ...rest,
+          taggedUserIds: (taggedUsers ?? []).map(u => u.id),
+        };
+      }),
+    }));
+  }
+
   async save(data: PlannerData): Promise<void> {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
@@ -42,7 +57,7 @@ export class DataManager {
     }
     this.emit('saving');
     try {
-      const body: Record<string, unknown> = { lanes: data.lanes };
+      const body: Record<string, unknown> = { lanes: this.serialiseLanes(data) };
       if (this.lastKnownUpdatedAt) {
         body.client_updated_at = this.lastKnownUpdatedAt;
       }

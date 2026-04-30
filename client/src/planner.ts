@@ -59,7 +59,7 @@ export class Planner {
     this.config = config;
     this.data = initialData;
     this.viewport = defaultViewport(this.config);
-    this.filterState = { hiddenLaneIds: new Set(), searchTerm: '', activeLabels: new Set() };
+    this.filterState = { hiddenLaneIds: new Set(), searchTerm: '', activeLabels: new Set(), activeTaggedUserIds: new Set() };
     this.dataManager = new DataManager(this.config);
     if (updatedAt) this.dataManager.setUpdatedAt(updatedAt);
 
@@ -449,6 +449,56 @@ export class Planner {
       body.appendChild(labelsSection);
     }
 
+    // Section: Tagged users (if any exist across activities)
+    const seenTaggedUserIds = new Set<number>();
+    const allTaggedUsers = allActivities
+      .flatMap(a => a.taggedUsers ?? [])
+      .filter(u => {
+        if (seenTaggedUserIds.has(u.id)) return false;
+        seenTaggedUserIds.add(u.id);
+        return true;
+      })
+      .sort((a, b) => {
+        const na = a.fullName?.trim() || a.username;
+        const nb = b.fullName?.trim() || b.username;
+        return na.localeCompare(nb);
+      });
+
+    if (allTaggedUsers.length > 0) {
+      const taggedUsersSection = document.createElement('div');
+      taggedUsersSection.className = 'cp-sidebar-section';
+
+      const taggedUsersHeading = document.createElement('div');
+      taggedUsersHeading.className = 'cp-sidebar-label';
+      taggedUsersHeading.textContent = 'Tagged users';
+      taggedUsersSection.appendChild(taggedUsersHeading);
+
+      allTaggedUsers.forEach(u => {
+        const dn = u.fullName?.trim() || u.username;
+        const isActive = this.filterState.activeTaggedUserIds.has(u.id);
+
+        const row = document.createElement('label');
+        row.className = 'cp-lane-toggle';
+        row.style.cssText = 'cursor:pointer;gap:6px;';
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = isActive;
+        cb.style.cssText = 'margin:0;cursor:pointer;';
+        cb.addEventListener('change', () => this.handleToggleTaggedUser(u.id));
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = dn;
+        nameSpan.style.cssText = `flex:1;font-size:12px;opacity:${this.filterState.activeTaggedUserIds.size > 0 && !isActive ? '0.4' : '1'};`;
+
+        row.appendChild(cb);
+        row.appendChild(nameSpan);
+        taggedUsersSection.appendChild(row);
+      });
+
+      body.appendChild(taggedUsersSection);
+    }
+
     // Section: Appearance (lane border colour)
     const apprSection = document.createElement('div');
     apprSection.className = 'cp-sidebar-section';
@@ -609,6 +659,17 @@ export class Planner {
       this.filterState.activeLabels.delete(label);
     } else {
       this.filterState.activeLabels.add(label);
+    }
+    this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState);
+    const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
+    if (sidebarBody) this.buildSidebar(sidebarBody);
+  }
+
+  private handleToggleTaggedUser(userId: number): void {
+    if (this.filterState.activeTaggedUserIds.has(userId)) {
+      this.filterState.activeTaggedUserIds.delete(userId);
+    } else {
+      this.filterState.activeTaggedUserIds.add(userId);
     }
     this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState);
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;

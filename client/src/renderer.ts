@@ -41,7 +41,7 @@ export class Renderer {
     this.config = config;
     this.data = data;
     this.viewport = viewport;
-    this.filterState = { hiddenLaneIds: new Set(), searchTerm: '', activeLabels: new Set() };
+    this.filterState = { hiddenLaneIds: new Set(), searchTerm: '', activeLabels: new Set(), activeTaggedUserIds: new Set() };
 
     this.svg = select(container)
       .append('svg')
@@ -484,12 +484,16 @@ export class Renderer {
         });
       }
 
-      // Filter activities by search term and active labels
+      // Filter activities by search term, active labels, and active tagged users
       const visibleActivities = lane.activities.filter(a => {
         if (this.filterState.searchTerm &&
             !a.title.toLowerCase().includes(this.filterState.searchTerm)) return false;
         if (this.filterState.activeLabels.size > 0 &&
             !this.filterState.activeLabels.has(a.label)) return false;
+        if (this.filterState.activeTaggedUserIds.size > 0) {
+          const tagged = a.taggedUsers ?? [];
+          if (!tagged.some(u => this.filterState.activeTaggedUserIds.has(u.id))) return false;
+        }
         return true;
       });
 

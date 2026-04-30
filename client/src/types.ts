@@ -38,6 +38,12 @@ export interface Recurrence {
   until?: string;       // YYYY-MM-DD; optional cap
 }
 
+export interface TaggedUser {
+  id: number;
+  username: string;
+  fullName?: string;
+}
+
 export interface Activity {
   id: string;
   laneId: string;
@@ -48,6 +54,7 @@ export interface Activity {
   color: string;     // arc fill color
   label: string;     // free-text label, e.g. "vacation" — empty = none
   createdBy?: string | null;
+  taggedUsers?: TaggedUser[];
   recurrence?: Recurrence | null;
 }
 
@@ -74,7 +81,8 @@ export interface GridSpec {
 export interface FilterState {
   hiddenLaneIds: Set<string>;
   searchTerm: string;
-  activeLabels: Set<string>; // inclusive OR filter; empty = show all
+  activeLabels: Set<string>;          // inclusive OR filter; empty = show all
+  activeTaggedUserIds: Set<number>;   // inclusive OR filter; empty = show all
 }
 
 export interface User {

@@ -88,6 +88,7 @@ export function getMonthStart(d: Date): Date {
 
 /** Predefined color palette for activities */
 export const COLOR_PALETTE: string[] = [
+  // Original 12
   '#E53935', // red
   '#FB8C00', // orange
   '#FDD835', // yellow
@@ -100,6 +101,19 @@ export const COLOR_PALETTE: string[] = [
   '#546E7A', // blue-grey
   '#00897B', // teal
   '#C0CA33', // lime
+  // Added 12 complementary tones
+  '#FF6F61', // coral
+  '#FFB300', // amber
+  '#C6FF00', // acid lime
+  '#76FF03', // light green
+  '#1DE9B6', // teal accent
+  '#00B8D4', // sky
+  '#2962FF', // indigo
+  '#651FFF', // deep violet
+  '#AA00FF', // violet
+  '#F50057', // hot pink / rose
+  '#FF6D00', // deep orange
+  '#37474F', // dark slate
 ];
 
 /** Default lane background colors */
