@@ -2,10 +2,11 @@ import { PlannerConfig, PlannerData, Lane, Activity, Viewport, FilterState } fro
 import { toast } from './toast';
 import { Renderer } from './renderer';
 import { ListRenderer } from './list-renderer';
+import { PeopleRenderer } from './people-renderer';
 import { History } from './history';
 import { openHelpOverlay } from './help-overlay';
 
-type ViewMode = 'disc' | 'list';
+type ViewMode = 'disc' | 'list' | 'people';
 
 const LANE_BORDER_ALPHA = 0.78;
 
@@ -32,11 +33,13 @@ export class Planner {
   private filterState: FilterState;
   private renderer!: Renderer;
   private listRenderer: ListRenderer | null = null;
+  private peopleRenderer: PeopleRenderer | null = null;
   private dataManager: DataManager;
   private container: HTMLElement;
   private toolbar!: HTMLElement;
   private svgContainer!: HTMLElement;
   private listContainer!: HTMLElement;
+  private peopleContainer!: HTMLElement;
   private viewMode: ViewMode = 'disc';
   private sidebarCollapsed = false;
   private showBorder = true;
@@ -45,6 +48,7 @@ export class Planner {
   private _globalKeyHandler: ((e: KeyboardEvent) => void) | null = null;
   private viewDiscBtn!: HTMLButtonElement;
   private viewListBtn!: HTMLButtonElement;
+  private viewPeopleBtn!: HTMLButtonElement;
 
   // Refs to toolbar elements that change on viewport updates
   private vpLabelEl!: HTMLSpanElement;
@@ -80,7 +84,7 @@ export class Planner {
     // Restore sidebar collapsed state
     this.sidebarCollapsed = localStorage.getItem('cp_sidebar_collapsed') === 'true';
     const storedMode = localStorage.getItem('cp_view_mode');
-    if (storedMode === 'list' || storedMode === 'disc') this.viewMode = storedMode;
+    if (storedMode === 'list' || storedMode === 'disc' || storedMode === 'people') this.viewMode = storedMode;
 
     const storedBorder = localStorage.getItem('cp_lane_border_color');
     if (storedBorder) {
@@ -145,6 +149,12 @@ export class Planner {
     listContainer.tabIndex = 0;
     mainArea.appendChild(listContainer);
     this.listContainer = listContainer;
+
+    const peopleContainer = document.createElement('div');
+    peopleContainer.className = 'cp-list-container';
+    peopleContainer.tabIndex = 0;
+    mainArea.appendChild(peopleContainer);
+    this.peopleContainer = peopleContainer;
 
     this.renderer = new Renderer(svgContainer, this.config, this.data, this.viewport);
     this.renderer.setHandlers(
@@ -246,8 +256,12 @@ export class Planner {
 
   private applyViewMode(): void {
     const isList = this.viewMode === 'list';
-    this.svgContainer.style.display = isList ? 'none' : '';
+    const isPeople = this.viewMode === 'people';
+    const isDisc = this.viewMode === 'disc';
+
+    this.svgContainer.style.display = isDisc ? '' : 'none';
     this.listContainer.style.display = isList ? '' : 'none';
+    this.peopleContainer.style.display = isPeople ? '' : 'none';
 
     if (isList) {
       if (!this.listRenderer) {
@@ -261,13 +275,31 @@ export class Planner {
         this.listRenderer.updateViewport(this.viewport);
       }
       this.listContainer.focus();
+    } else if (isPeople) {
+      if (!this.peopleRenderer) {
+        this.peopleRenderer = new PeopleRenderer(
+          this.peopleContainer,
+          this.data,
+          this.viewport,
+          this.filterState,
+          this.config.plannerId
+        );
+        this.peopleRenderer.setHandlers(
+          (activity) => this.handleClickActivity(activity)
+        );
+      } else {
+        this.peopleRenderer.update(this.data, this.filterState);
+        this.peopleRenderer.updateViewport(this.viewport);
+      }
+      this.peopleContainer.focus();
     } else {
       this.svgContainer.focus();
     }
 
-    if (this.viewDiscBtn && this.viewListBtn) {
-      this.viewDiscBtn.classList.toggle('cp-btn-active', !isList);
+    if (this.viewDiscBtn && this.viewListBtn && this.viewPeopleBtn) {
+      this.viewDiscBtn.classList.toggle('cp-btn-active', isDisc);
       this.viewListBtn.classList.toggle('cp-btn-active', isList);
+      this.viewPeopleBtn.classList.toggle('cp-btn-active', isPeople);
     }
   }
 
@@ -299,7 +331,7 @@ export class Planner {
       if (this.searchDebounce) clearTimeout(this.searchDebounce);
       this.searchDebounce = setTimeout(() => {
         this.filterState.searchTerm = searchInput.value.toLowerCase().trim();
-        this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState);
+        this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState); this.peopleRenderer?.update(this.data, this.filterState);
       }, 200);
     });
     searchSection.appendChild(searchInput);
@@ -660,7 +692,7 @@ export class Planner {
     } else {
       this.filterState.activeLabels.add(label);
     }
-    this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState);
+    this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState); this.peopleRenderer?.update(this.data, this.filterState);
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
     if (sidebarBody) this.buildSidebar(sidebarBody);
   }
@@ -671,7 +703,7 @@ export class Planner {
     } else {
       this.filterState.activeTaggedUserIds.add(userId);
     }
-    this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState);
+    this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState); this.peopleRenderer?.update(this.data, this.filterState);
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
     if (sidebarBody) this.buildSidebar(sidebarBody);
   }
@@ -725,6 +757,14 @@ export class Planner {
     listBtn.addEventListener('click', () => this.setViewMode('list'));
     viewGroup.appendChild(listBtn);
     this.viewListBtn = listBtn;
+
+    const peopleBtn = document.createElement('button');
+    peopleBtn.textContent = 'People';
+    peopleBtn.className = 'cp-btn' + (this.viewMode === 'people' ? ' cp-btn-active' : '');
+    peopleBtn.title = 'People view';
+    peopleBtn.addEventListener('click', () => this.setViewMode('people'));
+    viewGroup.appendChild(peopleBtn);
+    this.viewPeopleBtn = peopleBtn;
 
     this.toolbar.appendChild(viewGroup);
 
@@ -801,6 +841,7 @@ export class Planner {
   private refresh(): void {
     this.renderer.update(this.data, this.filterState);
     this.listRenderer?.update(this.data, this.filterState);
+    this.peopleRenderer?.update(this.data, this.filterState);
     // Rebuild sidebar to reflect lane changes
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
     if (sidebarBody) this.buildSidebar(sidebarBody);
@@ -809,6 +850,7 @@ export class Planner {
   private refreshViewport(): void {
     this.renderer.updateViewport(this.viewport);
     this.listRenderer?.updateViewport(this.viewport);
+    this.peopleRenderer?.updateViewport(this.viewport);
     this.updateViewportState();
   }
 
@@ -861,7 +903,7 @@ export class Planner {
     } else {
       this.filterState.hiddenLaneIds.add(laneId);
     }
-    this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState);
+    this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState); this.peopleRenderer?.update(this.data, this.filterState);
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
     if (sidebarBody) this.buildSidebar(sidebarBody);
   }

@@ -73,28 +73,76 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('tab-users')?.addEventListener('click', () => switchTab('users'));
   document.getElementById('tab-groups')?.addEventListener('click', () => switchTab('groups'));
+  document.getElementById('tab-settings')?.addEventListener('click', () => switchTab('settings'));
 
   await loadUsers();
 });
 
-function switchTab(tab: 'users' | 'groups'): void {
+function switchTab(tab: 'users' | 'groups' | 'settings'): void {
   const usersSection = document.getElementById('section-users');
   const groupsSection = document.getElementById('section-groups');
+  const settingsSection = document.getElementById('section-settings');
   const tabUsers = document.getElementById('tab-users');
   const tabGroups = document.getElementById('tab-groups');
+  const tabSettings = document.getElementById('tab-settings');
+
+  // Hide all, deactivate all
+  usersSection?.classList.add('hidden');
+  groupsSection?.classList.add('hidden');
+  settingsSection?.classList.add('hidden');
+  tabUsers?.classList.remove('active');
+  tabGroups?.classList.remove('active');
+  tabSettings?.classList.remove('active');
+
   if (tab === 'users') {
     usersSection?.classList.remove('hidden');
-    groupsSection?.classList.add('hidden');
     tabUsers?.classList.add('active');
-    tabGroups?.classList.remove('active');
     loadUsers();
-  } else {
-    usersSection?.classList.add('hidden');
+  } else if (tab === 'groups') {
     groupsSection?.classList.remove('hidden');
-    tabUsers?.classList.remove('active');
     tabGroups?.classList.add('active');
     loadGroups();
+  } else {
+    settingsSection?.classList.remove('hidden');
+    tabSettings?.classList.add('active');
+    loadSettings();
   }
+}
+
+async function loadSettings(): Promise<void> {
+  const cb = document.getElementById('setting-allow-registration') as HTMLInputElement | null;
+  const feedback = document.getElementById('settings-feedback');
+  if (!cb) return;
+
+  try {
+    const result = await api.get<{ allowRegistration: boolean }>('/api/admin/settings');
+    cb.checked = result.allowRegistration;
+  } catch { /* toast already shown */ }
+
+  // Remove previous listener by cloning
+  const newCb = cb.cloneNode(true) as HTMLInputElement;
+  cb.parentNode?.replaceChild(newCb, cb);
+
+  newCb.addEventListener('change', async () => {
+    try {
+      await api.patch<{ allowRegistration: boolean }>('/api/admin/settings', { allowRegistration: newCb.checked });
+      if (feedback) {
+        feedback.textContent = 'Settings saved.';
+        feedback.style.background = 'var(--cp-surface-2, #f0f4ff)';
+        feedback.style.color = 'var(--cp-accent, #0052cc)';
+        feedback.classList.remove('hidden');
+        setTimeout(() => feedback.classList.add('hidden'), 2000);
+      }
+    } catch {
+      if (feedback) {
+        feedback.textContent = 'Failed to save settings.';
+        feedback.style.background = '#fef2f2';
+        feedback.style.color = '#b91c1c';
+        feedback.classList.remove('hidden');
+        setTimeout(() => feedback.classList.add('hidden'), 2000);
+      }
+    }
+  });
 }
 
 async function loadUsers(): Promise<void> {

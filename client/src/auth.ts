@@ -27,6 +27,21 @@ document.addEventListener('DOMContentLoaded', () => {
     .then(r => { if (r.ok) window.location.href = '/dashboard.html'; })
     .catch(() => { /* not logged in */ });
 
+  // Hide registration form when registration is disabled
+  fetch('/api/auth/registration-status')
+    .then(r => r.json())
+    .then((status: { enabled: boolean }) => {
+      if (!status.enabled) {
+        document.getElementById('register-form')?.classList.add('hidden');
+        document.getElementById('registration-disabled-msg')?.classList.remove('hidden');
+        // Also hide the Register tab
+        document.querySelectorAll<HTMLButtonElement>('.tab').forEach(tab => {
+          if (tab.dataset.tab === 'register') tab.style.display = 'none';
+        });
+      }
+    })
+    .catch(() => { /* endpoint not yet deployed — silently ignore */ });
+
   document.getElementById('theme-toggle')?.addEventListener('click', () => {
     const next = currentTheme() === 'dark' ? 'light' : 'dark';
     applyTheme(next);

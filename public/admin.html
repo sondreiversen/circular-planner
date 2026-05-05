@@ -124,6 +124,7 @@
     <div class="tab-bar">
       <button class="tab-btn active" id="tab-users">Users</button>
       <button class="tab-btn" id="tab-groups">Groups</button>
+      <button class="tab-btn" id="tab-settings">Settings</button>
     </div>
 
     <!-- Users tab -->
@@ -159,6 +160,24 @@
       </div>
       <div id="groups-list">
         <div class="loading-state">Loading…</div>
+      </div>
+    </section>
+
+    <!-- Settings tab -->
+    <section id="section-settings" class="hidden">
+      <div class="section-header">
+        <h2>Settings</h2>
+      </div>
+      <div class="table-wrap" style="padding: 20px 24px;">
+        <label style="display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer;">
+          <input type="checkbox" id="setting-allow-registration" style="width:16px;height:16px;cursor:pointer;">
+          Allow user registration
+        </label>
+        <p class="hint" style="margin:10px 0 0;font-size:13px;color:var(--cp-text-muted);">
+          When disabled, the registration form is hidden on the login page.
+          GitLab SSO continues to auto-create users on first login.
+        </p>
+        <div id="settings-feedback" class="hidden" style="margin-top:12px;font-size:13px;padding:8px 12px;border-radius:6px;"></div>
       </div>
     </section>
   </main>

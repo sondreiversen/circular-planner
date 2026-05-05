@@ -20,6 +20,7 @@ import (
 	"planner/internal/config"
 	"planner/internal/db"
 	"planner/internal/middleware"
+	"planner/internal/settings"
 )
 
 // Handler handles /api/auth/* requests.
@@ -97,7 +98,7 @@ func jsonError(w http.ResponseWriter, status int, msg string) {
 // --- POST /api/auth/register ---
 
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
-	if !h.cfg.AllowRegistration {
+	if !settings.GetBool(r.Context(), h.db, "allow_registration", h.cfg.AllowRegistration) {
 		jsonError(w, http.StatusForbidden, "Registration is disabled")
 		return
 	}
@@ -450,9 +451,9 @@ func randomHex(n int) (string, error) {
 
 // --- GET /api/users ---
 
-// SearchUsers handles GET /api/users?q=<query>.
-// Returns up to 20 users whose username or email contains the query string.
-// The current user is excluded from results.
+// SearchUsers handles GET /api/users?q=<query>[&includeSelf=1].
+// Returns up to 20 users whose username, email, or full name contains the query string.
+// The current user is excluded from results unless includeSelf=1 is passed.
 func (h *Handler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
@@ -462,20 +463,22 @@ func (h *Handler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 
 	currentUserID := middleware.UserFrom(r).ID
 	pattern := "%" + strings.ToLower(q) + "%"
+	includeSelf := r.URL.Query().Get("includeSelf") == "1"
 
+	// Build WHERE clause: optionally exclude self.
 	// SQLite uses LIKE (case-insensitive for ASCII by default);
 	// Postgres uses ILIKE. Use LOWER() for portability.
-	rows, err := h.db.QueryContext(r.Context(),
-		h.db.Rebind(`
-			SELECT id, username, email, COALESCE(full_name,'') AS full_name
-			FROM users
-			WHERE id != ?
-			  AND (LOWER(username) LIKE ? OR LOWER(email) LIKE ? OR LOWER(COALESCE(full_name,'')) LIKE ?)
-			ORDER BY COALESCE(NULLIF(full_name,''), username)
-			LIMIT 20
-		`),
-		currentUserID, pattern, pattern, pattern,
-	)
+	where := "(LOWER(username) LIKE ? OR LOWER(email) LIKE ? OR LOWER(COALESCE(full_name,'')) LIKE ?)"
+	args := []any{pattern, pattern, pattern}
+	if !includeSelf {
+		where = "id != ? AND " + where
+		args = append([]any{currentUserID}, args...)
+	}
+
+	q2 := `SELECT id, username, email, COALESCE(full_name,'') AS full_name
+		FROM users WHERE ` + where + `
+		ORDER BY COALESCE(NULLIF(full_name,''), username) LIMIT 20`
+	rows, err := h.db.QueryContext(r.Context(), h.db.Rebind(q2), args...)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "Internal server error")
 		return
@@ -500,6 +503,16 @@ func (h *Handler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 		results = []userResult{}
 	}
 	writeJSON(w, http.StatusOK, results)
+}
+
+// --- GET /api/auth/registration-status ---
+
+// RegistrationStatus returns whether self-registration is currently enabled.
+// This endpoint is public (no auth required) so the login page can show/hide
+// the registration form before the user has a token.
+func (h *Handler) RegistrationStatus(w http.ResponseWriter, r *http.Request) {
+	enabled := settings.GetBool(r.Context(), h.db, "allow_registration", h.cfg.AllowRegistration)
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": enabled})
 }
 
 // --- misc helpers ---

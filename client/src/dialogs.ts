@@ -292,7 +292,7 @@ export function showActivityDialog(
     if (q.length < 1) { hideTagDropdown(); return; }
     tagSearchDebounce = setTimeout(async () => {
       try {
-        const users = await api.get<Array<{ id: number; username: string; email: string; fullName?: string | null }>>(`/api/users?q=${encodeURIComponent(q)}`);
+        const users = await api.get<Array<{ id: number; username: string; email: string; fullName?: string | null }>>(`/api/users?q=${encodeURIComponent(q)}&includeSelf=1`);
         tagDropdownEl.innerHTML = '';
         if (users.length === 0) {
           const noResult = document.createElement('div');

@@ -13,6 +13,7 @@ import (
 
 	"planner/internal/db"
 	"planner/internal/middleware"
+	"planner/internal/settings"
 )
 
 // Handler handles admin routes.
@@ -395,6 +396,43 @@ func (h *Handler) RemoveGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+// --- GET /api/admin/settings ---
+
+// GetSettings returns the current values of all admin-configurable settings.
+func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
+	allowReg := settings.GetBool(r.Context(), h.db, "allow_registration", true)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"allowRegistration": allowReg,
+	})
+}
+
+// --- PATCH /api/admin/settings ---
+
+// PatchSettings updates one or more admin-configurable settings and returns
+// the new full state. Omitted fields are left unchanged.
+func (h *Handler) PatchSettings(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AllowRegistration *bool `json:"allowRegistration"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		jsonError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	if body.AllowRegistration != nil {
+		if err := settings.SetBool(r.Context(), h.db, "allow_registration", *body.AllowRegistration); err != nil {
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
+	}
+
+	// Return the new full state.
+	allowReg := settings.GetBool(r.Context(), h.db, "allow_registration", true)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"allowRegistration": allowReg,
+	})
 }
 
 // guardLastGroupAdmin prevents removing or demoting the last admin of a group.

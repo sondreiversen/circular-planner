@@ -151,6 +151,22 @@ func main() {
 		log.Fatalf("migration: %v", err)
 	}
 
+	// Seed allow_registration from env on first run; thereafter the DB value wins.
+	{
+		var n int
+		_ = database.QueryRow(database.Rebind(
+			"SELECT COUNT(*) FROM app_settings WHERE key = ?"), "allow_registration").Scan(&n)
+		if n == 0 {
+			v := "true"
+			if !cfg.AllowRegistration {
+				v = "false"
+			}
+			_, _ = database.Exec(database.Rebind(
+				"INSERT INTO app_settings(key, value) VALUES (?, ?)"),
+				"allow_registration", v)
+		}
+	}
+
 	// --create-admin subcommand: seed an admin user and exit. Used by the
 	// air-gapped installer after first startup.
 	if len(os.Args) > 1 && os.Args[1] == "--create-admin" {
@@ -186,6 +202,7 @@ func main() {
 	mux.HandleFunc("GET /api/auth/gitlab/status", authH.GitLabStatus)
 	mux.HandleFunc("GET /api/auth/gitlab/authorize", authH.GitLabAuthorize)
 	mux.HandleFunc("GET /api/auth/gitlab/callback", authH.GitLabCallback)
+	mux.HandleFunc("GET /api/auth/registration-status", authH.RegistrationStatus)
 
 	// Mutation rate limiter — applied to all planner/share/group/import mutations.
 	mutLimit := middleware.Mutations()
@@ -195,6 +212,7 @@ func main() {
 	mux.HandleFunc("GET /api/planners", middleware.RequireAuth(cfg, database, planH.List))
 	mux.HandleFunc("POST /api/planners", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(planH.Create)).ServeHTTP))
 	mux.HandleFunc("GET /api/planners/{id}", middleware.RequireAuth(cfg, database, planH.Get))
+	mux.HandleFunc("GET /api/planners/{id}/members", middleware.RequireAuth(cfg, database, planH.Members))
 	mux.HandleFunc("PUT /api/planners/{id}", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(planH.Update)).ServeHTTP))
 	mux.HandleFunc("DELETE /api/planners/{id}", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(planH.Delete)).ServeHTTP))
 
@@ -230,6 +248,8 @@ func main() {
 	mux.HandleFunc("POST /api/admin/groups/{id}/members", requireAdmin(mutLimit(http.HandlerFunc(adminH.AddGroupMember)).ServeHTTP))
 	mux.HandleFunc("PATCH /api/admin/groups/{id}/members/{userID}", requireAdmin(mutLimit(http.HandlerFunc(adminH.UpdateGroupMember)).ServeHTTP))
 	mux.HandleFunc("DELETE /api/admin/groups/{id}/members/{userID}", requireAdmin(mutLimit(http.HandlerFunc(adminH.RemoveGroupMember)).ServeHTTP))
+	mux.HandleFunc("GET /api/admin/settings", requireAdmin(adminH.GetSettings))
+	mux.HandleFunc("PATCH /api/admin/settings", requireAdmin(mutLimit(http.HandlerFunc(adminH.PatchSettings)).ServeHTTP))
 
 	// Static files embedded from public/ (HTML, CSS, JS bundles)
 	sub, err := fs.Sub(publicFS, "public")
