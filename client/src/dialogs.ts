@@ -219,7 +219,7 @@ export function showActivityDialog(
           <span id="cp-act-recur-unit" style="font-size:13px;">${recType === 'weekly' ? 'week(s)' : 'day(s)'}</span>
         </div>
         <div id="cp-act-weekdays-row" style="${recType !== 'weekly' ? 'display:none' : ''}margin-top:6px;">
-          <div style="font-size:12px;color:#5f6b7a;margin-bottom:4px;">Repeat on</div>
+          <div style="font-size:12px;color:var(--cp-text-muted);margin-bottom:4px;">Repeat on</div>
           <div style="display:flex;flex-wrap:wrap;gap:6px;">
             ${weekdayCheckboxes}
           </div>
@@ -262,7 +262,7 @@ export function showActivityDialog(
     tagChipsEl.innerHTML = '';
     selectedTags.forEach(u => {
       const chip = document.createElement('span');
-      chip.style.cssText = 'display:inline-flex;align-items:center;gap:3px;background:var(--cp-accent-light,#e0edff);color:var(--cp-accent,#1e55c0);border-radius:12px;padding:2px 8px;font-size:12px;';
+      chip.style.cssText = 'display:inline-flex;align-items:center;gap:3px;background:var(--cp-accent-light);color:var(--cp-accent-on);border-radius:12px;padding:2px 8px;font-size:12px;';
       const dn = displayName({ username: u.username, fullName: u.fullName });
       chip.textContent = dn;
       const removeBtn = document.createElement('button');
@@ -296,7 +296,7 @@ export function showActivityDialog(
         tagDropdownEl.innerHTML = '';
         if (users.length === 0) {
           const noResult = document.createElement('div');
-          noResult.style.cssText = 'padding:8px 12px;font-size:13px;color:var(--cp-text-muted,#6b7280);';
+          noResult.style.cssText = 'padding:8px 12px;font-size:13px;color:var(--cp-text-muted);';
           noResult.textContent = 'No users found';
           tagDropdownEl.appendChild(noResult);
           tagDropdownEl.style.display = '';
@@ -306,7 +306,7 @@ export function showActivityDialog(
           if (selectedTags.find(t => t.id === u.id)) return; // already selected
           const item = document.createElement('div');
           item.style.cssText = 'padding:8px 12px;font-size:13px;cursor:pointer;';
-          item.addEventListener('mouseenter', () => { item.style.background = 'var(--cp-accent-bg,#f0f4ff)'; });
+          item.addEventListener('mouseenter', () => { item.style.background = 'var(--cp-accent-bg)'; });
           item.addEventListener('mouseleave', () => { item.style.background = ''; });
           const dn = displayName({ username: u.username, fullName: u.fullName ?? undefined });
           item.textContent = dn + (u.email ? ` <${u.email}>` : '');

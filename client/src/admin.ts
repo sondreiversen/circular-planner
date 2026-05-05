@@ -136,8 +136,8 @@ async function loadSettings(): Promise<void> {
     } catch {
       if (feedback) {
         feedback.textContent = 'Failed to save settings.';
-        feedback.style.background = '#fef2f2';
-        feedback.style.color = '#b91c1c';
+        feedback.style.background = 'var(--cp-feedback-err-bg)';
+        feedback.style.color = 'var(--cp-feedback-err-fg)';
         feedback.classList.remove('hidden');
         setTimeout(() => feedback.classList.add('hidden'), 2000);
       }

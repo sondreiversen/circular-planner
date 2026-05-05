@@ -57,13 +57,34 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.db.QueryContext(r.Context(), h.db.Rebind(`
 		SELECT p.id, p.title, p.start_date, p.end_date, p.owner_id,
 		       COALESCE(NULLIF(u.full_name, ''), u.username) AS owner_username,
-		       CASE WHEN p.owner_id = ? THEN 'owner' ELSE ps.permission END AS permission
+		       CASE
+		         WHEN p.owner_id = ? THEN 'owner'
+		         WHEN ps.permission = 'edit' OR gp.has_edit = 1 THEN 'edit'
+		         ELSE 'view'
+		       END AS permission,
+		       p.is_public
 		FROM planners p
 		JOIN users u ON u.id = p.owner_id
-		LEFT JOIN planner_shares ps ON ps.planner_id = p.id AND ps.user_id = ?
-		WHERE p.owner_id = ? OR ps.user_id = ?
+		LEFT JOIN planner_shares ps
+		       ON ps.planner_id = p.id AND ps.user_id = ?
+		LEFT JOIN (
+		  SELECT pgs.planner_id,
+		         MAX(CASE WHEN COALESCE(pgmo.permission, pgs.default_permission) = 'edit'
+		                  THEN 1 ELSE 0 END) AS has_edit
+		  FROM planner_group_shares pgs
+		  JOIN group_members gm
+		    ON gm.group_id = pgs.group_id AND gm.user_id = ?
+		  LEFT JOIN planner_group_member_overrides pgmo
+		    ON pgmo.planner_id = pgs.planner_id
+		   AND pgmo.group_id   = pgs.group_id
+		   AND pgmo.user_id    = ?
+		  GROUP BY pgs.planner_id
+		) gp ON gp.planner_id = p.id
+		WHERE p.owner_id = ?
+		   OR ps.user_id = ?
+		   OR gp.planner_id IS NOT NULL
 		ORDER BY p.updated_at DESC
-	`), userID, userID, userID, userID)
+	`), userID, userID, userID, userID, userID, userID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "Internal server error")
 		return
@@ -78,23 +99,25 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		OwnerID       int
 		OwnerUsername string
 		Permission    string
+		IsPublic      int
 	}
 
 	var result []map[string]any
 	for rows.Next() {
 		var r row
 		if err := rows.Scan(&r.ID, &r.Title, &r.StartDate, &r.EndDate,
-			&r.OwnerID, &r.OwnerUsername, &r.Permission); err != nil {
+			&r.OwnerID, &r.OwnerUsername, &r.Permission, &r.IsPublic); err != nil {
 			continue
 		}
 		result = append(result, map[string]any{
-			"id":        r.ID,
-			"title":     r.Title,
-			"startDate": r.StartDate.String(),
-			"endDate":   r.EndDate.String(),
-			"isOwner":   r.OwnerID == userID,
+			"id":         r.ID,
+			"title":      r.Title,
+			"startDate":  r.StartDate.String(),
+			"endDate":    r.EndDate.String(),
+			"isOwner":    r.OwnerID == userID,
 			"permission": r.Permission,
-			"ownerName": r.OwnerUsername,
+			"ownerName":  r.OwnerUsername,
+			"isPublic":   r.IsPublic == 1,
 		})
 	}
 	if result == nil {
@@ -161,10 +184,11 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	var title string
 	var startDate, endDate db.DateStr
 	var updatedAt string
+	var isPublic int
 	err := h.db.QueryRowContext(r.Context(),
-		h.db.Rebind("SELECT owner_id, title, start_date, end_date, updated_at FROM planners WHERE id = ?"),
+		h.db.Rebind("SELECT owner_id, title, start_date, end_date, updated_at, is_public FROM planners WHERE id = ?"),
 		plannerID,
-	).Scan(&ownerID, &title, &startDate, &endDate, &updatedAt)
+	).Scan(&ownerID, &title, &startDate, &endDate, &updatedAt, &isPublic)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, "Planner not found")
 		return
@@ -327,6 +351,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 			"isOwner":    ownerID == userID,
 			"permission": perm,
 			"updated_at": updatedAt,
+			"isPublic":   isPublic == 1,
 		},
 		"data": map[string]any{"lanes": lanesJSON},
 	})
@@ -366,6 +391,7 @@ type putBody struct {
 	Title           *string     `json:"title"`
 	StartDate       *string     `json:"startDate"`
 	EndDate         *string     `json:"endDate"`
+	IsPublic        *bool       `json:"isPublic"`
 	Lanes           []laneInput `json:"lanes"`
 	ClientUpdatedAt string      `json:"client_updated_at"` // optional; ISO8601; 409 if stale
 }
@@ -413,7 +439,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update planner metadata if provided
-	if body.Title != nil || body.StartDate != nil || body.EndDate != nil {
+	if body.Title != nil || body.StartDate != nil || body.EndDate != nil || body.IsPublic != nil {
 		// Build dynamic update
 		var sets []string
 		var args []any
@@ -428,6 +454,14 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		if body.EndDate != nil {
 			sets = append(sets, "end_date = ?")
 			args = append(args, *body.EndDate)
+		}
+		if body.IsPublic != nil {
+			sets = append(sets, "is_public = ?")
+			v := 0
+			if *body.IsPublic {
+				v = 1
+			}
+			args = append(args, v)
 		}
 		sets = append(sets, "updated_at = "+nowExpr(h.db))
 		args = append(args, plannerID)
@@ -644,8 +678,18 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserFrom(r).ID
 
 	if _, err := middleware.CanAccess(r.Context(), h.db, plannerID, userID, "owner"); err != nil {
-		handleAccessErr(w, err)
-		return
+		if !middleware.UserFrom(r).IsAdmin {
+			handleAccessErr(w, err)
+			return
+		}
+		// Admin override: confirm planner exists; otherwise CanAccess's 404 was correct.
+		var n int
+		_ = h.db.QueryRowContext(r.Context(),
+			h.db.Rebind("SELECT COUNT(*) FROM planners WHERE id = ?"), plannerID).Scan(&n)
+		if n == 0 {
+			jsonError(w, http.StatusNotFound, "Planner not found")
+			return
+		}
 	}
 
 	if _, err := h.db.ExecContext(r.Context(),
@@ -654,6 +698,60 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+// --- GET /api/planners/public ---
+
+// ListPublic returns all public planners that the authenticated user does not
+// already own or have direct/group-share access to (those appear in List).
+func (h *Handler) ListPublic(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserFrom(r).ID
+	rows, err := h.db.QueryContext(r.Context(), h.db.Rebind(`
+		SELECT p.id, p.title, p.start_date, p.end_date, p.owner_id,
+		       COALESCE(NULLIF(u.full_name,''), u.username) AS owner_username
+		FROM planners p
+		JOIN users u ON u.id = p.owner_id
+		WHERE p.is_public = 1
+		  AND p.owner_id != ?
+		  AND NOT EXISTS (SELECT 1 FROM planner_shares s WHERE s.planner_id = p.id AND s.user_id = ?)
+		  AND NOT EXISTS (
+		    SELECT 1 FROM planner_group_shares gs
+		    JOIN group_members gm ON gm.group_id = gs.group_id
+		    WHERE gs.planner_id = p.id AND gm.user_id = ?)
+		ORDER BY p.updated_at DESC
+		LIMIT 100
+	`), userID, userID, userID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	defer rows.Close()
+
+	var result []map[string]any
+	for rows.Next() {
+		var id int
+		var title string
+		var startDate, endDate db.DateStr
+		var ownerID int
+		var ownerUsername string
+		if err := rows.Scan(&id, &title, &startDate, &endDate, &ownerID, &ownerUsername); err != nil {
+			continue
+		}
+		result = append(result, map[string]any{
+			"id":         id,
+			"title":      title,
+			"startDate":  startDate.String(),
+			"endDate":    endDate.String(),
+			"isOwner":    false,
+			"permission": "view",
+			"ownerName":  ownerUsername,
+			"isPublic":   true,
+		})
+	}
+	if result == nil {
+		result = []map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // --- helpers ---

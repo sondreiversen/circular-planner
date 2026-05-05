@@ -8,7 +8,8 @@ export type ClickLaneSlotHandler = (laneId: string, date: Date) => void;
 const LANE_COL_WIDTH = 160;
 const SUB_ROW_HEIGHT = 26;
 const ROW_PADDING_Y = 6;
-const HEADER_HEIGHT = 32;
+const HEADER_ROW_HEIGHT = 32; // height of a single header row
+const HEADER_HEIGHT = HEADER_ROW_HEIGHT; // kept for reference; actual height set dynamically
 
 export class ListRenderer {
   private container: HTMLElement;
@@ -80,31 +81,59 @@ export class ListRenderer {
     const winSpan = Math.max(1, winEnd - winStart);
     const dateToX = (d: Date): number => ((d.getTime() - winStart) / winSpan) * timelineWidth;
 
-    // Header row
+    // Header: one row for subLabels (e.g. week numbers at Month zoom) when present,
+    // plus one row for primary labels (day numbers / month names).
+    const grid = getGridSpec(this.viewport);
+    const hasSubLabels = !!(grid.subLabels && grid.subLabels.length > 0);
+    const totalHeaderHeight = hasSubLabels ? HEADER_ROW_HEIGHT * 2 : HEADER_ROW_HEIGHT;
+
     const header = document.createElement('div');
     header.className = 'cp-list-header';
-    header.style.height = `${HEADER_HEIGHT}px`;
+    header.style.height = `${totalHeaderHeight}px`;
 
     const headerLaneCell = document.createElement('div');
     headerLaneCell.className = 'cp-list-lane-cell cp-list-header-cell';
     headerLaneCell.style.width = `${LANE_COL_WIDTH}px`;
+    headerLaneCell.style.height = '100%';
     headerLaneCell.textContent = 'Lane';
     header.appendChild(headerLaneCell);
 
-    const headerTimeline = document.createElement('div');
-    headerTimeline.className = 'cp-list-header-timeline';
-    headerTimeline.style.width = `${timelineWidth}px`;
+    // Timeline column: stacked rows
+    const headerTimelineCol = document.createElement('div');
+    headerTimelineCol.className = 'cp-list-header-timeline-col';
+    headerTimelineCol.style.width = `${timelineWidth}px`;
 
-    const grid = getGridSpec(this.viewport);
+    // Sub-label row (week numbers) — only rendered when subLabels are present
+    if (hasSubLabels) {
+      const subRow = document.createElement('div');
+      subRow.className = 'cp-list-header-row';
+      subRow.style.height = `${HEADER_ROW_HEIGHT}px`;
+      grid.subLabels!.forEach(({ date, text }) => {
+        if (date < this.viewport.windowStart || date > this.viewport.windowEnd) return;
+        const el = document.createElement('div');
+        el.className = 'cp-list-tick-sublabel';
+        el.style.left = `${dateToX(date)}px`;
+        el.textContent = text;
+        subRow.appendChild(el);
+      });
+      headerTimelineCol.appendChild(subRow);
+    }
+
+    // Primary label row (day numbers / month names)
+    const primaryRow = document.createElement('div');
+    primaryRow.className = 'cp-list-header-row';
+    primaryRow.style.height = `${HEADER_ROW_HEIGHT}px`;
     grid.labels.forEach(({ date, text }) => {
       if (date < this.viewport.windowStart || date > this.viewport.windowEnd) return;
       const el = document.createElement('div');
       el.className = 'cp-list-tick-label';
       el.style.left = `${dateToX(date)}px`;
       el.textContent = text;
-      headerTimeline.appendChild(el);
+      primaryRow.appendChild(el);
     });
-    header.appendChild(headerTimeline);
+    headerTimelineCol.appendChild(primaryRow);
+
+    header.appendChild(headerTimelineCol);
     this.root.appendChild(header);
 
     // Body

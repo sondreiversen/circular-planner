@@ -5,6 +5,7 @@ export interface PlannerConfig {
   endDate: string;   // YYYY-MM-DD
   isOwner: boolean;
   permission: 'owner' | 'edit' | 'view';
+  isPublic: boolean;
 }
 
 /**
@@ -100,6 +101,7 @@ export interface PlannerSummary {
   isOwner: boolean;
   permission: 'owner' | 'view' | 'edit';
   ownerName: string;
+  isPublic: boolean;
 }
 
 export interface ShareEntry {

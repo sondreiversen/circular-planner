@@ -15,8 +15,8 @@
 .cp-sidebar {
   width: 240px;
   min-width: 240px;
-  background: #f8f9fb;
-  border-right: 1px solid #e4e7ed;
+  background: var(--cp-surface-2);
+  border-right: 1px solid var(--cp-border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -70,7 +70,7 @@
 .cp-sidebar-label {
   font-size: 11px;
   font-weight: 600;
-  color: #8896a5;
+  color: var(--cp-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -107,7 +107,7 @@
 }
 
 .cp-svg-container:focus {
-  outline: 2px solid #4a90e2;
+  outline: 2px solid var(--cp-accent);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -296,12 +296,12 @@
 
 .cp-filter-input {
   padding: 4px 8px;
-  border: 1px solid #d0d4db;
+  border: 1px solid var(--cp-border-strong);
   border-radius: 6px;
   font-size: 12px;
   font-family: inherit;
-  background: white;
-  color: #2c3e50;
+  background: var(--cp-surface);
+  color: var(--cp-text);
 }
 
 .cp-filter-input--full {
@@ -311,7 +311,7 @@
 
 .cp-filter-input:focus {
   outline: none;
-  border-color: #4a90e2;
+  border-color: var(--cp-accent);
   box-shadow: 0 0 0 2px rgba(74,144,226,0.2);
 }
 
@@ -347,11 +347,7 @@
 .cp-sidebar-lane-row.drag-over-top { border-top: 2px solid var(--cp-accent, #4c8bf5); }
 .cp-sidebar-lane-row.drag-over-bottom { border-bottom: 2px solid var(--cp-accent, #4c8bf5); }
 
-/* ---- Dark mode: sidebar surface ---- */
-.cp-sidebar {
-  background: var(--cp-surface-2, #f8f9fb);
-  border-right: 1px solid var(--cp-border, #e4e7ed);
-}
+/* ---- Filter input: use CSS vars for theming ---- */
 .cp-filter-input {
   border-color: var(--cp-border-strong, #d0d4db);
   background: var(--cp-surface, #fff);
@@ -438,12 +434,33 @@
   flex-shrink: 0;
   border-bottom: 1px solid var(--cp-border, #e4e7ed);
 }
+/* Multi-row header support (e.g. week + day rows at Month zoom) */
+.cp-list-header-timeline-col {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+.cp-list-header-row {
+  position: relative;
+  border-bottom: 1px solid var(--cp-border, #e4e7ed);
+}
 .cp-list-tick-label {
   position: absolute;
   top: 8px;
   transform: translateX(-50%);
   font-size: 11px;
   color: var(--cp-text-muted, #5a6b7a);
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* Secondary tier labels (week numbers) — slightly muted relative to primary */
+.cp-list-tick-sublabel {
+  position: absolute;
+  top: 8px;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--cp-text-muted, #5a6b7a);
+  opacity: 0.75;
   white-space: nowrap;
   pointer-events: none;
 }
@@ -494,7 +511,7 @@
   text-overflow: ellipsis;
   cursor: pointer;
   box-shadow: 0 1px 2px rgba(0,0,0,0.15);
-  border: 1px solid rgba(0,0,0,0.1);
+  border: 1px solid var(--cp-border-strong);
   z-index: 2;
   transition: filter 0.1s;
 }

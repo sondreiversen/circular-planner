@@ -101,7 +101,7 @@ async function init(): Promise<void> {
     }
 
     if (shareBtn && config.isOwner) {
-      shareBtn.addEventListener('click', () => openShareDialog(plannerId));
+      shareBtn.addEventListener('click', () => openShareDialog(plannerId, config));
     }
 
     document.getElementById('logout-btn')?.addEventListener('click', logout);
@@ -126,13 +126,42 @@ async function init(): Promise<void> {
   }
 }
 
-async function openShareDialog(plannerId: number): Promise<void> {
+async function openShareDialog(plannerId: number, config: PlannerConfig): Promise<void> {
   const overlay = document.getElementById('share-overlay');
   if (!overlay) return;
+
+  // Initialise the public toggle from current config state on every open
+  const publicCb = document.getElementById('share-make-public') as HTMLInputElement | null;
+  if (publicCb) publicCb.checked = config.isPublic;
 
   // Bind listeners once; subsequent calls just show the dialog
   if (!overlay.dataset.initialized) {
     overlay.dataset.initialized = 'true';
+
+    // Wire "Make public" toggle
+    const cb = document.getElementById('share-make-public') as HTMLInputElement | null;
+    const feedbackEl = document.getElementById('share-public-feedback');
+    cb?.addEventListener('change', async () => {
+      const newValue = cb.checked;
+      try {
+        await api.put(`/api/planners/${plannerId}`, { isPublic: newValue });
+        config.isPublic = newValue;
+        if (feedbackEl) {
+          feedbackEl.textContent = newValue ? 'Planner is now public.' : 'Planner is now private.';
+          feedbackEl.classList.remove('hidden', 'share-public-feedback--error');
+          feedbackEl.classList.add('share-public-feedback--ok');
+          setTimeout(() => feedbackEl.classList.add('hidden'), 3000);
+        }
+      } catch (err: unknown) {
+        // Revert checkbox on error
+        cb.checked = !newValue;
+        if (feedbackEl) {
+          feedbackEl.textContent = (err as Error).message || 'Failed to update visibility.';
+          feedbackEl.classList.remove('hidden', 'share-public-feedback--ok');
+          feedbackEl.classList.add('share-public-feedback--error');
+        }
+      }
+    });
 
     document.getElementById('share-close')?.addEventListener('click', () => overlay.classList.add('hidden'));
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.add('hidden'); });

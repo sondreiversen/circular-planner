@@ -570,7 +570,7 @@ export class Planner {
     const borderInput = document.createElement('input');
     borderInput.type = 'color';
     borderInput.value = storedBorder || '#ffffff';
-    borderInput.style.cssText = 'width:32px;height:26px;padding:0;border:1px solid #ccc;border-radius:3px;cursor:pointer;';
+    borderInput.style.cssText = 'width:32px;height:26px;padding:0;border:1px solid var(--cp-border-strong);border-radius:3px;cursor:pointer;';
     borderInput.title = 'Lane border colour';
     borderInput.disabled = !this.showBorder;
     borderInput.addEventListener('input', () => {
@@ -623,7 +623,7 @@ export class Planner {
     rangeSection.appendChild(rangeStart);
 
     const rangeTo = document.createElement('div');
-    rangeTo.style.cssText = 'font-size:11px;color:#6b7280;text-align:center;margin:2px 0;';
+    rangeTo.style.cssText = 'font-size:11px;color:var(--cp-text-muted);text-align:center;margin:2px 0;';
     rangeTo.textContent = '→';
     rangeSection.appendChild(rangeTo);
 
@@ -710,12 +710,12 @@ export class Planner {
 
   private buildToolbar(): void {
     this.toolbar.innerHTML = '';
-    this.toolbar.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 8px;background:white;border-bottom:1px solid #e4e7ed;';
+    this.toolbar.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 8px;background:var(--cp-surface);border-bottom:1px solid var(--cp-border);';
 
     // Title
     const title = document.createElement('span');
     title.className = 'cp-toolbar-title';
-    title.style.cssText = 'font-weight:600;font-size:14px;color:#1a2332;margin-right:4px;';
+    title.style.cssText = 'font-weight:600;font-size:14px;color:var(--cp-text);margin-right:4px;';
     title.textContent = this.config.title;
     this.toolbar.appendChild(title);
 

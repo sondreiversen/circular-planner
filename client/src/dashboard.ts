@@ -20,6 +20,9 @@ initTheme();
 const today = new Date();
 const thisYear = today.getFullYear();
 
+// Tracks whether the current user is an admin (populated on DOMContentLoaded)
+let currentUserIsAdmin = false;
+
 document.addEventListener('DOMContentLoaded', async () => {
   applyBranding();
   // Verify session via cookie; populate username from /api/auth/me.
@@ -30,6 +33,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const el = document.getElementById('header-username');
     if (el && me.user?.username) el.textContent = displayName({ username: me.user.username, fullName: me.user.fullName });
     if (me.user?.is_admin) {
+      currentUserIsAdmin = true;
       const headerRight = document.querySelector('.header-right');
       if (headerRight) {
         const adminLink = document.createElement('a');
@@ -95,11 +99,142 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   await loadPlanners();
   await loadGroups();
+  await loadPublicPlanners();
 });
 
 function closeDialog(): void {
   document.getElementById('new-planner-overlay')?.classList.add('hidden');
 }
+
+// ── Delete confirmation modal ────────────────────────────────────────────────
+
+function openDeleteModal(plannerId: number, plannerTitle: string, cardEl: HTMLElement, triggerBtn: HTMLElement): void {
+  const previouslyFocused = triggerBtn;
+
+  const backdrop = document.createElement('section');
+  backdrop.className = 'cp-dialog-backdrop';
+  backdrop.setAttribute('role', 'dialog');
+  backdrop.setAttribute('aria-modal', 'true');
+
+  backdrop.innerHTML = `
+    <div class="cp-dialog-box cp-dialog-box--narrow">
+      <h2 class="cp-dialog-title">Delete planner &ldquo;${escapeHtml(plannerTitle)}&rdquo;?</h2>
+      <p style="font-size:13px;color:var(--cp-text-muted);margin-bottom:16px;line-height:1.5;">
+        This permanently deletes the planner and all its lanes, activities, and shares.
+        <strong>This cannot be undone.</strong>
+      </p>
+      <label class="cp-dialog-label cp-dialog-label--last">
+        Type the planner title to confirm:
+        <input id="cp-delete-confirm-input" class="cp-dialog-input" autocomplete="off" spellcheck="false">
+      </label>
+      <div id="cp-delete-error" class="cp-dialog-error" style="display:none;"></div>
+      <div class="cp-dialog-actions">
+        <div class="cp-dialog-actions-right">
+          <button id="cp-delete-cancel" class="cp-dialog-btn">Cancel</button>
+          <button id="cp-delete-confirm" class="cp-dialog-btn cp-dialog-btn--danger" disabled>Delete</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(backdrop);
+
+  const input   = backdrop.querySelector<HTMLInputElement>('#cp-delete-confirm-input')!;
+  const confirmBtn = backdrop.querySelector<HTMLButtonElement>('#cp-delete-confirm')!;
+  const cancelBtn  = backdrop.querySelector<HTMLButtonElement>('#cp-delete-cancel')!;
+  const errorEl    = backdrop.querySelector<HTMLElement>('#cp-delete-error')!;
+
+  // Focus trap
+  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  const trapHandler = (e: KeyboardEvent) => {
+    if (e.key !== 'Tab') return;
+    const focusable = Array.from(backdrop.querySelectorAll<HTMLElement>(FOCUSABLE))
+      .filter(el => el.offsetParent !== null);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last  = focusable[focusable.length - 1];
+    if (e.shiftKey) {
+      if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+    } else {
+      if (document.activeElement === last)  { e.preventDefault(); first.focus(); }
+    }
+  };
+  backdrop.addEventListener('keydown', trapHandler);
+
+  function closeModal() {
+    backdrop.remove();
+    if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus();
+  }
+
+  // Enable Delete button only when input matches title exactly
+  input.addEventListener('input', () => {
+    confirmBtn.disabled = input.value !== plannerTitle;
+  });
+
+  cancelBtn.addEventListener('click', closeModal);
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) closeModal();
+  });
+
+  backdrop.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeModal();
+  });
+
+  confirmBtn.addEventListener('click', async () => {
+    confirmBtn.disabled = true;
+    errorEl.style.display = 'none';
+    try {
+      await api.delete(`/api/planners/${plannerId}`);
+      // Remove card from the DOM
+      cardEl.remove();
+      closeModal();
+    } catch (err: unknown) {
+      errorEl.textContent = (err as Error).message || 'Failed to delete planner.';
+      errorEl.style.display = 'block';
+      confirmBtn.disabled = false;
+    }
+  });
+
+  // Focus the input on open
+  requestAnimationFrame(() => input.focus());
+}
+
+// ── Card builder ─────────────────────────────────────────────────────────────
+
+function buildPlannerCard(p: PlannerSummary, showDelete: boolean): HTMLElement {
+  const card = document.createElement('div');
+  card.className = 'planner-card';
+  const badge = p.isOwner ? 'badge-owner' : (p.permission === 'edit' ? 'badge-edit' : 'badge-view');
+  const badgeText = p.isOwner ? 'Owner' : p.permission;
+  const publicBadge = p.isPublic ? '<span class="badge badge-public">Public</span>' : '';
+  const deleteBtn = showDelete
+    ? `<button class="card-action card-delete" data-planner-id="${p.id}" data-planner-title="${escapeHtml(p.title)}" title="Delete planner">Delete</button>`
+    : '';
+  card.innerHTML = `
+    <div class="planner-card-title">${escapeHtml(p.title)}</div>
+    <div class="planner-card-dates">${escapeHtml(p.startDate)} → ${escapeHtml(p.endDate)}</div>
+    <div class="planner-card-meta">
+      <span class="badge ${badge}">${escapeHtml(badgeText)}</span>
+      ${publicBadge}
+      ${!p.isOwner ? `<span style="font-size:11px;color:#8896a5;">by ${escapeHtml(p.ownerName)}</span>` : ''}
+    </div>
+    ${deleteBtn ? `<div class="planner-card-actions">${deleteBtn}</div>` : ''}
+  `;
+  card.addEventListener('click', () => { window.location.href = `/planner.html?id=${p.id}`; });
+
+  if (showDelete) {
+    const btn = card.querySelector<HTMLButtonElement>('.card-delete');
+    btn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openDeleteModal(p.id, p.title, card, btn);
+    });
+  }
+
+  return card;
+}
+
+// ── Loaders ──────────────────────────────────────────────────────────────────
 
 async function loadPlanners(): Promise<void> {
   const grid = document.getElementById('planners-grid');
@@ -127,23 +262,51 @@ async function loadPlanners(): Promise<void> {
     }
 
     planners.forEach(p => {
-      const card = document.createElement('div');
-      card.className = 'planner-card';
-      const badge = p.isOwner ? 'badge-owner' : (p.permission === 'edit' ? 'badge-edit' : 'badge-view');
-      const badgeText = p.isOwner ? 'Owner' : p.permission;
-      card.innerHTML = `
-        <div class="planner-card-title">${escapeHtml(p.title)}</div>
-        <div class="planner-card-dates">${escapeHtml(p.startDate)} → ${escapeHtml(p.endDate)}</div>
-        <div class="planner-card-meta">
-          <span class="badge ${badge}">${escapeHtml(badgeText)}</span>
-          ${!p.isOwner ? `<span style="font-size:11px;color:#8896a5;">by ${escapeHtml(p.ownerName)}</span>` : ''}
-        </div>
-      `;
-      card.addEventListener('click', () => { window.location.href = `/planner.html?id=${p.id}`; });
-      grid.appendChild(card);
+      const showDelete = p.isOwner || currentUserIsAdmin;
+      grid.appendChild(buildPlannerCard(p, showDelete));
     });
   } catch (err: unknown) {
     if (grid) grid.innerHTML = `<div class="error-state">Failed to load planners: ${escapeHtml((err as Error).message)}</div>`;
+  }
+}
+
+async function loadPublicPlanners(): Promise<void> {
+  let section = document.getElementById('discover-section');
+  try {
+    const planners = await api.get<PlannerSummary[]>('/api/planners/public');
+    if (planners.length === 0) {
+      if (section) section.style.display = 'none';
+      return;
+    }
+
+    // Create the section if it doesn't already exist in HTML
+    if (!section) {
+      section = document.createElement('section');
+      section.id = 'discover-section';
+      section.className = 'dashboard-section';
+      section.innerHTML = `
+        <div class="dashboard-title-row" style="margin-top:36px;">
+          <h2>Discover</h2>
+        </div>
+        <div class="planner-grid planners-grid" id="discover-grid"></div>
+      `;
+      const main = document.querySelector('.dashboard-main');
+      if (main) main.appendChild(section);
+    } else {
+      section.style.display = '';
+    }
+
+    const grid = document.getElementById('discover-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    planners.forEach(p => {
+      // No Delete button in Discover — browse-only
+      grid.appendChild(buildPlannerCard(p, false));
+    });
+  } catch {
+    // If the endpoint isn't available yet or fails, silently hide section
+    if (section) section.style.display = 'none';
   }
 }
 
@@ -176,4 +339,3 @@ async function loadGroups(): Promise<void> {
     if (grid) grid.innerHTML = `<div class="error-state">Failed to load groups: ${escapeHtml((err as Error).message)}</div>`;
   }
 }
-

@@ -4,6 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Circular Planner</title>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('cp_theme');
+        if (t === 'dark' || t === 'light') {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+      } catch (e) {}
+    })();
+  </script>
   <link rel="stylesheet" href="/css/app.css">
   <link rel="stylesheet" href="/css/circular-planner.css">
 </head>
@@ -42,6 +52,14 @@
 
       <!-- Users panel -->
       <div id="share-panel-users">
+        <div class="share-public-row">
+          <label class="share-public-label">
+            <input type="checkbox" id="share-make-public">
+            <span>Public — anyone logged in can view</span>
+          </label>
+          <p class="share-public-hint">When on, this planner appears in the Discover section for all registered users on this instance. Edit access is unaffected.</p>
+          <div id="share-public-feedback" class="share-public-feedback hidden"></div>
+        </div>
         <div id="share-error" class="form-error hidden"></div>
         <div id="share-list" class="share-list"></div>
         <form id="share-form" class="share-add-form">

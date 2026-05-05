@@ -35,6 +35,17 @@ func CanAccess(ctx context.Context, database *db.DB, plannerID, userID int, requ
 		return "", &AccessError{Status: 403, Message: "Only the owner can do this"}
 	}
 
+	// Public planner bypass: any authenticated user may view a public planner.
+	if require == "view" {
+		var isPublic int
+		_ = database.QueryRowContext(ctx,
+			database.Rebind("SELECT is_public FROM planners WHERE id = ?"), plannerID,
+		).Scan(&isPublic)
+		if isPublic == 1 {
+			return "view", nil
+		}
+	}
+
 	// Direct per-user share
 	var perm string
 	err = database.QueryRowContext(ctx,

@@ -211,6 +211,7 @@ func main() {
 	planH := planners.NewHandler(database, cfg)
 	mux.HandleFunc("GET /api/planners", middleware.RequireAuth(cfg, database, planH.List))
 	mux.HandleFunc("POST /api/planners", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(planH.Create)).ServeHTTP))
+	mux.HandleFunc("GET /api/planners/public", middleware.RequireAuth(cfg, database, planH.ListPublic))
 	mux.HandleFunc("GET /api/planners/{id}", middleware.RequireAuth(cfg, database, planH.Get))
 	mux.HandleFunc("GET /api/planners/{id}/members", middleware.RequireAuth(cfg, database, planH.Members))
 	mux.HandleFunc("PUT /api/planners/{id}", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(planH.Update)).ServeHTTP))

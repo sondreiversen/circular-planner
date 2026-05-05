@@ -4,6 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Groups — Circular Planner</title>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('cp_theme');
+        if (t === 'dark' || t === 'light') {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+      } catch (e) {}
+    })();
+  </script>
   <link rel="stylesheet" href="/css/app.css">
   <style>
     .groups-page { max-width: 960px; margin: 0 auto; padding: 28px 20px; }
@@ -29,9 +39,6 @@
     .group-card-name { font-weight: 600; font-size: 15px; }
     .group-card-desc { font-size: 12px; color: var(--cp-text-muted); }
     .group-card-meta { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
-
-    .badge-admin  { background: #fef3c7; color: #92400e; }
-    .badge-member { background: #f0f2f5; color: #5a6b7a; }
 
     /* Group detail view */
     .group-detail { max-width: 680px; }

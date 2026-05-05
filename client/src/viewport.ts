@@ -187,8 +187,10 @@ export function getGridSpec(viewport: Viewport): GridSpec {
       iterateWeeks(windowStart, windowEnd, (d) => {
         majorTicks.push(d);
         const weekNum = getWeekNumber(d);
-        // W1 is anchor (start of year); all week labels act as anchors in Month zoom
-        labels.push({ date: addDays(d, 3), text: `W${weekNum}`, anchor: weekNum === 1 });
+        // Week labels go into subLabels so list/people views can render a dedicated
+        // second header row and the disc renders them in the inner sub-label ring,
+        // preventing overlap with day-of-month labels on the disc perimeter.
+        subLabels.push({ date: addDays(d, 3), text: `W${weekNum}` });
       });
       iterateDays(windowStart, windowEnd, (d) => {
         minorTicks.push(d);
