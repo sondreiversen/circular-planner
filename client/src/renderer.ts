@@ -588,7 +588,12 @@ export class Renderer {
     const textR = (subInnerR + subOuterR) / 2;
     const tx = Math.sin(midAngle) * textR;
     const ty = -Math.cos(midAngle) * textR;
-    const rotateDeg = (midAngle * 180 / Math.PI);
+    let rotateDeg = (midAngle * 180 / Math.PI);
+    // Flip text in the bottom half of the disc so it reads right-side up.
+    const normalizedDeg = ((rotateDeg % 360) + 360) % 360;
+    if (normalizedDeg > 90 && normalizedDeg < 270) {
+      rotateDeg += 180;
+    }
 
     const arcSpanDeg = (endAngle - startAngle) * 180 / Math.PI;
     if (arcSpanDeg > 10 && subHeight >= 10) {

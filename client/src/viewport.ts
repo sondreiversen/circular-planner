@@ -1,5 +1,5 @@
 import { PlannerConfig, Viewport, ZoomLevel, GridSpec } from './types';
-import { parseDate, addDays, addMonths, getMonday, getMonthStart } from './utils';
+import { parseDate, addDays, addMonths, getMonday, getMonthStart, formatDate } from './utils';
 
 const MONTHS_FULL = [
   'January','February','March','April','May','June',
@@ -210,7 +210,12 @@ export function getGridSpec(viewport: Viewport): GridSpec {
   return { majorTicks, minorTicks, labels, subLabels: subLabels.length ? subLabels : undefined };
 }
 
-/** Human-readable label for the current viewport */
+/** ISO YYYY-MM */
+function formatYearMonth(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/** ISO-formatted label for the current viewport */
 export function viewportLabel(viewport: Viewport): string {
   const { windowStart, windowEnd, zoomLevel } = viewport;
 
@@ -221,25 +226,19 @@ export function viewportLabel(viewport: Viewport): string {
           windowStart.getFullYear() === windowEnd.getFullYear()) {
         return String(windowStart.getFullYear());
       }
-      // Sliding window spanning two years: show abbreviated range
+      // Sliding window: ISO month range
       const endDisplay = addMonths(windowEnd, -1);
-      return `${MONTHS_SHORT[windowStart.getMonth()]} ${yearSuffix(windowStart)}–${MONTHS_SHORT[endDisplay.getMonth()]} ${yearSuffix(endDisplay)}`;
+      return `${formatYearMonth(windowStart)} – ${formatYearMonth(endDisplay)}`;
     }
     case ZoomLevel.Quarter: {
-      const m1 = MONTHS_SHORT[windowStart.getMonth()];
       const endMonth = addMonths(windowStart, 2);
-      const m2 = MONTHS_SHORT[endMonth.getMonth()];
-      if (windowStart.getFullYear() !== endMonth.getFullYear()) {
-        return `${m1} ${yearSuffix(windowStart)}–${m2} ${yearSuffix(endMonth)}`;
-      }
-      return `${m1}–${m2} ${windowStart.getFullYear()}`;
+      return `${formatYearMonth(windowStart)} – ${formatYearMonth(endMonth)}`;
     }
     case ZoomLevel.Month:
-      return `${MONTHS_FULL[windowStart.getMonth()]} ${windowStart.getFullYear()}`;
+      return formatYearMonth(windowStart);
     case ZoomLevel.Week: {
       const end = addDays(windowStart, 6);
-      const m = MONTHS_SHORT[windowStart.getMonth()];
-      return `${m} ${windowStart.getDate()}–${end.getDate()}, ${windowStart.getFullYear()}`;
+      return `${formatDate(windowStart)} – ${formatDate(end)}`;
     }
   }
 }
