@@ -14,9 +14,19 @@
       } catch (e) {}
     })();
   </script>
+  <link rel="preload" as="script" href="/js/admin-bundle.js">
   <link rel="stylesheet" href="/css/app.css">
   <style>
-    .admin-page { max-width: 960px; margin: 0 auto; padding: 28px 20px; }
+    .admin-page {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 28px 20px;
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      width: 100%;
+      box-sizing: border-box;
+    }
 
     .tab-bar { display: flex; gap: 4px; margin-bottom: 28px; border-bottom: 1px solid var(--cp-border); }
     .tab-btn {

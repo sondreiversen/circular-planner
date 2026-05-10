@@ -19,7 +19,7 @@ function hexToRgba(hex: string, alpha: number): string {
 import { DataManager } from './data-manager';
 import { showActivityDialog, showLaneDialog, showOutlookImportDialog } from './dialogs';
 import { randomId, laneColor, parseDate, formatDate } from './utils';
-import { defaultViewport, zoomIn, zoomOut, navigate, canZoomIn, canZoomOut, viewportLabel, navigateToYear, navigateToRange } from './viewport';
+import { defaultViewport, zoomIn, zoomOut, navigate, canZoomIn, canZoomOut, viewportLabel, navigateToYear, navigateToRange, navigateToToday } from './viewport';
 import { ZoomLevel } from './types';
 
 /**
@@ -310,6 +310,51 @@ export class Planner {
     this.applyViewMode();
   }
 
+  /**
+   * Build a section whose header is a clickable button with a chevron.
+   * Collapsed state persists in localStorage under `cp_sidebar_collapsed_<key>`.
+   * Returns the outer section element and the inner content container — append
+   * rows to `content`, the section to `body`.
+   */
+  private makeCollapsibleSection(title: string, key: string): { section: HTMLElement; content: HTMLElement } {
+    const section = document.createElement('div');
+    section.className = 'cp-sidebar-section';
+    const storageKey = `cp_sidebar_collapsed_${key}`;
+    if (localStorage.getItem(storageKey) === '1') {
+      section.classList.add('cp-sidebar-section--collapsed');
+    }
+
+    const heading = document.createElement('button');
+    heading.type = 'button';
+    heading.className = 'cp-sidebar-collapsible';
+
+    const chevron = document.createElement('span');
+    chevron.className = 'cp-sidebar-chevron';
+    chevron.textContent = '▾';
+    chevron.setAttribute('aria-hidden', 'true');
+
+    const titleSpan = document.createElement('span');
+    titleSpan.textContent = title;
+
+    heading.appendChild(chevron);
+    heading.appendChild(titleSpan);
+    heading.addEventListener('click', () => {
+      section.classList.toggle('cp-sidebar-section--collapsed');
+      const collapsed = section.classList.contains('cp-sidebar-section--collapsed');
+      localStorage.setItem(storageKey, collapsed ? '1' : '0');
+      heading.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    });
+    heading.setAttribute('aria-expanded', section.classList.contains('cp-sidebar-section--collapsed') ? 'false' : 'true');
+
+    section.appendChild(heading);
+
+    const content = document.createElement('div');
+    content.className = 'cp-sidebar-section-body';
+    section.appendChild(content);
+
+    return { section, content };
+  }
+
   private buildSidebar(body: HTMLElement): void {
     body.innerHTML = '';
 
@@ -338,13 +383,7 @@ export class Planner {
     body.appendChild(searchSection);
 
     // Section: Lanes (top of list = outermost = highest order)
-    const lanesSection = document.createElement('div');
-    lanesSection.className = 'cp-sidebar-section';
-
-    const lanesHeading = document.createElement('div');
-    lanesHeading.className = 'cp-sidebar-label';
-    lanesHeading.textContent = 'Lanes';
-    lanesSection.appendChild(lanesHeading);
+    const { section: lanesSection, content: lanesContent } = this.makeCollapsibleSection('Lanes', 'lanes');
 
     // Reverse: highest order (outermost) at top
     const sidebarOrder = [...this.data.lanes].sort((a, b) => b.order - a.order);
@@ -402,7 +441,7 @@ export class Planner {
       laneRow.addEventListener('dragend', () => {
         dragSrcId = null;
         laneRow.classList.remove('dragging');
-        lanesSection.querySelectorAll('.cp-sidebar-lane-row').forEach(r => {
+        lanesContent.querySelectorAll('.cp-sidebar-lane-row').forEach(r => {
           r.classList.remove('drag-over-top', 'drag-over-bottom');
         });
       });
@@ -424,13 +463,13 @@ export class Planner {
         if (!dragSrcId || dragSrcId === lane.id) return;
         const rect = laneRow.getBoundingClientRect();
         const above = e.clientY < rect.top + rect.height / 2;
-        const rows = lanesSection.querySelectorAll<HTMLElement>('.cp-sidebar-lane-row');
+        const rows = lanesContent.querySelectorAll<HTMLElement>('.cp-sidebar-lane-row');
         const targetIndex = [...rows].indexOf(laneRow);
         const dropIndex = above ? targetIndex : targetIndex + 1;
         this.handleReorderLane(dragSrcId, dropIndex);
       });
 
-      lanesSection.appendChild(laneRow);
+      lanesContent.appendChild(laneRow);
     });
 
     const addLaneBtn = document.createElement('button');
@@ -438,7 +477,7 @@ export class Planner {
     addLaneBtn.className = 'cp-btn cp-btn-primary';
     addLaneBtn.style.cssText = 'width:100%;margin-top:8px;';
     addLaneBtn.addEventListener('click', () => this.handleAddLane());
-    lanesSection.appendChild(addLaneBtn);
+    lanesContent.appendChild(addLaneBtn);
     body.appendChild(lanesSection);
 
     // Section: Labels (if any exist)
@@ -447,13 +486,7 @@ export class Planner {
     const hasUntagged = allActivities.some(a => !a.label);
 
     if (allLabels.length > 0 || hasUntagged) {
-      const labelsSection = document.createElement('div');
-      labelsSection.className = 'cp-sidebar-section';
-
-      const labelsHeading = document.createElement('div');
-      labelsHeading.className = 'cp-sidebar-label';
-      labelsHeading.textContent = 'Labels';
-      labelsSection.appendChild(labelsHeading);
+      const { section: labelsSection, content: labelsContent } = this.makeCollapsibleSection('Labels', 'labels');
 
       const makeChip = (lbl: string, displayText: string) => {
         const row = document.createElement('label');
@@ -463,16 +496,16 @@ export class Planner {
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.checked = this.filterState.activeLabels.has(lbl);
-        cb.style.cssText = 'margin:0;cursor:pointer;';
+        cb.style.cssText = 'margin:0;cursor:pointer;flex-shrink:0;';
         cb.addEventListener('change', () => this.handleToggleLabel(lbl));
 
         const nameSpan = document.createElement('span');
         nameSpan.textContent = displayText;
-        nameSpan.style.cssText = `flex:1;font-size:12px;opacity:${this.filterState.activeLabels.size > 0 && !this.filterState.activeLabels.has(lbl) ? '0.4' : '1'};`;
+        nameSpan.style.cssText = `flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;opacity:${this.filterState.activeLabels.size > 0 && !this.filterState.activeLabels.has(lbl) ? '0.4' : '1'};`;
 
         row.appendChild(cb);
         row.appendChild(nameSpan);
-        labelsSection.appendChild(row);
+        labelsContent.appendChild(row);
       };
 
       allLabels.forEach(lbl => makeChip(lbl, lbl));
@@ -497,13 +530,8 @@ export class Planner {
       });
 
     if (allTaggedUsers.length > 0) {
-      const taggedUsersSection = document.createElement('div');
-      taggedUsersSection.className = 'cp-sidebar-section';
-
-      const taggedUsersHeading = document.createElement('div');
-      taggedUsersHeading.className = 'cp-sidebar-label';
-      taggedUsersHeading.textContent = 'Tagged users';
-      taggedUsersSection.appendChild(taggedUsersHeading);
+      const { section: taggedUsersSection, content: taggedUsersContent } =
+        this.makeCollapsibleSection('Tagged users', 'tagged_users');
 
       allTaggedUsers.forEach(u => {
         const dn = u.fullName?.trim() || u.username;
@@ -516,16 +544,16 @@ export class Planner {
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.checked = isActive;
-        cb.style.cssText = 'margin:0;cursor:pointer;';
+        cb.style.cssText = 'margin:0;cursor:pointer;flex-shrink:0;';
         cb.addEventListener('change', () => this.handleToggleTaggedUser(u.id));
 
         const nameSpan = document.createElement('span');
         nameSpan.textContent = dn;
-        nameSpan.style.cssText = `flex:1;font-size:12px;opacity:${this.filterState.activeTaggedUserIds.size > 0 && !isActive ? '0.4' : '1'};`;
+        nameSpan.style.cssText = `flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;opacity:${this.filterState.activeTaggedUserIds.size > 0 && !isActive ? '0.4' : '1'};`;
 
         row.appendChild(cb);
         row.appendChild(nameSpan);
-        taggedUsersSection.appendChild(row);
+        taggedUsersContent.appendChild(row);
       });
 
       body.appendChild(taggedUsersSection);
@@ -817,6 +845,13 @@ export class Planner {
     navRight.addEventListener('click', () => this.handleNavigate(1));
     zoomControls.appendChild(navRight);
 
+    const todayBtn = document.createElement('button');
+    todayBtn.textContent = 'Today';
+    todayBtn.title = 'Jump to today (preserves zoom level)';
+    todayBtn.className = 'cp-btn';
+    todayBtn.addEventListener('click', () => this.handleNavigateToday());
+    zoomControls.appendChild(todayBtn);
+
     const zoomOutBtn = document.createElement('button');
     zoomOutBtn.textContent = '−';
     zoomOutBtn.title = 'Zoom out';
@@ -884,6 +919,11 @@ export class Planner {
 
   private handleNavigate(direction: -1 | 1): void {
     this.viewport = navigate(this.viewport, direction, this.config);
+    this.refreshViewport();
+  }
+
+  private handleNavigateToday(): void {
+    this.viewport = navigateToToday(this.viewport.zoomLevel, this.config);
     this.refreshViewport();
   }
 

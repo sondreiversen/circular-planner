@@ -573,11 +573,25 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Upsert activities
+		// Upsert activities — validate recurrence fields first, then batch-insert.
+		// Pre-process all activities into flat arg slices so we can chunk efficiently.
+		type actRow struct {
+			id          string
+			laneID      string
+			title       string
+			desc        string
+			startDate   string
+			endDate     string
+			color       string
+			label       string
+			recType     sql.NullString
+			recInterval sql.NullInt64
+			recWeekdays sql.NullString
+			recUntil    sql.NullString
+			createdBy   int
+		}
+		actRows := make([]actRow, 0, len(allActivities))
 		for _, a := range allActivities {
-			desc := a.Description
-			label := a.Label
-
 			var recType, recWeekdays, recUntil sql.NullString
 			var recInterval sql.NullInt64
 
@@ -604,48 +618,91 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 					recUntil = sql.NullString{String: *rec.Until, Valid: true}
 				}
 			}
+			actRows = append(actRows, actRow{
+				id: a.ID, laneID: a.LaneID, title: a.Title, desc: a.Description,
+				startDate: a.StartDate, endDate: a.EndDate, color: a.Color, label: a.Label,
+				recType: recType, recInterval: recInterval, recWeekdays: recWeekdays, recUntil: recUntil,
+				createdBy: userID,
+			})
+		}
 
-			if _, err := tx.ExecContext(r.Context(), h.db.Rebind(`
-				INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color, label, recurrence_type, recurrence_interval, recurrence_weekdays, recurrence_until, created_by)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT(id, planner_id) DO UPDATE
+		// Chunked multi-row INSERT ... ON CONFLICT DO UPDATE.
+		// 50 rows × 14 cols = 700 placeholders — well under SQLite's 999 limit.
+		const activityChunk = 50
+		const activityOnConflict = `ON CONFLICT(id, planner_id) DO UPDATE
 				  SET lane_id = excluded.lane_id, title = excluded.title,
 				      description = excluded.description, start_date = excluded.start_date,
 				      end_date = excluded.end_date, color = excluded.color, label = excluded.label,
 				      recurrence_type = excluded.recurrence_type, recurrence_interval = excluded.recurrence_interval,
-				      recurrence_weekdays = excluded.recurrence_weekdays, recurrence_until = excluded.recurrence_until
-				      -- created_by deliberately excluded: original creator is preserved on update
-			`), a.ID, a.LaneID, plannerID, a.Title, desc, a.StartDate, a.EndDate, a.Color, label,
-				recType, recInterval, recWeekdays, recUntil, userID); err != nil {
+				      recurrence_weekdays = excluded.recurrence_weekdays, recurrence_until = excluded.recurrence_until`
+		for start := 0; start < len(actRows); start += activityChunk {
+			end := start + activityChunk
+			if end > len(actRows) {
+				end = len(actRows)
+			}
+			batch := actRows[start:end]
+			ph := strings.TrimSuffix(strings.Repeat("(?,?,?,?,?,?,?,?,?,?,?,?,?,?),", len(batch)), ",")
+			args := make([]any, 0, len(batch)*14)
+			for _, row := range batch {
+				args = append(args, row.id, row.laneID, plannerID, row.title, row.desc,
+					row.startDate, row.endDate, row.color, row.label,
+					row.recType, row.recInterval, row.recWeekdays, row.recUntil, row.createdBy)
+			}
+			q := h.db.Rebind(`INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color, label, recurrence_type, recurrence_interval, recurrence_weekdays, recurrence_until, created_by) VALUES ` + ph + ` ` + activityOnConflict)
+			if _, err := tx.ExecContext(r.Context(), q, args...); err != nil {
 				jsonError(w, http.StatusInternalServerError, "Internal server error")
 				return
 			}
 		}
 
-		// Sync activity_user_tags: replace all tags for this planner atomically.
+		// Sync activity_user_tags: collect all (activity_id, user_id) triples,
+		// deduplicate, then batch-insert after deleting all existing tags.
+		type tagTriple struct {
+			activityID string
+			userID     int
+		}
+		var tagTriples []tagTriple
+		tagSeen := make(map[string]struct{})
+		for _, l := range body.Lanes {
+			for _, a := range l.Activities {
+				for _, uid := range a.TaggedUserIDs {
+					if uid <= 0 {
+						continue
+					}
+					key := a.ID + "|" + strconv.Itoa(uid)
+					if _, dup := tagSeen[key]; dup {
+						continue
+					}
+					tagSeen[key] = struct{}{}
+					tagTriples = append(tagTriples, tagTriple{a.ID, uid})
+				}
+			}
+		}
+
 		if _, err := tx.ExecContext(r.Context(),
 			h.db.Rebind("DELETE FROM activity_user_tags WHERE planner_id = ?"), plannerID); err != nil {
 			jsonError(w, http.StatusInternalServerError, "Internal server error")
 			return
 		}
-		for _, l := range body.Lanes {
-			for _, a := range l.Activities {
-				seen := make(map[int]struct{}, len(a.TaggedUserIDs))
-				for _, uid := range a.TaggedUserIDs {
-					if uid <= 0 {
-						continue
-					}
-					if _, dup := seen[uid]; dup {
-						continue
-					}
-					seen[uid] = struct{}{}
-					if _, err := tx.ExecContext(r.Context(), h.db.Rebind(
-						"INSERT INTO activity_user_tags(activity_id, planner_id, user_id) VALUES (?, ?, ?)"),
-						a.ID, plannerID, uid); err != nil {
-						jsonError(w, http.StatusBadRequest, "invalid taggedUserIds")
-						return
-					}
-				}
+
+		// Chunked multi-row INSERT for tags.
+		// 100 rows × 3 cols = 300 placeholders — well under SQLite's 999 limit.
+		const tagChunk = 100
+		for start := 0; start < len(tagTriples); start += tagChunk {
+			end := start + tagChunk
+			if end > len(tagTriples) {
+				end = len(tagTriples)
+			}
+			batch := tagTriples[start:end]
+			ph := strings.TrimSuffix(strings.Repeat("(?,?,?),", len(batch)), ",")
+			args := make([]any, 0, len(batch)*3)
+			for _, t := range batch {
+				args = append(args, t.activityID, plannerID, t.userID)
+			}
+			q := h.db.Rebind("INSERT INTO activity_user_tags(activity_id, planner_id, user_id) VALUES " + ph)
+			if _, err := tx.ExecContext(r.Context(), q, args...); err != nil {
+				jsonError(w, http.StatusBadRequest, "invalid taggedUserIds")
+				return
 			}
 		}
 

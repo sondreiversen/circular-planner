@@ -15,6 +15,10 @@ interface GroupSummary {
   member_count: number;
 }
 
+interface AuthMe {
+  user?: { username?: string; fullName?: string; is_admin?: boolean };
+}
+
 initTheme();
 
 const today = new Date();
@@ -25,27 +29,43 @@ let currentUserIsAdmin = false;
 
 document.addEventListener('DOMContentLoaded', async () => {
   applyBranding();
-  // Verify session via cookie; populate username from /api/auth/me.
+
+  // Fire all four fetches in parallel
+  let me: AuthMe;
+  let owned: PlannerSummary[];
+  let pub: PlannerSummary[];
+  let groups: GroupSummary[];
+
   try {
-    const meRes = await fetch('/api/auth/me', { credentials: 'include' });
-    if (!meRes.ok) { window.location.href = '/index.html'; return; }
-    const me = await meRes.json() as { user?: { username?: string; fullName?: string; is_admin?: boolean } };
-    const el = document.getElementById('header-username');
-    if (el && me.user?.username) el.textContent = displayName({ username: me.user.username, fullName: me.user.fullName });
-    if (me.user?.is_admin) {
-      currentUserIsAdmin = true;
-      const headerRight = document.querySelector('.header-right');
-      if (headerRight) {
-        const adminLink = document.createElement('a');
-        adminLink.href = '/admin.html';
-        adminLink.className = 'btn btn-ghost';
-        adminLink.textContent = 'Admin';
-        headerRight.insertBefore(adminLink, headerRight.firstChild);
-      }
-    }
-  } catch {
-    window.location.href = '/index.html';
+    [me, owned, pub, groups] = await Promise.all([
+      api.get<AuthMe>('/api/auth/me'),
+      api.get<PlannerSummary[]>('/api/planners'),
+      api.get<PlannerSummary[]>('/api/planners/public'),
+      api.get<GroupSummary[]>('/api/groups'),
+    ]);
+  } catch (err: unknown) {
+    // api.get already redirects to /index.html on 401; other errors fall through here
+    const msg = (err as Error).message;
+    if (msg === 'Unauthorized') return;
+    // For non-auth errors show error states and bail
+    const grid = document.getElementById('planners-grid');
+    if (grid) grid.innerHTML = `<div class="error-state">Failed to load: ${escapeHtml(msg)}</div>`;
     return;
+  }
+
+  // ── Render user info ────────────────────────────────────────────────────────
+  const el = document.getElementById('header-username');
+  if (el && me.user?.username) el.textContent = displayName({ username: me.user.username, fullName: me.user.fullName });
+  if (me.user?.is_admin) {
+    currentUserIsAdmin = true;
+    const headerRight = document.querySelector('.header-right');
+    if (headerRight) {
+      const adminLink = document.createElement('a');
+      adminLink.href = '/admin.html';
+      adminLink.className = 'btn btn-ghost';
+      adminLink.textContent = 'Admin';
+      headerRight.insertBefore(adminLink, headerRight.firstChild);
+    }
   }
 
   document.getElementById('logout-btn')?.addEventListener('click', logout);
@@ -97,9 +117,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  await loadPlanners();
-  await loadGroups();
-  await loadPublicPlanners();
+  // ── Render all sections with already-resolved data ──────────────────────────
+  renderOwnedPlanners(owned);
+  renderGroups(groups);
+  renderDiscover(pub);
 });
 
 function closeDialog(): void {
@@ -234,107 +255,127 @@ function buildPlannerCard(p: PlannerSummary, showDelete: boolean): HTMLElement {
   return card;
 }
 
-// ── Loaders ──────────────────────────────────────────────────────────────────
+// ── Render helpers (accept already-fetched data) ─────────────────────────────
 
-async function loadPlanners(): Promise<void> {
+function renderOwnedPlanners(planners: PlannerSummary[]): void {
+  const grid = document.getElementById('planners-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+
+  if (planners.length === 0) {
+    grid.innerHTML = `
+      <div class="empty-state">
+        <svg class="empty-state-icon" width="56" height="56" viewBox="0 0 56 56" fill="none" aria-hidden="true">
+          <circle cx="28" cy="28" r="26" stroke="currentColor" stroke-width="2.5" fill="none"/>
+          <circle cx="28" cy="28" r="14" stroke="currentColor" stroke-width="2" fill="none" opacity="0.5"/>
+          <circle cx="28" cy="28" r="4" fill="currentColor" opacity="0.4"/>
+        </svg>
+        <h3>No planners yet</h3>
+        <p>Create your first planner to start organising your year.</p>
+        <button id="empty-new-planner-btn" class="btn btn-primary">+ New planner</button>
+      </div>`;
+    document.getElementById('empty-new-planner-btn')?.addEventListener('click', () => {
+      document.getElementById('new-planner-btn')?.click();
+    });
+    return;
+  }
+
+  planners.forEach(p => {
+    const showDelete = p.isOwner || currentUserIsAdmin;
+    grid.appendChild(buildPlannerCard(p, showDelete));
+  });
+}
+
+function renderDiscover(planners: PlannerSummary[]): void {
+  let section = document.getElementById('discover-section');
+
+  if (planners.length === 0) {
+    if (section) section.style.display = 'none';
+    return;
+  }
+
+  // Create the section if it doesn't already exist in HTML
+  if (!section) {
+    section = document.createElement('section');
+    section.id = 'discover-section';
+    section.className = 'dashboard-section';
+    section.innerHTML = `
+      <div class="dashboard-title-row" style="margin-top:36px;">
+        <h2>Discover</h2>
+      </div>
+      <div class="planner-grid planners-grid" id="discover-grid"></div>
+    `;
+    const main = document.querySelector('.dashboard-main');
+    if (main) main.appendChild(section);
+  } else {
+    section.style.display = '';
+  }
+
+  const grid = document.getElementById('discover-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+
+  planners.forEach(p => {
+    // No Delete button in Discover — browse-only
+    grid.appendChild(buildPlannerCard(p, false));
+  });
+}
+
+function renderGroups(groups: GroupSummary[]): void {
+  const grid = document.getElementById('groups-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  if (groups.length === 0) {
+    grid.innerHTML = '<div class="loading-state">No groups yet. <a href="/groups.html">Create one!</a></div>';
+    return;
+  }
+  groups.forEach(g => {
+    const card = document.createElement('div');
+    card.className = 'planner-card';
+    const roleBadge = g.role === 'admin' ? 'badge-owner' : 'badge-view';
+    card.innerHTML = `
+      <div class="planner-card-title">${escapeHtml(g.name)}</div>
+      ${g.description ? `<div class="planner-card-dates">${escapeHtml(g.description)}</div>` : ''}
+      <div class="planner-card-meta">
+        <span class="badge ${roleBadge}">${escapeHtml(g.role)}</span>
+        <span style="font-size:11px;color:#8896a5;">${g.member_count} member${g.member_count !== 1 ? 's' : ''}</span>
+      </div>
+    `;
+    card.addEventListener('click', () => { window.location.href = `/groups.html?id=${g.id}`; });
+    grid.appendChild(card);
+  });
+}
+
+// ── Loader helpers (for post-mutation refresh paths) ─────────────────────────
+
+export async function loadPlanners(): Promise<void> {
   const grid = document.getElementById('planners-grid');
   if (!grid) return;
   try {
     const planners = await api.get<PlannerSummary[]>('/api/planners');
-    grid.innerHTML = '';
-
-    if (planners.length === 0) {
-      grid.innerHTML = `
-        <div class="empty-state">
-          <svg class="empty-state-icon" width="56" height="56" viewBox="0 0 56 56" fill="none" aria-hidden="true">
-            <circle cx="28" cy="28" r="26" stroke="currentColor" stroke-width="2.5" fill="none"/>
-            <circle cx="28" cy="28" r="14" stroke="currentColor" stroke-width="2" fill="none" opacity="0.5"/>
-            <circle cx="28" cy="28" r="4" fill="currentColor" opacity="0.4"/>
-          </svg>
-          <h3>No planners yet</h3>
-          <p>Create your first planner to start organising your year.</p>
-          <button id="empty-new-planner-btn" class="btn btn-primary">+ New planner</button>
-        </div>`;
-      document.getElementById('empty-new-planner-btn')?.addEventListener('click', () => {
-        document.getElementById('new-planner-btn')?.click();
-      });
-      return;
-    }
-
-    planners.forEach(p => {
-      const showDelete = p.isOwner || currentUserIsAdmin;
-      grid.appendChild(buildPlannerCard(p, showDelete));
-    });
+    renderOwnedPlanners(planners);
   } catch (err: unknown) {
     if (grid) grid.innerHTML = `<div class="error-state">Failed to load planners: ${escapeHtml((err as Error).message)}</div>`;
   }
 }
 
-async function loadPublicPlanners(): Promise<void> {
-  let section = document.getElementById('discover-section');
+export async function loadPublicPlanners(): Promise<void> {
   try {
     const planners = await api.get<PlannerSummary[]>('/api/planners/public');
-    if (planners.length === 0) {
-      if (section) section.style.display = 'none';
-      return;
-    }
-
-    // Create the section if it doesn't already exist in HTML
-    if (!section) {
-      section = document.createElement('section');
-      section.id = 'discover-section';
-      section.className = 'dashboard-section';
-      section.innerHTML = `
-        <div class="dashboard-title-row" style="margin-top:36px;">
-          <h2>Discover</h2>
-        </div>
-        <div class="planner-grid planners-grid" id="discover-grid"></div>
-      `;
-      const main = document.querySelector('.dashboard-main');
-      if (main) main.appendChild(section);
-    } else {
-      section.style.display = '';
-    }
-
-    const grid = document.getElementById('discover-grid');
-    if (!grid) return;
-    grid.innerHTML = '';
-
-    planners.forEach(p => {
-      // No Delete button in Discover — browse-only
-      grid.appendChild(buildPlannerCard(p, false));
-    });
+    renderDiscover(planners);
   } catch {
     // If the endpoint isn't available yet or fails, silently hide section
+    const section = document.getElementById('discover-section');
     if (section) section.style.display = 'none';
   }
 }
 
-async function loadGroups(): Promise<void> {
+export async function loadGroups(): Promise<void> {
   const grid = document.getElementById('groups-grid');
   if (!grid) return;
   try {
     const groups = await api.get<GroupSummary[]>('/api/groups');
-    grid.innerHTML = '';
-    if (groups.length === 0) {
-      grid.innerHTML = '<div class="loading-state">No groups yet. <a href="/groups.html">Create one!</a></div>';
-      return;
-    }
-    groups.forEach(g => {
-      const card = document.createElement('div');
-      card.className = 'planner-card';
-      const roleBadge = g.role === 'admin' ? 'badge-owner' : 'badge-view';
-      card.innerHTML = `
-        <div class="planner-card-title">${escapeHtml(g.name)}</div>
-        ${g.description ? `<div class="planner-card-dates">${escapeHtml(g.description)}</div>` : ''}
-        <div class="planner-card-meta">
-          <span class="badge ${roleBadge}">${escapeHtml(g.role)}</span>
-          <span style="font-size:11px;color:#8896a5;">${g.member_count} member${g.member_count !== 1 ? 's' : ''}</span>
-        </div>
-      `;
-      card.addEventListener('click', () => { window.location.href = `/groups.html?id=${g.id}`; });
-      grid.appendChild(card);
-    });
+    renderGroups(groups);
   } catch (err: unknown) {
     if (grid) grid.innerHTML = `<div class="error-state">Failed to load groups: ${escapeHtml((err as Error).message)}</div>`;
   }

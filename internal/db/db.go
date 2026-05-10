@@ -67,8 +67,18 @@ func Open(url string) (*DB, error) {
 
 	default:
 		path := strings.TrimPrefix(url, "sqlite:")
-		// Enable WAL mode and foreign keys via DSN pragmas
-		dsn := path + "?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
+		// Enable WAL mode, foreign keys, and performance PRAGMAs via DSN.
+		// synchronous=NORMAL is safe with WAL (same guarantee as Postgres default).
+		// cache_size uses negative values as KB (-20000 = 20 MB).
+		// mmap_size=268435456 = 256 MB memory-mapped I/O.
+		// busy_timeout=5000 = 5 s lock retry before returning SQLITE_BUSY.
+		dsn := path + "?_pragma=journal_mode(WAL)" +
+			"&_pragma=foreign_keys(ON)" +
+			"&_pragma=synchronous(NORMAL)" +
+			"&_pragma=cache_size(-20000)" +
+			"&_pragma=mmap_size(268435456)" +
+			"&_pragma=busy_timeout(5000)" +
+			"&_pragma=temp_store(MEMORY)"
 		sqldb, err := sql.Open("sqlite", dsn)
 		if err != nil {
 			return nil, fmt.Errorf("open sqlite: %w", err)

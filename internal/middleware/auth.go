@@ -68,9 +68,17 @@ func RequireAuth(cfg *config.Config, database *db.DB, next http.HandlerFunc) htt
 
 		var isAdmin bool
 		var fullName string
-		_ = database.QueryRowContext(r.Context(),
-			database.Rebind("SELECT is_admin, COALESCE(full_name,'') FROM users WHERE id = ?"), claims.ID,
-		).Scan(&isAdmin, &fullName)
+		if cu, ok := userCacheGet(claims.ID); ok {
+			isAdmin = cu.isAdmin
+			fullName = cu.fullName
+		} else {
+			err := database.QueryRowContext(r.Context(),
+				database.Rebind("SELECT is_admin, COALESCE(full_name,'') FROM users WHERE id = ?"), claims.ID,
+			).Scan(&isAdmin, &fullName)
+			if err == nil {
+				userCachePut(claims.ID, isAdmin, fullName)
+			}
+		}
 
 		user := &AuthUser{ID: claims.ID, Username: claims.Username, Email: claims.Email, FullName: fullName, IsAdmin: isAdmin}
 		next(w, r.WithContext(context.WithValue(r.Context(), ctxUser, user)))

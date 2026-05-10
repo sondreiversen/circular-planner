@@ -120,6 +120,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	middleware.UserCacheInvalidate(targetID)
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 
@@ -166,6 +167,7 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusConflict, "cannot remove or demote the last global admin")
 		return
 	}
+	middleware.UserCacheInvalidate(targetID)
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 

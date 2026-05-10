@@ -169,6 +169,10 @@ export function getGridSpec(viewport: Viewport): GridSpec {
       });
       iterateWeeks(windowStart, windowEnd, (d) => {
         minorTicks.push(d);
+        const weekNum = getWeekNumber(d);
+        // Week-number labels sit in subLabels: rendered in the disc inner ring
+        // and in the list/people two-tier header above the month labels.
+        subLabels.push({ date: addDays(d, 3), text: `W${weekNum}` });
       });
       // Labels: month name + year suffix when spanning years
       iterateMonths(windowStart, windowEnd, (d) => {
@@ -255,6 +259,11 @@ export function navigateToYear(year: number): Viewport {
 /** Set a fully custom date range, preserving zoom level */
 export function navigateToRange(start: Date, end: Date, zoomLevel: ZoomLevel): Viewport {
   return { windowStart: start, windowEnd: end, zoomLevel };
+}
+
+/** Jump to a viewport that includes today, preserving the current zoom level */
+export function navigateToToday(zoomLevel: ZoomLevel, config: PlannerConfig): Viewport {
+  return viewportForLevel(new Date(), zoomLevel, config);
 }
 
 // ==================== Iteration helpers ====================

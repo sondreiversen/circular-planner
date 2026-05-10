@@ -75,6 +75,48 @@
   letter-spacing: 0.05em;
 }
 
+/* Collapsible section heading — keeps cp-sidebar-label visual style */
+.cp-sidebar-collapsible {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cp-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.cp-sidebar-collapsible:hover { color: var(--cp-text); }
+
+.cp-sidebar-chevron {
+  display: inline-block;
+  font-size: 9px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+  width: 10px;
+  text-align: center;
+}
+.cp-sidebar-section--collapsed .cp-sidebar-chevron {
+  transform: rotate(-90deg);
+}
+.cp-sidebar-section--collapsed .cp-sidebar-section-body {
+  display: none;
+}
+
+.cp-sidebar-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .cp-sidebar-lane-row {
   display: flex;
   align-items: center;
@@ -319,10 +361,17 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  flex-wrap: nowrap;
+  min-width: 0;
   font-size: 12px;
   cursor: pointer;
   color: var(--cp-text, #2c3e50);
   user-select: none;
+}
+.cp-lane-toggle input[type="checkbox"] {
+  flex-shrink: 0;
+  margin: 0;
+  vertical-align: middle;
 }
 
 /* ---- SVG container focus ---- */

@@ -37,6 +37,9 @@ export class Renderer {
   private _pinchPointers = new Map<number, { x: number; y: number }>();
   private _pinchStartDist = 0;
 
+  // Per-render counter to make activity-text path IDs unique within the SVG.
+  private textPathSeq = 0;
+
   constructor(container: HTMLElement, config: PlannerConfig, data: PlannerData, viewport: Viewport) {
     this.config = config;
     this.data = data;
@@ -242,6 +245,7 @@ export class Renderer {
   }
 
   private render(): void {
+    this.textPathSeq = 0;
     const visibleLanes = this.data.lanes.filter(l => !this.filterState.hiddenLaneIds.has(l.id));
     const activityCount = visibleLanes.reduce((sum, l) => sum + l.activities.length, 0);
     this.svg.attr('aria-label',
@@ -289,7 +293,7 @@ export class Renderer {
       .attr('stroke', gridBorder)
       .attr('stroke-width', 1.5);
 
-    // Minor ticks
+    // Minor ticks (week lines at Quarter, day lines at Month)
     gridSpec.minorTicks.forEach(d => {
       const angle = this.angleScale(d);
       if (angle <= MIN_ANGLE || angle >= MAX_ANGLE) return;
@@ -298,7 +302,7 @@ export class Renderer {
         .attr('x2', Math.sin(angle) * OUTER_RADIUS)
         .attr('y2', -Math.cos(angle) * OUTER_RADIUS)
         .attr('stroke', gridMinor)
-        .attr('stroke-width', 0.5);
+        .attr('stroke-width', 1);
     });
 
     // Major ticks
@@ -584,31 +588,60 @@ export class Renderer {
         select(this).attr('fill-opacity', 0.88).attr('stroke', 'rgba(255,255,255,0.6)').attr('stroke-width', 0.8);
       });
 
-    const midAngle = (startAngle + endAngle) / 2;
-    const textR = (subInnerR + subOuterR) / 2;
-    const tx = Math.sin(midAngle) * textR;
-    const ty = -Math.cos(midAngle) * textR;
-    let rotateDeg = (midAngle * 180 / Math.PI);
-    // Flip text in the bottom half of the disc so it reads right-side up.
-    const normalizedDeg = ((rotateDeg % 360) + 360) % 360;
-    if (normalizedDeg > 90 && normalizedDeg < 270) {
-      rotateDeg += 180;
-    }
+    // Render activity title as text on a curved path so it follows the arc.
+    // Top half: path goes clockwise (start→end) so text reads outward-up.
+    // Bottom half: path goes counter-clockwise (end→start) so text still reads
+    // right-side up to a viewer outside the disc.
+    if (subHeight >= 10) {
+      const midAngle = (startAngle + endAngle) / 2;
+      const textR = (subInnerR + subOuterR) / 2;
+      const isBottom = Math.cos(midAngle) < 0;
+      const fontSize = 9;
+      // Compensate for the dominant-baseline='central' offset so the text's
+      // visual centre lands on textR. Top text extends radially outward from
+      // its path; bottom-flipped text extends radially inward.
+      const pathRadius = isBottom ? textR + fontSize * 0.35 : textR - fontSize * 0.35;
+      const sx = (a: number) => Math.sin(a) * pathRadius;
+      const sy = (a: number) => -Math.cos(a) * pathRadius;
+      const d = isBottom
+        ? `M ${sx(endAngle)} ${sy(endAngle)} A ${pathRadius} ${pathRadius} 0 0 0 ${sx(startAngle)} ${sy(startAngle)}`
+        : `M ${sx(startAngle)} ${sy(startAngle)} A ${pathRadius} ${pathRadius} 0 0 1 ${sx(endAngle)} ${sy(endAngle)}`;
 
-    const arcSpanDeg = (endAngle - startAngle) * 180 / Math.PI;
-    if (arcSpanDeg > 10 && subHeight >= 10) {
-      actGroup.append('text')
-        .attr('x', tx)
-        .attr('y', ty)
-        .attr('text-anchor', 'middle')
-        .attr('dominant-baseline', 'middle')
-        .attr('transform', `rotate(${rotateDeg},${tx},${ty})`)
-        .attr('font-size', '9')
+      // Measure the title's natural (straight) width so we can hide the label
+      // when it doesn't fit the available arc length, instead of letting it
+      // overflow or get clipped weirdly.
+      const measure = actGroup.append('text')
+        .attr('font-size', fontSize)
         .attr('font-family', FONT_FAMILY)
         .attr('font-weight', '500')
-        .attr('fill', 'white')
-        .attr('pointer-events', 'none')
+        .style('visibility', 'hidden')
         .text(activity.title);
+      const textLen = (measure.node() as SVGTextElement).getComputedTextLength();
+      measure.remove();
+
+      const arcLen = (endAngle - startAngle) * pathRadius - 4; // 4px padding
+
+      if (textLen <= arcLen) {
+        const pathId = `cp-act-text-${this.textPathSeq++}`;
+        actGroup.append('path')
+          .attr('id', pathId)
+          .attr('d', d)
+          .attr('fill', 'none')
+          .attr('stroke', 'none');
+
+        actGroup.append('text')
+          .attr('font-size', fontSize)
+          .attr('font-family', FONT_FAMILY)
+          .attr('font-weight', '500')
+          .attr('fill', 'white')
+          .attr('dominant-baseline', 'central')
+          .style('pointer-events', 'none')
+          .append('textPath')
+            .attr('href', `#${pathId}`)
+            .attr('startOffset', '50%')
+            .attr('text-anchor', 'middle')
+            .text(activity.title);
+      }
     }
 
     actGroup.append('title')

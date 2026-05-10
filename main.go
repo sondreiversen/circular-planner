@@ -257,7 +257,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("embed.Sub: %v", err)
 	}
-	mux.Handle("/", spaHandler(http.FileServer(http.FS(sub))))
+	// Layer: StaticCache (ETag/Cache-Control) → Compress (gzip) → FileServer.
+	// Applied to the static handler only — NOT to /api/ routes.
+	staticH := middleware.NewStaticCache(sub, middleware.Compress(http.FileServer(http.FS(sub))))
+	mux.Handle("/", spaHandler(staticH))
 
 	// Build the full middleware chain: RequestID → JSONLogger → securityHeaders → routes
 	chain := middleware.RequestID(
@@ -412,6 +415,10 @@ func securityHeaders(allowedOrigin string, trustProxy bool) func(http.Handler) h
 			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 			w.Header().Set("Content-Security-Policy",
 				"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'")
+			// HSTS: only set when the connection is over TLS to avoid downgrade loops.
+			if r.TLS != nil {
+				w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+			}
 			// Reject cross-origin API calls from unexpected origins.
 			// Allow requests whose Origin matches either the configured ALLOWED_ORIGIN
 			// or the server's own scheme+host (so any IP/hostname the server is
