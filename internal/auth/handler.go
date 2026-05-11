@@ -120,7 +120,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), 10)
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), 12)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "Registration failed")
 		return

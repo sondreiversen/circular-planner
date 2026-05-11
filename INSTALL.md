@@ -1,8 +1,7 @@
-# Circular Planner — Installation Guide (Go backend)
+# Circular Planner — Installation Guide
 
-> This guide covers the **Go + SQLite/Postgres** backend on the `go-backend` branch.
-> The Go backend ships as a **single self-contained binary** with all static assets embedded — no Node.js, npm, or external runtime required at deploy time.
-> For the Node.js + PostgreSQL build, see the [`main` branch](../../tree/main).
+> Circular Planner ships as a **single self-contained Go binary** with all static assets embedded — no Node.js, npm, or external runtime required at deploy time.
+> The original Node.js + PostgreSQL build is preserved on the frozen [`node-legacy` branch](../../tree/node-legacy) for reference only.
 
 ---
 
@@ -54,7 +53,7 @@ Neither install path requires root. The installer refuses to run as root.
 ## 2. Quick install (interactive script)
 
 ```bash
-git clone -b go-backend https://github.com/sondreiversen/circular-planner.git
+git clone https://github.com/sondreiversen/circular-planner.git
 cd circular-planner
 ./install.sh
 ```
@@ -164,7 +163,7 @@ cd ~/circular-planner
 ### Option B — Build from source
 
 ```bash
-git clone -b go-backend https://github.com/sondreiversen/circular-planner.git
+git clone https://github.com/sondreiversen/circular-planner.git
 cd circular-planner
 
 # Build the frontend first (required — assets are embedded in the binary)

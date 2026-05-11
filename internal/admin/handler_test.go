@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"planner/internal/middleware"
 	"planner/internal/testutil"
 )
 
@@ -77,6 +78,9 @@ func TestR2LastAdminDemoteRace(t *testing.T) {
 	); err != nil {
 		t.Fatalf("make admins: %v", err)
 	}
+	// Invalidate the user cache so RequireAdmin sees the updated is_admin flag.
+	middleware.UserCacheInvalidate(id1)
+	middleware.UserCacheInvalidate(id2)
 
 	// Both try to demote each other concurrently; at most one should succeed.
 	var wg sync.WaitGroup
@@ -130,6 +134,8 @@ func TestR3DeleteUserWithPlanners(t *testing.T) {
 	); err != nil {
 		t.Fatalf("make admin: %v", err)
 	}
+	// Invalidate the user cache so RequireAdmin sees the updated is_admin flag.
+	middleware.UserCacheInvalidate(adminID)
 
 	// Target creates a planner.
 	resp, raw := do(t, "POST", srv.URL+"/api/planners", targetTok,

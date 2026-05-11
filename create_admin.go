@@ -33,7 +33,7 @@ func runCreateAdmin(database *db.DB, args []string) error {
 		return errors.New("password must be at least 8 characters")
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(p), 10)
+	hash, err := bcrypt.GenerateFromPassword([]byte(p), 12)
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}

@@ -109,6 +109,7 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
 		jsonError(w, http.StatusBadRequest, "File too large or invalid multipart form (max 5 MB)")
 		return
