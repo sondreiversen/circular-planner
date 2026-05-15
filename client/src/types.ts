@@ -30,19 +30,34 @@ export interface Lane {
   activities: Activity[];
 }
 
-export type RecurrenceType = 'daily' | 'weekly';
+export type RecurrenceType = 'daily' | 'weekly' | 'monthly' | 'yearly';
+
+export type ActivityStatus = 'planned' | 'in_progress' | 'done' | 'cancelled';
+
+/**
+ * Rule for monthly recurrence:
+ *   dom   – repeat on a fixed day-of-month (1..31); skips months that don't have that day.
+ *   nthwd – repeat on the Nth weekday of the month (week 1..5, or -1 for last); weekday 0=Sun..6=Sat.
+ */
+export type MonthlyRule =
+  | { kind: 'dom'; day: number }
+  | { kind: 'nthwd'; week: 1 | 2 | 3 | 4 | 5 | -1; weekday: number };
 
 export interface Recurrence {
   type: RecurrenceType;
-  interval: number;     // >= 1; for 'daily' = every N days, for 'weekly' = every N weeks
-  weekdays?: number[];  // 0=Sun..6=Sat; required & non-empty when type='weekly'
-  until?: string;       // YYYY-MM-DD; optional cap
+  interval: number;           // >= 1
+  weekdays?: number[];        // 0=Sun..6=Sat; required when type='weekly'
+  monthlyRule?: MonthlyRule;  // required when type='monthly'; ignored for other types
+  until?: string;             // YYYY-MM-DD; optional cap
+  exceptions?: string[];      // YYYY-MM-DD dates to skip; works for all recurrence types
+  overrides?: Record<string, Partial<Pick<Activity, 'title'|'description'|'startDate'|'endDate'|'color'|'label'|'status'>>>;
 }
 
 export interface TaggedUser {
-  id: number;
+  id?: number | null;
   username: string;
   fullName?: string;
+  pending?: boolean;
 }
 
 export interface Activity {
@@ -57,6 +72,8 @@ export interface Activity {
   createdBy?: string | null;
   taggedUsers?: TaggedUser[];
   recurrence?: Recurrence | null;
+  status?: ActivityStatus;    // default 'planned'
+  isMilestone?: boolean;      // default false; if true, startDate === endDate
 }
 
 export enum ZoomLevel {

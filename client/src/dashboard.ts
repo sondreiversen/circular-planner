@@ -7,6 +7,18 @@ import { installOfflineBanner, installGlobalErrorHandlers } from './toast';
 installOfflineBanner();
 installGlobalErrorHandlers();
 
+interface SearchResult {
+  kind: 'activity' | 'planner';
+  activityId?: string;
+  activityTitle?: string;
+  startDate?: string;
+  endDate?: string;
+  laneId?: string;
+  laneName?: string;
+  plannerId: number;
+  plannerTitle: string;
+}
+
 interface GroupSummary {
   id: number;
   name: string;
@@ -121,10 +133,139 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderOwnedPlanners(owned);
   renderGroups(groups);
   renderDiscover(pub);
+
+  bindGlobalSearch();
 });
 
 function closeDialog(): void {
   document.getElementById('new-planner-overlay')?.classList.add('hidden');
+}
+
+// ── Duplicate modal ──────────────────────────────────────────────────────────
+
+function openDuplicateModal(plannerId: number, plannerTitle: string, triggerBtn: HTMLElement): void {
+  const previouslyFocused = triggerBtn;
+
+  const backdrop = document.createElement('section');
+  backdrop.className = 'cp-dialog-backdrop';
+  backdrop.setAttribute('role', 'dialog');
+  backdrop.setAttribute('aria-modal', 'true');
+
+  backdrop.innerHTML = `
+    <div class="cp-dialog-box cp-dialog-box--narrow">
+      <h2 class="cp-dialog-title">Duplicate &ldquo;${escapeHtml(plannerTitle)}&rdquo;</h2>
+      <label class="cp-dialog-label">
+        Shift dates by
+        <select id="cp-dup-preset" class="cp-dialog-input">
+          <option value="1year">1 year forward (default)</option>
+          <option value="6months">6 months forward</option>
+          <option value="custom">Custom&hellip;</option>
+        </select>
+      </label>
+      <div id="cp-dup-custom" style="display:none;">
+        <div style="display:flex;gap:8px;margin-top:6px;">
+          <label class="cp-dialog-label" style="flex:1;">
+            Years
+            <input id="cp-dup-years" type="number" class="cp-dialog-input" value="0" min="0" step="1">
+          </label>
+          <label class="cp-dialog-label" style="flex:1;">
+            Months
+            <input id="cp-dup-months" type="number" class="cp-dialog-input" value="0" min="0" step="1">
+          </label>
+          <label class="cp-dialog-label" style="flex:1;">
+            Days
+            <input id="cp-dup-days" type="number" class="cp-dialog-input" value="0" min="0" step="1">
+          </label>
+        </div>
+      </div>
+      <label class="cp-dialog-label cp-dialog-label--last">
+        Title suffix
+        <input id="cp-dup-suffix" class="cp-dialog-input" value=" (copy)">
+      </label>
+      <div id="cp-dup-error" class="cp-dialog-error" style="display:none;"></div>
+      <div class="cp-dialog-actions">
+        <div class="cp-dialog-actions-right">
+          <button id="cp-dup-cancel" class="cp-dialog-btn">Cancel</button>
+          <button id="cp-dup-confirm" class="cp-dialog-btn cp-dialog-btn--primary">Duplicate</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(backdrop);
+
+  const presetEl   = backdrop.querySelector<HTMLSelectElement>('#cp-dup-preset')!;
+  const customEl   = backdrop.querySelector<HTMLElement>('#cp-dup-custom')!;
+  const yearsEl    = backdrop.querySelector<HTMLInputElement>('#cp-dup-years')!;
+  const monthsEl   = backdrop.querySelector<HTMLInputElement>('#cp-dup-months')!;
+  const daysEl     = backdrop.querySelector<HTMLInputElement>('#cp-dup-days')!;
+  const suffixEl   = backdrop.querySelector<HTMLInputElement>('#cp-dup-suffix')!;
+  const confirmBtn = backdrop.querySelector<HTMLButtonElement>('#cp-dup-confirm')!;
+  const cancelBtn  = backdrop.querySelector<HTMLButtonElement>('#cp-dup-cancel')!;
+  const errorEl    = backdrop.querySelector<HTMLElement>('#cp-dup-error')!;
+
+  presetEl.addEventListener('change', () => {
+    customEl.style.display = presetEl.value === 'custom' ? '' : 'none';
+  });
+
+  // Focus trap
+  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  backdrop.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key !== 'Tab') return;
+    const focusable = Array.from(backdrop.querySelectorAll<HTMLElement>(FOCUSABLE))
+      .filter(el => el.offsetParent !== null);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last  = focusable[focusable.length - 1];
+    if (e.shiftKey) {
+      if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+    } else {
+      if (document.activeElement === last)  { e.preventDefault(); first.focus(); }
+    }
+  });
+
+  function closeModal() {
+    backdrop.remove();
+    if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus();
+  }
+
+  cancelBtn.addEventListener('click', closeModal);
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeModal(); });
+  backdrop.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+  confirmBtn.addEventListener('click', async () => {
+    confirmBtn.disabled = true;
+    errorEl.style.display = 'none';
+
+    let offsetYears = 0, offsetMonths = 0, offsetDays = 0;
+    if (presetEl.value === '1year') {
+      offsetYears = 1;
+    } else if (presetEl.value === '6months') {
+      offsetMonths = 6;
+    } else {
+      offsetYears  = parseInt(yearsEl.value,  10) || 0;
+      offsetMonths = parseInt(monthsEl.value, 10) || 0;
+      offsetDays   = parseInt(daysEl.value,   10) || 0;
+    }
+
+    const titleSuffix = suffixEl.value;
+
+    try {
+      const result = await api.post<{ id: number }>(`/api/planners/${plannerId}/duplicate`, {
+        titleSuffix,
+        offsetYears,
+        offsetMonths,
+        offsetDays,
+      });
+      window.location.href = `/planner.html?id=${result.id}`;
+    } catch (err: unknown) {
+      errorEl.textContent = (err as Error).message || 'Failed to duplicate planner.';
+      errorEl.style.display = 'block';
+      confirmBtn.disabled = false;
+    }
+  });
+
+  requestAnimationFrame(() => presetEl.focus());
 }
 
 // ── Delete confirmation modal ────────────────────────────────────────────────
@@ -229,6 +370,7 @@ function buildPlannerCard(p: PlannerSummary, showDelete: boolean): HTMLElement {
   const badge = p.isOwner ? 'badge-owner' : (p.permission === 'edit' ? 'badge-edit' : 'badge-view');
   const badgeText = p.isOwner ? 'Owner' : p.permission;
   const publicBadge = p.isPublic ? '<span class="badge badge-public">Public</span>' : '';
+  const dupBtn = `<button class="card-action card-duplicate" data-planner-id="${p.id}" title="Duplicate planner">Duplicate</button>`;
   const deleteBtn = showDelete
     ? `<button class="card-action card-delete" data-planner-id="${p.id}" data-planner-title="${escapeHtml(p.title)}" title="Delete planner">Delete</button>`
     : '';
@@ -240,9 +382,15 @@ function buildPlannerCard(p: PlannerSummary, showDelete: boolean): HTMLElement {
       ${publicBadge}
       ${!p.isOwner ? `<span style="font-size:11px;color:#8896a5;">by ${escapeHtml(p.ownerName)}</span>` : ''}
     </div>
-    ${deleteBtn ? `<div class="planner-card-actions">${deleteBtn}</div>` : ''}
+    <div class="planner-card-actions">${dupBtn}${deleteBtn}</div>
   `;
   card.addEventListener('click', () => { window.location.href = `/planner.html?id=${p.id}`; });
+
+  const dupBtnEl = card.querySelector<HTMLButtonElement>('.card-duplicate');
+  dupBtnEl?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openDuplicateModal(p.id, p.title, dupBtnEl);
+  });
 
   if (showDelete) {
     const btn = card.querySelector<HTMLButtonElement>('.card-delete');
@@ -343,6 +491,104 @@ function renderGroups(groups: GroupSummary[]): void {
     `;
     card.addEventListener('click', () => { window.location.href = `/groups.html?id=${g.id}`; });
     grid.appendChild(card);
+  });
+}
+
+// ── Global search ─────────────────────────────────────────────────────────────
+
+function bindGlobalSearch(): void {
+  const input = document.getElementById('global-search-input') as HTMLInputElement | null;
+  const resultsEl = document.getElementById('global-search-results') as HTMLElement | null;
+  if (!input || !resultsEl) return;
+
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function hideResults(): void {
+    resultsEl.classList.add('hidden');
+    resultsEl.innerHTML = '';
+  }
+
+  function showResults(results: SearchResult[]): void {
+    resultsEl.innerHTML = '';
+    if (results.length === 0) {
+      resultsEl.innerHTML = '<div style="padding:12px 16px;color:var(--cp-text-muted);font-size:13px;">No results found.</div>';
+      resultsEl.classList.remove('hidden');
+      return;
+    }
+
+    results.forEach(r => {
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:10px 16px;cursor:pointer;border-bottom:1px solid var(--cp-border);font-size:13px;display:flex;flex-direction:column;gap:2px;';
+
+      let label: string;
+      let url: string;
+      if (r.kind === 'activity') {
+        label = `Activity: ${escapeHtml(r.activityTitle ?? '')} — ${escapeHtml(r.plannerTitle)} · ${escapeHtml(r.laneName ?? '')}`;
+        if (r.startDate) label += ` · ${escapeHtml(r.startDate)}`;
+        url = `/planner.html?id=${r.plannerId}#activity=${encodeURIComponent(r.activityId ?? '')}`;
+      } else {
+        label = `Planner: ${escapeHtml(r.plannerTitle)}`;
+        url = `/planner.html?id=${r.plannerId}`;
+      }
+
+      row.innerHTML = `<span>${label}</span>`;
+
+      row.addEventListener('mousedown', (e) => {
+        // Use mousedown so it fires before the blur event hides the dropdown.
+        e.preventDefault();
+        window.location.href = url;
+      });
+
+      row.addEventListener('mouseenter', () => {
+        row.style.background = 'var(--cp-surface)';
+      });
+      row.addEventListener('mouseleave', () => {
+        row.style.background = '';
+      });
+
+      resultsEl.appendChild(row);
+    });
+
+    resultsEl.classList.remove('hidden');
+  }
+
+  async function runSearch(q: string): Promise<void> {
+    if (q.length < 2) {
+      hideResults();
+      return;
+    }
+    try {
+      const { results } = await api.get<{ results: SearchResult[] }>(
+        '/api/search?q=' + encodeURIComponent(q)
+      );
+      showResults(results);
+    } catch {
+      hideResults();
+    }
+  }
+
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    if (debounceTimer !== null) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => runSearch(q), 200);
+  });
+
+  input.addEventListener('focus', () => {
+    if (input.value.trim().length >= 2 && resultsEl.children.length > 0) {
+      resultsEl.classList.remove('hidden');
+    }
+  });
+
+  input.addEventListener('blur', () => {
+    // Delay so a mousedown on a result row registers before the dropdown hides.
+    setTimeout(() => hideResults(), 150);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      hideResults();
+      input.blur();
+    }
   });
 }
 

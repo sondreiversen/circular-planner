@@ -52,6 +52,7 @@ func NewServer(t *testing.T) (*httptest.Server, *config.Config, *db.DB) {
 	mux.HandleFunc("GET /api/planners/{id}", middleware.RequireAuth(cfg, database, planH.Get))
 	mux.HandleFunc("PUT /api/planners/{id}", middleware.RequireAuth(cfg, database, planH.Update))
 	mux.HandleFunc("DELETE /api/planners/{id}", middleware.RequireAuth(cfg, database, planH.Delete))
+	mux.HandleFunc("POST /api/planners/{id}/duplicate", middleware.RequireAuth(cfg, database, planH.Duplicate))
 
 	shareH := share.NewHandler(database, cfg)
 	mux.HandleFunc("GET /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, database, shareH.List))

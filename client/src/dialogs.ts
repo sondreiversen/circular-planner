@@ -1,5 +1,8 @@
-import { Activity, Lane, Recurrence, TaggedUser } from './types';
+import { Activity, ActivityStatus, Lane, MonthlyRule, Recurrence, TaggedUser } from './types';
 import { COLOR_PALETTE, LANE_COLORS, randomId, formatDate, parseDate, escapeHtml, laneColor, displayName } from './utils';
+
+const PENDING_USERNAME_RE = /^[a-zA-Z0-9_.\-]{1,50}$/;
+import { renderMarkdown } from './markdown';
 import { api } from './api-client';
 
 type SaveActivityCallback = (activity: Activity) => void;
@@ -111,7 +114,9 @@ export function showActivityDialog(
   existingActivity: Activity | null,
   onSave: SaveActivityCallback,
   onDelete: DeleteActivityCallback,
-  plannerEndDate?: string
+  plannerEndDate?: string,
+  occurrenceDate?: string,
+  forceNew?: boolean
 ): void {
   // Tag-picker state — initialised from existing activity
   let selectedTags: TaggedUser[] = [...(existingActivity?.taggedUsers ?? [])];
@@ -120,7 +125,12 @@ export function showActivityDialog(
   removeSafe(DIALOG_ID);
   const previouslyFocused = document.activeElement;
 
-  const isEdit = !!existingActivity;
+  const isEdit = !!existingActivity && !forceNew;
+  // Show occurrence-scope radio only when editing a specific occurrence of a recurring activity.
+  const showOccurrenceRadio = isEdit &&
+    !!occurrenceDate &&
+    !!existingActivity?.recurrence &&
+    existingActivity.recurrence.type !== 'none';
   const defaultColor = existingActivity?.color || COLOR_PALETTE[0];
   const defaultStart = existingActivity ? existingActivity.startDate : formatDate(initialDate);
   const defaultEnd   = existingActivity ? existingActivity.endDate
@@ -140,6 +150,31 @@ export function showActivityDialog(
   const recInterval = existingRec?.interval ?? 1;
   const recUntil = existingRec?.until ?? plannerEndDate ?? '';
   const recWeekdays: Set<number> = new Set(existingRec?.weekdays ?? []);
+
+  // Monthly rule defaults: derive from start date.
+  const startDateForRule = existingActivity ? parseDate(existingActivity.startDate) : initialDate;
+  const defaultDom = startDateForRule.getDate();
+  // Compute Nth weekday: e.g. "2nd Tuesday"
+  const defaultNthWeekday = startDateForRule.getDay(); // 0=Sun..6=Sat
+  const defaultNthWeek = Math.ceil(startDateForRule.getDate() / 7) as 1 | 2 | 3 | 4 | 5;
+
+  const existingMonthlyRule = existingRec?.monthlyRule ?? null;
+  // Determine which monthly sub-mode is active
+  const monthlySubMode: 'dom' | 'nthwd' =
+    existingMonthlyRule?.kind === 'nthwd' ? 'nthwd' : 'dom';
+  const monthlyDom = existingMonthlyRule?.kind === 'dom' ? existingMonthlyRule.day : defaultDom;
+  const monthlyNthWeek: number = existingMonthlyRule?.kind === 'nthwd' ? existingMonthlyRule.week : defaultNthWeek;
+  const monthlyNthWeekday: number = existingMonthlyRule?.kind === 'nthwd' ? existingMonthlyRule.weekday : defaultNthWeekday;
+
+  // Exceptions list (mutable copy)
+  let exceptions: string[] = [...(existingRec?.exceptions ?? [])];
+
+  // Helper: build nth-week label
+  const nthWeekLabels: Record<number, string> = { 1:'1st', 2:'2nd', 3:'3rd', 4:'4th', 5:'5th', [-1]:'Last' };
+  const weekdayFullLabels = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+  const existingStatus: ActivityStatus = existingActivity?.status ?? 'planned';
+  const existingIsMilestone = existingActivity?.isMilestone ?? false;
 
   const weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   // JS weekday numbers for Mon..Sun: 1,2,3,4,5,6,0
@@ -162,6 +197,15 @@ export function showActivityDialog(
   dialog.innerHTML = `
     <div class="cp-dialog-box">
       <h2 id="cp-act-dialog-title" class="cp-dialog-title">${isEdit ? 'Edit Activity' : 'Add Activity'}</h2>
+      ${showOccurrenceRadio ? `
+      <div id="cp-occ-scope" style="display:flex;gap:16px;padding:8px 0 4px;margin-bottom:4px;border-bottom:1px solid var(--cp-border,#d1d5db);">
+        <label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+          <input type="radio" name="cp-occ-scope" value="all" checked> Edit all occurrences
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+          <input type="radio" name="cp-occ-scope" value="one"> Edit this occurrence only
+        </label>
+      </div>` : ''}
       <label class="cp-dialog-label">
         Title <span class="cp-required">*</span>
         <input id="cp-act-title" type="text" value="${escapeHtml(existingActivity?.title || '')}"
@@ -173,22 +217,41 @@ export function showActivityDialog(
           <input id="cp-act-start" type="date" value="${defaultStart}"
             class="cp-dialog-input">
         </label>
-        <label class="cp-dialog-label cp-dialog-label--flex">
+        <label class="cp-dialog-label cp-dialog-label--flex" id="cp-act-end-label">
           End date <span class="cp-required">*</span>
           <input id="cp-act-end" type="date" value="${defaultEnd}"
             class="cp-dialog-input">
         </label>
       </div>
+      <label class="cp-dialog-label" style="flex-direction:row;align-items:center;gap:8px;cursor:pointer;">
+        <input id="cp-act-milestone" type="checkbox" ${existingIsMilestone ? 'checked' : ''}>
+        <span>Milestone</span>
+        <span id="cp-act-milestone-note" class="cp-dialog-hint" style="${existingIsMilestone ? '' : 'display:none'}">A milestone is a single date.</span>
+      </label>
+      <label class="cp-dialog-label">
+        Status
+        <select id="cp-act-status" class="cp-dialog-select">
+          <option value="planned" ${existingStatus === 'planned' ? 'selected' : ''}>Planned</option>
+          <option value="in_progress" ${existingStatus === 'in_progress' ? 'selected' : ''}>In progress</option>
+          <option value="done" ${existingStatus === 'done' ? 'selected' : ''}>Done</option>
+          <option value="cancelled" ${existingStatus === 'cancelled' ? 'selected' : ''}>Cancelled</option>
+        </select>
+      </label>
       <label class="cp-dialog-label">
         Lane
         <select id="cp-act-lane" class="cp-dialog-select">
           ${laneOptions}
         </select>
       </label>
-      <label class="cp-dialog-label">
+      <div class="cp-dialog-label">
         Description
+        <div style="display:flex;gap:4px;margin-bottom:4px;margin-top:4px;">
+          <button type="button" id="cp-act-desc-write" class="cp-btn cp-btn-active" style="font-size:12px;padding:2px 8px;">Write</button>
+          <button type="button" id="cp-act-desc-preview" class="cp-btn" style="font-size:12px;padding:2px 8px;">Preview</button>
+        </div>
         <textarea id="cp-act-desc" rows="3" class="cp-dialog-textarea">${escapeHtml(existingActivity?.description || '')}</textarea>
-      </label>
+        <div id="cp-act-desc-preview-pane" style="display:none;min-height:72px;padding:6px 8px;border:1px solid var(--cp-border,#d1d5db);border-radius:6px;font-size:13px;line-height:1.5;overflow-y:auto;max-height:200px;" class="cp-markdown-preview"></div>
+      </div>
       <label class="cp-dialog-label">
         Label <span class="cp-dialog-hint">(e.g. vacation, launch)</span>
         <input id="cp-act-label" type="text" value="${escapeHtml(existingActivity?.label || '')}" placeholder="optional tag"
@@ -209,6 +272,8 @@ export function showActivityDialog(
           <option value="none" ${recType === 'none' ? 'selected' : ''}>Does not repeat</option>
           <option value="daily" ${recType === 'daily' ? 'selected' : ''}>Daily</option>
           <option value="weekly" ${recType === 'weekly' ? 'selected' : ''}>Weekly</option>
+          <option value="monthly" ${recType === 'monthly' ? 'selected' : ''}>Monthly</option>
+          <option value="yearly" ${recType === 'yearly' ? 'selected' : ''}>Yearly</option>
         </select>
       </label>
       <div id="cp-act-recur-opts" style="${recType === 'none' ? 'display:none' : ''}">
@@ -216,7 +281,7 @@ export function showActivityDialog(
           <span style="font-size:13px;">Every</span>
           <input id="cp-act-recur-interval" type="number" min="1" value="${recInterval}"
             class="cp-dialog-input" style="width:56px;">
-          <span id="cp-act-recur-unit" style="font-size:13px;">${recType === 'weekly' ? 'week(s)' : 'day(s)'}</span>
+          <span id="cp-act-recur-unit" style="font-size:13px;">${recType === 'weekly' ? 'week(s)' : recType === 'monthly' ? 'month(s)' : recType === 'yearly' ? 'year(s)' : 'day(s)'}</span>
         </div>
         <div id="cp-act-weekdays-row" style="${recType !== 'weekly' ? 'display:none' : ''}margin-top:6px;">
           <div style="font-size:12px;color:var(--cp-text-muted);margin-bottom:4px;">Repeat on</div>
@@ -224,11 +289,48 @@ export function showActivityDialog(
             ${weekdayCheckboxes}
           </div>
         </div>
+        <div id="cp-act-monthly-opts" style="${recType !== 'monthly' ? 'display:none' : ''}margin-top:6px;">
+          <div style="font-size:12px;color:var(--cp-text-muted);margin-bottom:4px;">Repeat on</div>
+          <select id="cp-act-monthly-sub" class="cp-dialog-select" style="margin-bottom:6px;">
+            <option value="dom" ${monthlySubMode === 'dom' ? 'selected' : ''}>Day ${monthlyDom} of the month</option>
+            <option value="nthwd" ${monthlySubMode === 'nthwd' ? 'selected' : ''}>The ${nthWeekLabels[monthlyNthWeek] ?? monthlyNthWeek + 'th'} ${weekdayFullLabels[defaultNthWeekday]} of the month</option>
+          </select>
+          <div id="cp-act-monthly-nthwd" style="${monthlySubMode !== 'nthwd' ? 'display:none' : ''}display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+            <select id="cp-act-monthly-week" class="cp-dialog-select" style="flex:1;">
+              <option value="1" ${monthlyNthWeek === 1 ? 'selected' : ''}>1st</option>
+              <option value="2" ${monthlyNthWeek === 2 ? 'selected' : ''}>2nd</option>
+              <option value="3" ${monthlyNthWeek === 3 ? 'selected' : ''}>3rd</option>
+              <option value="4" ${monthlyNthWeek === 4 ? 'selected' : ''}>4th</option>
+              <option value="5" ${monthlyNthWeek === 5 ? 'selected' : ''}>5th</option>
+              <option value="-1" ${monthlyNthWeek === -1 ? 'selected' : ''}>Last</option>
+            </select>
+            <select id="cp-act-monthly-weekday" class="cp-dialog-select" style="flex:1;">
+              <option value="0" ${monthlyNthWeekday === 0 ? 'selected' : ''}>Sunday</option>
+              <option value="1" ${monthlyNthWeekday === 1 ? 'selected' : ''}>Monday</option>
+              <option value="2" ${monthlyNthWeekday === 2 ? 'selected' : ''}>Tuesday</option>
+              <option value="3" ${monthlyNthWeekday === 3 ? 'selected' : ''}>Wednesday</option>
+              <option value="4" ${monthlyNthWeekday === 4 ? 'selected' : ''}>Thursday</option>
+              <option value="5" ${monthlyNthWeekday === 5 ? 'selected' : ''}>Friday</option>
+              <option value="6" ${monthlyNthWeekday === 6 ? 'selected' : ''}>Saturday</option>
+            </select>
+          </div>
+        </div>
+        <div id="cp-act-yearly-note" style="${recType !== 'yearly' ? 'display:none' : ''}font-size:12px;color:var(--cp-text-muted);margin-top:6px;">
+          Repeats yearly on the start date.
+        </div>
         <label class="cp-dialog-label" style="margin-top:6px;">
           Repeat until
           <input id="cp-act-recur-until" type="date" value="${recUntil}"
             class="cp-dialog-input">
         </label>
+        <div id="cp-act-exceptions-section" style="margin-top:8px;">
+          <div style="font-size:12px;color:var(--cp-text-muted);margin-bottom:4px;">Skip occurrences on these dates</div>
+          <div id="cp-act-exceptions-chips" style="display:flex;flex-wrap:wrap;gap:4px;min-height:20px;margin-bottom:4px;"></div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input id="cp-act-exc-date" type="date" class="cp-dialog-input" style="flex:1;">
+            <button type="button" id="cp-act-exc-add" class="cp-btn" style="white-space:nowrap;">Add exception</button>
+          </div>
+        </div>
       </div>
       <label class="cp-dialog-label cp-dialog-label--last">
         Colour
@@ -262,16 +364,20 @@ export function showActivityDialog(
     tagChipsEl.innerHTML = '';
     selectedTags.forEach(u => {
       const chip = document.createElement('span');
-      chip.style.cssText = 'display:inline-flex;align-items:center;gap:3px;background:var(--cp-accent-light);color:var(--cp-accent-on);border-radius:12px;padding:2px 8px;font-size:12px;';
+      const isPending = u.id == null;
+      chip.style.cssText = `display:inline-flex;align-items:center;gap:3px;background:var(--cp-accent-light);color:var(--cp-accent-on);border-radius:12px;padding:2px 8px;font-size:12px;${isPending ? 'font-style:italic;opacity:0.8;' : ''}`;
+      if (isPending) {
+        chip.title = 'Pending — will link automatically when this user registers';
+      }
       const dn = displayName({ username: u.username, fullName: u.fullName });
-      chip.textContent = dn;
+      chip.textContent = isPending ? `${dn} (pending)` : dn;
       const removeBtn = document.createElement('button');
       removeBtn.type = 'button';
       removeBtn.textContent = '×';
       removeBtn.setAttribute('aria-label', `Remove ${dn}`);
       removeBtn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:14px;line-height:1;padding:0 0 0 2px;color:inherit;';
       removeBtn.addEventListener('click', () => {
-        selectedTags = selectedTags.filter(t => t.id !== u.id);
+        selectedTags = selectedTags.filter(t => !(t.username === u.username && t.id == u.id));
         renderTagChips();
       });
       chip.appendChild(removeBtn);
@@ -294,14 +400,15 @@ export function showActivityDialog(
       try {
         const users = await api.get<Array<{ id: number; username: string; email: string; fullName?: string | null }>>(`/api/users?q=${encodeURIComponent(q)}&includeSelf=1`);
         tagDropdownEl.innerHTML = '';
+        const hasExactMatch = users.some(u => u.username.toLowerCase() === q.toLowerCase());
+
         if (users.length === 0) {
           const noResult = document.createElement('div');
           noResult.style.cssText = 'padding:8px 12px;font-size:13px;color:var(--cp-text-muted);';
           noResult.textContent = 'No users found';
           tagDropdownEl.appendChild(noResult);
-          tagDropdownEl.style.display = '';
-          return;
         }
+
         users.forEach(u => {
           if (selectedTags.find(t => t.id === u.id)) return; // already selected
           const item = document.createElement('div');
@@ -323,6 +430,28 @@ export function showActivityDialog(
           });
           tagDropdownEl.appendChild(item);
         });
+
+        // Offer "Tag as pending" if query is a valid username, no exact match exists,
+        // and the query isn't already a pending tag, and doesn't match a resolved selected tag.
+        const alreadyPending = selectedTags.some(t => t.id == null && t.username.toLowerCase() === q.toLowerCase());
+        const alreadyResolved = selectedTags.some(t => t.id != null && t.username.toLowerCase() === q.toLowerCase());
+        if (!hasExactMatch && !alreadyPending && !alreadyResolved && PENDING_USERNAME_RE.test(q)) {
+          const pendingItem = document.createElement('div');
+          pendingItem.style.cssText = 'padding:8px 12px;font-size:13px;cursor:pointer;font-style:italic;color:var(--cp-text-muted);border-top:1px solid var(--cp-border,#d1d5db);';
+          pendingItem.textContent = `Tag "@${q}" as pending (will link when they register)`;
+          pendingItem.addEventListener('mouseenter', () => { pendingItem.style.background = 'var(--cp-accent-bg)'; });
+          pendingItem.addEventListener('mouseleave', () => { pendingItem.style.background = ''; });
+          pendingItem.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            selectedTags.push({ username: q, pending: true });
+            renderTagChips();
+            tagInputEl.value = '';
+            hideTagDropdown();
+            tagInputEl.focus();
+          });
+          tagDropdownEl.appendChild(pendingItem);
+        }
+
         tagDropdownEl.style.display = '';
       } catch { hideTagDropdown(); }
     }, 200);
@@ -338,17 +467,104 @@ export function showActivityDialog(
   const removeTrap = installFocusTrap(dialog);
   const closeAndCleanup = () => { removeTrap(); close(); };
 
+  // Wire milestone checkbox
+  const milestoneEl = document.getElementById('cp-act-milestone') as HTMLInputElement;
+  const milestoneNoteEl = document.getElementById('cp-act-milestone-note') as HTMLElement;
+  const endLabelEl = document.getElementById('cp-act-end-label') as HTMLElement;
+
+  function updateMilestoneUI(): void {
+    if (milestoneEl.checked) {
+      endLabelEl.style.display = 'none';
+      milestoneNoteEl.style.display = '';
+    } else {
+      endLabelEl.style.display = '';
+      milestoneNoteEl.style.display = 'none';
+    }
+  }
+  updateMilestoneUI();
+  milestoneEl.addEventListener('change', updateMilestoneUI);
+
+  // Wire description Write/Preview tabs
+  const descTextarea = document.getElementById('cp-act-desc') as HTMLTextAreaElement;
+  const descPreviewPane = document.getElementById('cp-act-desc-preview-pane') as HTMLElement;
+  const descWriteBtn = document.getElementById('cp-act-desc-write') as HTMLButtonElement;
+  const descPreviewBtn = document.getElementById('cp-act-desc-preview') as HTMLButtonElement;
+
+  descWriteBtn.addEventListener('click', () => {
+    descTextarea.style.display = '';
+    descPreviewPane.style.display = 'none';
+    descWriteBtn.classList.add('cp-btn-active');
+    descPreviewBtn.classList.remove('cp-btn-active');
+  });
+
+  descPreviewBtn.addEventListener('click', () => {
+    descPreviewPane.innerHTML = renderMarkdown(descTextarea.value);
+    descTextarea.style.display = 'none';
+    descPreviewPane.style.display = '';
+    descPreviewBtn.classList.add('cp-btn-active');
+    descWriteBtn.classList.remove('cp-btn-active');
+  });
+
   // Wire recurrence type select
   const recurTypeEl = document.getElementById('cp-act-recur-type') as HTMLSelectElement;
   const recurOptsEl = document.getElementById('cp-act-recur-opts') as HTMLElement;
   const recurUnitEl = document.getElementById('cp-act-recur-unit') as HTMLElement;
   const weekdaysRowEl = document.getElementById('cp-act-weekdays-row') as HTMLElement;
+  const monthlyOptsEl = document.getElementById('cp-act-monthly-opts') as HTMLElement;
+  const yearlyNoteEl = document.getElementById('cp-act-yearly-note') as HTMLElement;
 
   recurTypeEl?.addEventListener('change', () => {
     const val = recurTypeEl.value;
     recurOptsEl.style.display = val === 'none' ? 'none' : '';
-    recurUnitEl.textContent = val === 'weekly' ? 'week(s)' : 'day(s)';
+    if (val === 'weekly') recurUnitEl.textContent = 'week(s)';
+    else if (val === 'monthly') recurUnitEl.textContent = 'month(s)';
+    else if (val === 'yearly') recurUnitEl.textContent = 'year(s)';
+    else recurUnitEl.textContent = 'day(s)';
     weekdaysRowEl.style.display = val === 'weekly' ? '' : 'none';
+    monthlyOptsEl.style.display = val === 'monthly' ? '' : 'none';
+    yearlyNoteEl.style.display = val === 'yearly' ? '' : 'none';
+  });
+
+  // Wire monthly sub-select
+  const monthlySubEl = document.getElementById('cp-act-monthly-sub') as HTMLSelectElement;
+  const monthlyNthwdEl = document.getElementById('cp-act-monthly-nthwd') as HTMLElement;
+  monthlySubEl?.addEventListener('change', () => {
+    monthlyNthwdEl.style.display = monthlySubEl.value === 'nthwd' ? '' : 'none';
+  });
+
+  // Wire exceptions section
+  const exceptionsChipsEl = document.getElementById('cp-act-exceptions-chips') as HTMLElement;
+  const excDateEl = document.getElementById('cp-act-exc-date') as HTMLInputElement;
+
+  function renderExceptionChips(): void {
+    exceptionsChipsEl.innerHTML = '';
+    exceptions.forEach(dateStr => {
+      const chip = document.createElement('span');
+      chip.style.cssText = 'display:inline-flex;align-items:center;gap:2px;background:var(--cp-surface-alt,#f3f4f6);border:1px solid var(--cp-border,#d1d5db);border-radius:12px;padding:2px 8px;font-size:12px;';
+      chip.textContent = dateStr;
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.textContent = '×';
+      removeBtn.setAttribute('aria-label', `Remove exception ${dateStr}`);
+      removeBtn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:14px;line-height:1;padding:0 0 0 4px;color:inherit;';
+      removeBtn.addEventListener('click', () => {
+        exceptions = exceptions.filter(d => d !== dateStr);
+        renderExceptionChips();
+      });
+      chip.appendChild(removeBtn);
+      exceptionsChipsEl.appendChild(chip);
+    });
+  }
+  renderExceptionChips();
+
+  document.getElementById('cp-act-exc-add')?.addEventListener('click', () => {
+    const val = excDateEl.value;
+    if (!val) return;
+    if (!exceptions.includes(val)) {
+      exceptions = [...exceptions, val].sort();
+      renderExceptionChips();
+    }
+    excDateEl.value = '';
   });
 
   dialog.addEventListener('click', (e) => { if (e.target === dialog) closeAndCleanup(); });
@@ -362,11 +578,44 @@ export function showActivityDialog(
     const desc  = (document.getElementById('cp-act-desc') as HTMLTextAreaElement).value.trim();
     const label = (document.getElementById('cp-act-label') as HTMLInputElement).value.trim();
     const color = getSelectedColor(colorPicker);
+    const isMilestone = (document.getElementById('cp-act-milestone') as HTMLInputElement).checked;
+    const status = (document.getElementById('cp-act-status') as HTMLSelectElement).value as ActivityStatus;
 
-    if (!title || !startRaw || !endRaw) { alert('Please fill in title, start date, and end date.'); return; }
+    if (!title || !startRaw) { alert('Please fill in title and start date.'); return; }
     const start = startRaw;
-    const end   = endRaw;
-    if (start > end) { alert('Start date must be before end date.'); return; }
+    // For milestones, end = start; otherwise require end date.
+    let end = isMilestone ? startRaw : endRaw;
+    if (!isMilestone && !endRaw) { alert('Please fill in the end date.'); return; }
+    if (!isMilestone && start > end) { alert('Start date must be before end date.'); return; }
+
+    // Check if user chose "edit this occurrence only"
+    const scopeRadio = dialog.querySelector<HTMLInputElement>('input[name="cp-occ-scope"]:checked');
+    const editOneOnly = showOccurrenceRadio && scopeRadio?.value === 'one';
+
+    if (editOneOnly && existingActivity && occurrenceDate) {
+      // Build partial override: only include fields that differ from the base activity.
+      const partial: Record<string, string> = {};
+      if (title !== existingActivity.title) partial.title = title;
+      if (desc !== (existingActivity.description || '')) partial.description = desc;
+      if (start !== existingActivity.startDate) partial.startDate = start;
+      if (end !== existingActivity.endDate) partial.endDate = end;
+      if (color !== existingActivity.color) partial.color = color;
+      if (label !== (existingActivity.label || '')) partial.label = label;
+      if (status !== (existingActivity.status ?? 'planned')) partial.status = status;
+
+      // Mutate recurrence.overrides on the base activity and save it.
+      const base = existingActivity;
+      if (base.recurrence) {
+        base.recurrence.overrides = base.recurrence.overrides ?? {};
+        if (Object.keys(partial).length > 0) {
+          base.recurrence.overrides[occurrenceDate] = partial;
+        }
+        // If partial is empty, nothing to do — don't write an empty override.
+      }
+      onSave(base);
+      closeAndCleanup();
+      return;
+    }
 
     let recurrence: Recurrence | null = null;
     const selectedRecurType = (document.getElementById('cp-act-recur-type') as HTMLSelectElement)?.value;
@@ -375,14 +624,30 @@ export function showActivityDialog(
       if (isNaN(intervalVal) || intervalVal < 1) { alert('Repeat interval must be at least 1.'); return; }
 
       const untilVal = (document.getElementById('cp-act-recur-until') as HTMLInputElement)?.value || undefined;
+      const currentExceptions = exceptions.length > 0 ? [...exceptions] : undefined;
 
       if (selectedRecurType === 'weekly') {
         const checkedBoxes = Array.from(dialog.querySelectorAll<HTMLInputElement>('input[name="cp-act-wd"]:checked'));
         const selectedWeekdays = checkedBoxes.map(cb => parseInt(cb.value, 10));
         if (selectedWeekdays.length === 0) { alert('Please select at least one weekday for weekly recurrence.'); return; }
-        recurrence = { type: 'weekly', interval: intervalVal, weekdays: selectedWeekdays, until: untilVal || undefined };
+        recurrence = { type: 'weekly', interval: intervalVal, weekdays: selectedWeekdays, until: untilVal, exceptions: currentExceptions };
+      } else if (selectedRecurType === 'monthly') {
+        const subMode = (document.getElementById('cp-act-monthly-sub') as HTMLSelectElement)?.value ?? 'dom';
+        let monthlyRule: MonthlyRule;
+        if (subMode === 'nthwd') {
+          const week = parseInt((document.getElementById('cp-act-monthly-week') as HTMLSelectElement)?.value ?? '1', 10) as 1|2|3|4|5|-1;
+          const weekday = parseInt((document.getElementById('cp-act-monthly-weekday') as HTMLSelectElement)?.value ?? '1', 10);
+          monthlyRule = { kind: 'nthwd', week, weekday };
+        } else {
+          // dom: use the dom inferred from the start date (which was baked into the option text)
+          const domVal = monthlyDom;
+          monthlyRule = { kind: 'dom', day: domVal };
+        }
+        recurrence = { type: 'monthly', interval: intervalVal, monthlyRule, until: untilVal, exceptions: currentExceptions };
+      } else if (selectedRecurType === 'yearly') {
+        recurrence = { type: 'yearly', interval: intervalVal, until: untilVal, exceptions: currentExceptions };
       } else {
-        recurrence = { type: 'daily', interval: intervalVal, until: untilVal || undefined };
+        recurrence = { type: 'daily', interval: intervalVal, until: untilVal, exceptions: currentExceptions };
       }
     }
 
@@ -397,6 +662,8 @@ export function showActivityDialog(
       label,
       recurrence,
       taggedUsers: selectedTags.length > 0 ? selectedTags : undefined,
+      status,
+      isMilestone: isMilestone || undefined,
     };
     onSave(activity);
     closeAndCleanup();

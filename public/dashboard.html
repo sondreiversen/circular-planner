@@ -35,6 +35,11 @@
   </header>
 
   <main class="dashboard-main">
+    <div class="global-search-wrap" style="position:relative;margin-bottom:20px;">
+      <input type="search" id="global-search-input" placeholder="Search activities and planners…" autocomplete="off" style="width:100%;max-width:560px;padding:8px 10px;border:1px solid var(--cp-border-strong);border-radius:6px;font-size:13px;font-family:inherit;color:var(--cp-text);background:var(--cp-surface);box-sizing:border-box;" />
+      <div id="global-search-results" class="hidden" style="position:absolute;top:100%;left:0;right:0;max-width:560px;background:var(--cp-bg);border:1px solid var(--cp-border);border-radius:6px;margin-top:4px;max-height:400px;overflow-y:auto;z-index:10;box-shadow:0 4px 16px rgba(0,0,0,0.1);"></div>
+    </div>
+
     <div class="dashboard-title-row">
       <h2>My Planners</h2>
       <button id="new-planner-btn" class="btn btn-primary">+ New Planner</button>

@@ -27,6 +27,7 @@
     <div class="header-right">
       <button id="share-btn" class="btn btn-ghost" title="Share this planner">Share</button>
       <span id="header-username" class="header-user"></span>
+      <button id="help-btn" class="btn-theme" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
       <button id="theme-toggle" class="btn-theme" title="Toggle dark mode">🌙</button>
       <button id="logout-btn" class="btn btn-ghost">Sign Out</button>
     </div>
@@ -49,6 +50,7 @@
       <div class="tab-bar" style="margin-bottom:0;">
         <button class="tab active" id="share-tab-users" type="button">Users</button>
         <button class="tab" id="share-tab-groups" type="button">Groups</button>
+        <button class="tab" id="share-tab-public" type="button">Public link</button>
       </div>
 
       <!-- Users panel -->
@@ -98,6 +100,29 @@
             </select>
           </label>
           <button id="share-group-add-btn" class="btn btn-primary" type="button">Add Group</button>
+        </div>
+      </div>
+
+      <!-- Public link panel -->
+      <div id="share-panel-public" class="hidden">
+        <div class="share-token-section">
+          <h4>Public link</h4>
+          <p class="share-public-hint">Anyone with this link can view this planner without logging in.</p>
+          <div id="share-token-no-token">
+            <button id="share-token-enable-btn" class="btn btn-primary" type="button">Enable public link</button>
+          </div>
+          <div id="share-token-active" class="hidden">
+            <div class="share-token-url-row">
+              <input type="text" id="share-token-url-input" readonly>
+              <button id="share-token-copy-btn" class="btn btn-ghost" type="button">Copy</button>
+            </div>
+            <textarea id="share-token-embed-code" class="share-token-embed" readonly></textarea>
+            <div class="share-token-actions">
+              <button id="share-token-revoke-btn" class="btn-danger-sm" type="button">Revoke link</button>
+            </div>
+            <p class="share-token-warning">Anyone with this link can view this planner without logging in.</p>
+          </div>
+          <div id="share-token-error" class="form-error hidden"></div>
         </div>
       </div>
 

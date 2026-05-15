@@ -5,7 +5,7 @@ import { getGridSpec } from './viewport';
 export type ClickActivityHandler = (activity: Activity) => void;
 export type ClickLaneSlotHandler = (laneId: string, date: Date) => void;
 
-const LANE_COL_WIDTH = 160;
+const LANE_COL_WIDTH = 200;
 const SUB_ROW_HEIGHT = 26;
 const ROW_PADDING_Y = 6;
 const HEADER_ROW_HEIGHT = 32; // height of a single header row
@@ -154,7 +154,10 @@ export class ListRenderer {
       laneCell.style.width = `${LANE_COL_WIDTH}px`;
       laneCell.style.borderLeft = `4px solid ${lane.color || '#ccc'}`;
       laneCell.title = lane.name;
-      laneCell.textContent = lane.name;
+      const laneName = document.createElement('span');
+      laneName.className = 'cp-list-lane-name';
+      laneName.textContent = lane.name;
+      laneCell.appendChild(laneName);
       row.appendChild(laneCell);
 
       const timeline = document.createElement('div');
@@ -247,7 +250,7 @@ export class ListRenderer {
         !this.filterState.activeLabels.has(a.label)) return false;
     if (this.filterState.activeTaggedUserIds.size > 0) {
       const tagged = a.taggedUsers ?? [];
-      if (!tagged.some(u => this.filterState.activeTaggedUserIds.has(u.id))) return false;
+      if (!tagged.some(u => u.id != null && this.filterState.activeTaggedUserIds.has(u.id))) return false;
     }
     return true;
   }

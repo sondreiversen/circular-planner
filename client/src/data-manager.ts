@@ -35,16 +35,19 @@ export class DataManager {
     this.saveTimer = setTimeout(() => this.save(data), 800);
   }
 
-  /** Serialise PlannerData for the wire: strip client-only fields, convert taggedUsers → taggedUserIds */
+  /** Serialise PlannerData for the wire: strip client-only fields, convert taggedUsers → taggedUserIds + taggedUsernames */
   private serialiseLanes(data: PlannerData): unknown {
     return data.lanes.map((lane: Lane) => ({
       ...lane,
       activities: lane.activities.map((a: Activity) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { taggedUsers, createdBy, ...rest } = a;
+        const resolved = (taggedUsers ?? []).filter(u => u.id != null);
+        const pending  = (taggedUsers ?? []).filter(u => u.id == null);
         return {
           ...rest,
-          taggedUserIds: (taggedUsers ?? []).map(u => u.id),
+          taggedUserIds: resolved.map(u => u.id as number),
+          taggedUsernames: pending.map(u => u.username),
         };
       }),
     }));

@@ -3,6 +3,7 @@ package auth
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -10,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -143,6 +145,10 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonError(w, http.StatusInternalServerError, "Registration failed")
 		return
+	}
+
+	if err := claimPendingTags(r.Context(), h.db, id, username); err != nil {
+		log.Printf("claim pending tags: %v", err)
 	}
 
 	token, err := h.makeToken(id, username, email)
@@ -380,6 +386,11 @@ func (h *Handler) upsertGitLabUser(r *http.Request, u *gitlabProfile) (id int, u
 		             RETURNING id, username, email`),
 		uname, u.Email, u.ID, u.Username, u.Name,
 	).Scan(&id, &username, &email)
+	if err == nil {
+		if claimErr := claimPendingTags(ctx, h.db, id, username); claimErr != nil {
+			log.Printf("claim pending tags: %v", claimErr)
+		}
+	}
 	return
 }
 
@@ -513,6 +524,24 @@ func (h *Handler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) RegistrationStatus(w http.ResponseWriter, r *http.Request) {
 	enabled := settings.GetBool(r.Context(), h.db, "allow_registration", h.cfg.AllowRegistration)
 	writeJSON(w, http.StatusOK, map[string]bool{"enabled": enabled})
+}
+
+// claimPendingTags moves any activity_pending_tags for username into activity_user_tags.
+// Called after a new user is created. Errors are logged but do not fail registration.
+func claimPendingTags(ctx context.Context, database *db.DB, userID int, username string) error {
+	_, err := database.ExecContext(ctx, database.Rebind(`
+		INSERT INTO activity_user_tags(activity_id, planner_id, user_id)
+		SELECT DISTINCT pt.activity_id, pt.planner_id, ?
+		FROM activity_pending_tags pt
+		WHERE LOWER(pt.username) = LOWER(?)
+		ON CONFLICT (activity_id, planner_id, user_id) DO NOTHING
+	`), userID, username)
+	if err != nil {
+		return err
+	}
+	_, err = database.ExecContext(ctx, database.Rebind(
+		"DELETE FROM activity_pending_tags WHERE LOWER(username) = LOWER(?)"), username)
+	return err
 }
 
 // --- misc helpers ---

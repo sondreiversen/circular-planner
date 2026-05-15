@@ -18,9 +18,13 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 import { DataManager } from './data-manager';
 import { showActivityDialog, showLaneDialog, showOutlookImportDialog } from './dialogs';
-import { randomId, laneColor, parseDate, formatDate } from './utils';
+import { randomId, laneColor, parseDate, formatDate, addDays, ColorBy, STATUS_COLORS, colorForString } from './utils';
 import { defaultViewport, zoomIn, zoomOut, navigate, canZoomIn, canZoomOut, viewportLabel, navigateToYear, navigateToRange, navigateToToday } from './viewport';
 import { ZoomLevel } from './types';
+import { decode as decodeUrlState, encode as encodeUrlState } from './url-state';
+import { listViews, createView, deleteView, SavedView } from './saved-views';
+import { exportSVGToPNG } from './svg-export';
+import { setClip, getClip, hasClip } from './activity-clipboard';
 
 /**
  * Main controller for a single circular planner instance.
@@ -41,14 +45,18 @@ export class Planner {
   private listContainer!: HTMLElement;
   private peopleContainer!: HTMLElement;
   private viewMode: ViewMode = 'disc';
+  private colorBy: ColorBy = 'activity';
+  private colorByLegend!: HTMLElement;
   private sidebarCollapsed = false;
   private showBorder = true;
   private searchDebounce: ReturnType<typeof setTimeout> | null = null;
   private history: History = new History();
   private _globalKeyHandler: ((e: KeyboardEvent) => void) | null = null;
+  private lastSelectedActivity: Activity | null = null;
   private viewDiscBtn!: HTMLButtonElement;
   private viewListBtn!: HTMLButtonElement;
   private viewPeopleBtn!: HTMLButtonElement;
+  private searchInputEl: HTMLInputElement | null = null;
 
   // Refs to toolbar elements that change on viewport updates
   private vpLabelEl!: HTMLSpanElement;
@@ -81,10 +89,34 @@ export class Planner {
       }
     });
 
+    // Apply URL-encoded state first (URL is authoritative for shared links).
+    // This runs before localStorage so a shared URL always wins.
+    const urlState = decodeUrlState(location.search);
+    if (urlState.viewport?.from && urlState.viewport?.to && urlState.viewport?.zoom) {
+      this.viewport = { windowStart: urlState.viewport.from, windowEnd: urlState.viewport.to, zoomLevel: urlState.viewport.zoom };
+    } else if (urlState.viewport?.zoom) {
+      // Zoom level only — keep the current windowStart year, recompute window at the new zoom
+      this.viewport = navigateToYear(this.viewport.windowStart.getFullYear());
+      this.viewport = { ...this.viewport, zoomLevel: urlState.viewport.zoom };
+    }
+    if (urlState.filterState?.searchTerm) this.filterState.searchTerm = urlState.filterState.searchTerm;
+    if (urlState.filterState?.hiddenLaneIds) this.filterState.hiddenLaneIds = urlState.filterState.hiddenLaneIds;
+    if (urlState.filterState?.activeLabels) this.filterState.activeLabels = urlState.filterState.activeLabels;
+    if (urlState.filterState?.activeTaggedUserIds) this.filterState.activeTaggedUserIds = urlState.filterState.activeTaggedUserIds;
+    if (urlState.viewMode) this.viewMode = urlState.viewMode;
+    if (urlState.colorBy) this.colorBy = urlState.colorBy;
+
     // Restore sidebar collapsed state
     this.sidebarCollapsed = localStorage.getItem('cp_sidebar_collapsed') === 'true';
     const storedMode = localStorage.getItem('cp_view_mode');
-    if (storedMode === 'list' || storedMode === 'disc' || storedMode === 'people') this.viewMode = storedMode;
+    // Only apply localStorage fallback when URL didn't override viewMode
+    if (!urlState.viewMode && (storedMode === 'list' || storedMode === 'disc' || storedMode === 'people')) this.viewMode = storedMode;
+
+    const storedColorBy = localStorage.getItem('cp_color_by');
+    // Only apply localStorage fallback when URL didn't override colorBy
+    if (!urlState.colorBy && (storedColorBy === 'activity' || storedColorBy === 'lane' || storedColorBy === 'label' || storedColorBy === 'status' || storedColorBy === 'owner')) {
+      this.colorBy = storedColorBy;
+    }
 
     const storedBorder = localStorage.getItem('cp_lane_border_color');
     if (storedBorder) {
@@ -103,6 +135,13 @@ export class Planner {
     this.toolbar.className = 'cp-toolbar';
     this.buildToolbar();
     this.container.appendChild(this.toolbar);
+
+    // Color-by legend strip
+    this.colorByLegend = document.createElement('div');
+    this.colorByLegend.className = 'cp-color-by-legend';
+    this.colorByLegend.style.cssText = 'display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:4px 12px;background:var(--cp-surface);border-bottom:1px solid var(--cp-border);font-size:11px;color:var(--cp-text);';
+    this.container.appendChild(this.colorByLegend);
+    this.updateColorByLegend();
 
     // Page body: sidebar + disc
     const pageBody = document.createElement('div');
@@ -157,15 +196,23 @@ export class Planner {
     this.peopleContainer = peopleContainer;
 
     this.renderer = new Renderer(svgContainer, this.config, this.data, this.viewport);
-    this.renderer.setHandlers(
-      (laneId, date) => this.handleClickLane(laneId, date),
-      (activity) => this.handleClickActivity(activity)
-    );
+    // Only wire mutation handlers when the user has edit rights; view-only users
+    // get no-op handlers so clicking the disc does nothing.
+    if (this.config.permission !== 'view') {
+      this.renderer.setHandlers(
+        (laneId, date) => this.handleClickLane(laneId, date),
+        (activity) => this.handleClickActivity(activity)
+      );
+      this.renderer.setDragCommitHandler((act, newStart, newEnd, newLaneId) =>
+        this.handleDragCommit(act, newStart, newEnd, newLaneId)
+      );
+    }
     this.renderer.setPinchZoomHandlers(
       () => this.handleZoomIn(),
       () => this.handleZoomOut()
     );
     this.renderer.setBorderOptions(this.showBorder);
+    this.renderer.setColorBy(this.colorBy);
     this.renderer.update(this.data, this.filterState);
 
     svgContainer.addEventListener('wheel', (e: WheelEvent) => {
@@ -211,8 +258,8 @@ export class Planner {
         if (cmd) { toast.info(`Undone: ${cmd.label}`); this.save(); }
         return;
       }
-      // Ctrl/Cmd+Shift+Z or Ctrl+Y — redo
-      if ((ctrl && e.shiftKey && e.key === 'z') || (e.ctrlKey && !e.shiftKey && e.key === 'y')) {
+      // Ctrl/Cmd+Shift+Z — redo (Ctrl+Y dropped — Firefox uses it for Show Downloads)
+      if (ctrl && e.shiftKey && e.key === 'z') {
         e.preventDefault();
         const cmd = this.history.redo();
         if (cmd) { toast.info(`Redone: ${cmd.label}`); this.save(); }
@@ -225,20 +272,68 @@ export class Planner {
         return;
       }
 
+      // Esc — only act when the search input has focus; otherwise let other handlers work
+      if (e.key === 'Escape' && this.searchInputEl && document.activeElement === this.searchInputEl) {
+        if (this.searchInputEl.value) {
+          this.searchInputEl.value = '';
+          this.searchInputEl.dispatchEvent(new Event('input'));
+        } else {
+          this.searchInputEl.blur();
+        }
+        e.preventDefault();
+        return;
+      }
+
       // Guard: don't fire shortcut keys when typing in inputs
       if (Planner.isEditingText()) return;
 
-      // Ctrl+N — new activity (open dialog for the first visible lane)
-      if (e.ctrlKey && !e.metaKey && e.key === 'n') {
+      // Ctrl/Cmd+C — copy selected activity (only when no text is selected on the page)
+      if (ctrl && !e.shiftKey && e.key === 'c') {
+        if (!this.lastSelectedActivity) return;
+        if ((window.getSelection()?.toString() ?? '') !== '') return;
+        setClip(this.lastSelectedActivity);
+        toast.info('Activity copied — Ctrl+V to paste');
         e.preventDefault();
-        if (this.config.permission !== 'view') {
-          const firstLane = this.data.lanes[0];
-          if (firstLane) {
-            this.handleClickLane(firstLane.id, new Date());
-          } else {
-            this.handleAddLane();
-          }
+        return;
+      }
+
+      // Ctrl/Cmd+V — paste clipboard activity (pre-filled dialog, date-shifted to today)
+      if (ctrl && !e.shiftKey && e.key === 'v') {
+        if (!hasClip()) return;
+        if (this.config.permission === 'view') {
+          e.preventDefault();
+          toast.error('Cannot paste — view-only access');
+          return;
         }
+        e.preventDefault();
+        const src = getClip()!;
+        const today = new Date();
+        const origStart = parseDate(src.startDate);
+        const origEnd = parseDate(src.endDate);
+        const offsetDays = Math.round((today.getTime() - origStart.getTime()) / 86400000);
+        const newStart = formatDate(addDays(origStart, offsetDays));
+        const newEnd = formatDate(addDays(origEnd, offsetDays));
+        const laneExists = this.data.lanes.some(l => l.id === src.laneId);
+        const targetLaneId = laneExists ? src.laneId : (this.data.lanes[0]?.id ?? src.laneId);
+        const prefilled: Activity = {
+          ...src,
+          id: randomId(),
+          laneId: targetLaneId,
+          title: src.title + ' (copy)',
+          startDate: newStart,
+          endDate: newEnd,
+        };
+        delete (prefilled as any).createdBy;
+        delete (prefilled as any).createdAt;
+        showActivityDialog(targetLaneId, this.data.lanes, parseDate(newStart), prefilled,
+          (activity) => this.addActivity(activity), () => {}, this.config.endDate, undefined, true);
+        return;
+      }
+
+      // n — new activity (Ctrl+N can't be intercepted; browsers claim it for new window)
+      if (e.key === 'n') {
+        e.preventDefault();
+        if (this.config.permission !== 'view') this.handleAddEvent();
         return;
       }
 
@@ -246,6 +341,64 @@ export class Planner {
       if (e.key === '?') {
         e.preventDefault();
         openHelpOverlay();
+        return;
+      }
+
+      // / — focus search (expand sidebar first if collapsed)
+      if (e.key === '/') {
+        e.preventDefault();
+        if (this.sidebarCollapsed) {
+          const sidebar = document.getElementById('cp-sidebar');
+          const toggle = sidebar?.querySelector('.cp-sidebar-toggle') as HTMLButtonElement | null;
+          toggle?.click();
+        }
+        this.searchInputEl?.focus();
+        return;
+      }
+
+      // t — jump to today
+      if (e.key === 't') {
+        e.preventDefault();
+        this.handleNavigateToday();
+        return;
+      }
+
+      // 1 / 2 / 3 — switch view mode
+      if (e.key === '1') { e.preventDefault(); this.setViewMode('disc');   return; }
+      if (e.key === '2') { e.preventDefault(); this.setViewMode('list');   return; }
+      if (e.key === '3') { e.preventDefault(); this.setViewMode('people'); return; }
+
+      // + / = — zoom in (= is the unshifted key on most keyboards that produces +)
+      if (e.key === '+' || e.key === '=') {
+        e.preventDefault();
+        this.handleZoomIn();
+        return;
+      }
+
+      // - — zoom out
+      if (e.key === '-') {
+        e.preventDefault();
+        this.handleZoomOut();
+        return;
+      }
+
+      // Home — jump to planner start date (slide window to begin at config.startDate)
+      if (e.key === 'Home') {
+        e.preventDefault();
+        const span = this.viewport.windowEnd.getTime() - this.viewport.windowStart.getTime();
+        const homeStart = new Date(this.config.startDate);
+        this.viewport = navigateToRange(homeStart, new Date(homeStart.getTime() + span), this.viewport.zoomLevel);
+        this.refreshViewport();
+        return;
+      }
+
+      // End — jump to planner end date (slide window to end at config.endDate)
+      if (e.key === 'End') {
+        e.preventDefault();
+        const span = this.viewport.windowEnd.getTime() - this.viewport.windowStart.getTime();
+        const homeEnd = new Date(this.config.endDate);
+        this.viewport = navigateToRange(new Date(homeEnd.getTime() - span), homeEnd, this.viewport.zoomLevel);
+        this.refreshViewport();
         return;
       }
     };
@@ -308,6 +461,7 @@ export class Planner {
     this.viewMode = mode;
     localStorage.setItem('cp_view_mode', mode);
     this.applyViewMode();
+    this.syncUrl();
   }
 
   /**
@@ -377,9 +531,11 @@ export class Planner {
       this.searchDebounce = setTimeout(() => {
         this.filterState.searchTerm = searchInput.value.toLowerCase().trim();
         this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState); this.peopleRenderer?.update(this.data, this.filterState);
+        this.syncUrl();
       }, 200);
     });
     searchSection.appendChild(searchInput);
+    this.searchInputEl = searchInput;
     body.appendChild(searchSection);
 
     // Section: Lanes (top of list = outermost = highest order)
@@ -392,14 +548,16 @@ export class Planner {
     sidebarOrder.forEach(lane => {
       const laneRow = document.createElement('div');
       laneRow.className = 'cp-sidebar-lane-row';
-      laneRow.draggable = true;
+      laneRow.draggable = this.config.permission !== 'view';
       laneRow.dataset.laneId = lane.id;
 
-      const handle = document.createElement('span');
-      handle.className = 'cp-drag-handle';
-      handle.textContent = '⠿';
-      handle.title = 'Drag to reorder';
-      laneRow.appendChild(handle);
+      if (this.config.permission !== 'view') {
+        const handle = document.createElement('span');
+        handle.className = 'cp-drag-handle';
+        handle.textContent = '⠿';
+        handle.title = 'Drag to reorder';
+        laneRow.appendChild(handle);
+      }
 
       const toggleLabel = document.createElement('label');
       toggleLabel.className = 'cp-lane-toggle';
@@ -418,18 +576,20 @@ export class Planner {
       nameSpan.textContent = lane.name;
       nameSpan.style.cssText = `flex:1;opacity:${this.filterState.hiddenLaneIds.has(lane.id) ? '0.4' : '1'};min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
 
-      toggleLabel.appendChild(cb);
       toggleLabel.appendChild(dot);
       toggleLabel.appendChild(nameSpan);
+      toggleLabel.appendChild(cb);
       laneRow.appendChild(toggleLabel);
 
-      const editBtn = document.createElement('button');
-      editBtn.textContent = '✎';
-      editBtn.title = `Edit lane: ${lane.name}`;
-      editBtn.className = 'cp-btn';
-      editBtn.style.cssText = 'padding:3px 7px;font-size:11px;flex-shrink:0;';
-      editBtn.addEventListener('click', () => this.handleEditLane(lane));
-      laneRow.appendChild(editBtn);
+      if (this.config.permission !== 'view') {
+        const editBtn = document.createElement('button');
+        editBtn.textContent = '✎';
+        editBtn.title = `Edit lane: ${lane.name}`;
+        editBtn.className = 'cp-btn';
+        editBtn.style.cssText = 'padding:3px 7px;font-size:11px;flex-shrink:0;';
+        editBtn.addEventListener('click', () => this.handleEditLane(lane));
+        laneRow.appendChild(editBtn);
+      }
 
       // Drag events
       laneRow.addEventListener('dragstart', (e) => {
@@ -472,12 +632,14 @@ export class Planner {
       lanesContent.appendChild(laneRow);
     });
 
-    const addLaneBtn = document.createElement('button');
-    addLaneBtn.textContent = '+ Add Lane';
-    addLaneBtn.className = 'cp-btn cp-btn-primary';
-    addLaneBtn.style.cssText = 'width:100%;margin-top:8px;';
-    addLaneBtn.addEventListener('click', () => this.handleAddLane());
-    lanesContent.appendChild(addLaneBtn);
+    if (this.config.permission !== 'view') {
+      const addLaneBtn = document.createElement('button');
+      addLaneBtn.textContent = '+ Add Lane';
+      addLaneBtn.className = 'cp-btn cp-btn-primary';
+      addLaneBtn.style.cssText = 'width:100%;margin-top:8px;';
+      addLaneBtn.addEventListener('click', () => this.handleAddLane());
+      lanesContent.appendChild(addLaneBtn);
+    }
     body.appendChild(lanesSection);
 
     // Section: Labels (if any exist)
@@ -503,8 +665,8 @@ export class Planner {
         nameSpan.textContent = displayText;
         nameSpan.style.cssText = `flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;opacity:${this.filterState.activeLabels.size > 0 && !this.filterState.activeLabels.has(lbl) ? '0.4' : '1'};`;
 
-        row.appendChild(cb);
         row.appendChild(nameSpan);
+        row.appendChild(cb);
         labelsContent.appendChild(row);
       };
 
@@ -514,13 +676,14 @@ export class Planner {
       body.appendChild(labelsSection);
     }
 
-    // Section: Tagged users (if any exist across activities)
+    // Section: Tagged users (if any exist across activities); pending tags have no id and are excluded.
     const seenTaggedUserIds = new Set<number>();
     const allTaggedUsers = allActivities
       .flatMap(a => a.taggedUsers ?? [])
+      .filter(u => u.id != null)
       .filter(u => {
-        if (seenTaggedUserIds.has(u.id)) return false;
-        seenTaggedUserIds.add(u.id);
+        if (seenTaggedUserIds.has(u.id as number)) return false;
+        seenTaggedUserIds.add(u.id as number);
         return true;
       })
       .sort((a, b) => {
@@ -534,8 +697,9 @@ export class Planner {
         this.makeCollapsibleSection('Tagged users', 'tagged_users');
 
       allTaggedUsers.forEach(u => {
+        const uid = u.id as number;
         const dn = u.fullName?.trim() || u.username;
-        const isActive = this.filterState.activeTaggedUserIds.has(u.id);
+        const isActive = this.filterState.activeTaggedUserIds.has(uid);
 
         const row = document.createElement('label');
         row.className = 'cp-lane-toggle';
@@ -545,14 +709,14 @@ export class Planner {
         cb.type = 'checkbox';
         cb.checked = isActive;
         cb.style.cssText = 'margin:0;cursor:pointer;flex-shrink:0;';
-        cb.addEventListener('change', () => this.handleToggleTaggedUser(u.id));
+        cb.addEventListener('change', () => this.handleToggleTaggedUser(uid));
 
         const nameSpan = document.createElement('span');
         nameSpan.textContent = dn;
         nameSpan.style.cssText = `flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;opacity:${this.filterState.activeTaggedUserIds.size > 0 && !isActive ? '0.4' : '1'};`;
 
-        row.appendChild(cb);
         row.appendChild(nameSpan);
+        row.appendChild(cb);
         taggedUsersContent.appendChild(row);
       });
 
@@ -723,6 +887,7 @@ export class Planner {
     this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState); this.peopleRenderer?.update(this.data, this.filterState);
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
     if (sidebarBody) this.buildSidebar(sidebarBody);
+    this.syncUrl();
   }
 
   private handleToggleTaggedUser(userId: number): void {
@@ -734,6 +899,7 @@ export class Planner {
     this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState); this.peopleRenderer?.update(this.data, this.filterState);
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
     if (sidebarBody) this.buildSidebar(sidebarBody);
+    this.syncUrl();
   }
 
   private buildToolbar(): void {
@@ -796,15 +962,111 @@ export class Planner {
 
     this.toolbar.appendChild(viewGroup);
 
-    // Import button (edit/owner only)
+    // Color-by select
+    const colorByWrap = document.createElement('div');
+    colorByWrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;margin-left:8px;';
+
+    const colorByLabel = document.createElement('label');
+    colorByLabel.textContent = 'Color by';
+    colorByLabel.style.cssText = 'font-size:11px;color:var(--cp-text-muted);white-space:nowrap;';
+
+    const colorBySel = document.createElement('select');
+    colorBySel.style.cssText = 'font-size:11px;padding:2px 4px;border:1px solid var(--cp-border);border-radius:4px;background:var(--cp-surface);color:var(--cp-text);cursor:pointer;';
+    const colorByOptions: Array<[ColorBy, string]> = [
+      ['activity', 'Activity'],
+      ['lane',     'Lane'],
+      ['label',    'Label'],
+      ['status',   'Status'],
+      ['owner',    'Owner'],
+    ];
+    colorByOptions.forEach(([val, text]) => {
+      const opt = document.createElement('option');
+      opt.value = val;
+      opt.textContent = text;
+      if (val === this.colorBy) opt.selected = true;
+      colorBySel.appendChild(opt);
+    });
+    colorBySel.addEventListener('change', () => {
+      this.colorBy = colorBySel.value as ColorBy;
+      localStorage.setItem('cp_color_by', this.colorBy);
+      this.renderer.setColorBy(this.colorBy);
+      this.renderer.update(this.data, this.filterState);
+      this.updateColorByLegend();
+      this.syncUrl();
+    });
+    colorByWrap.appendChild(colorByLabel);
+    colorByWrap.appendChild(colorBySel);
+    this.toolbar.appendChild(colorByWrap);
+
+    // Views dropdown
+    this.toolbar.appendChild(this.buildViewsControl());
+
+    // Add-event + Import buttons (edit/owner only)
     if (this.config.permission !== 'view') {
+      const addEventBtn = document.createElement('button');
+      addEventBtn.textContent = '+ Add event';
+      addEventBtn.title = 'Add a new event (n)';
+      addEventBtn.className = 'cp-btn cp-btn-primary';
+      addEventBtn.style.marginLeft = '8px';
+      addEventBtn.addEventListener('click', () => this.handleAddEvent());
+      this.toolbar.appendChild(addEventBtn);
+
       const importBtn = document.createElement('button');
       importBtn.textContent = 'Import';
       importBtn.title = 'Import events from Outlook';
       importBtn.className = 'cp-btn';
-      importBtn.style.marginLeft = '8px';
       importBtn.addEventListener('click', () => this.handleOutlookImport());
       this.toolbar.appendChild(importBtn);
+    }
+
+    // Export group
+    {
+      const exportGroup = document.createElement('div');
+      exportGroup.className = 'cp-zoom-controls';
+      exportGroup.style.marginLeft = '8px';
+
+      // Print button
+      const printBtn = document.createElement('button');
+      printBtn.textContent = 'Print';
+      printBtn.title = 'Print or save as PDF';
+      printBtn.className = 'cp-btn';
+      printBtn.addEventListener('click', () => {
+        const title = this.config.title;
+        const start = this.config.startDate;
+        const end   = this.config.endDate;
+        document.body.setAttribute('data-print-title', `${title} — ${start} to ${end}`);
+        const cleanup = () => {
+          document.body.removeAttribute('data-print-title');
+          window.removeEventListener('afterprint', cleanup);
+        };
+        window.addEventListener('afterprint', cleanup);
+        window.print();
+      });
+      exportGroup.appendChild(printBtn);
+
+      // PNG button
+      const canvasSupported = typeof document.createElement('canvas').toDataURL === 'function';
+      const pngBtn = document.createElement('button');
+      pngBtn.textContent = 'PNG';
+      pngBtn.className = 'cp-btn';
+      if (!canvasSupported) {
+        pngBtn.disabled = true;
+        pngBtn.title = 'Export not supported in this browser';
+      } else {
+        pngBtn.title = 'Download disc as PNG';
+        pngBtn.addEventListener('click', () => {
+          const slug = (s: string) =>
+            s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'planner';
+          const filename = `${slug(this.config.title)}-${formatDate(new Date())}.png`;
+          exportSVGToPNG(this.renderer.getSVGNode(), filename).catch((err) => {
+            console.error('PNG export failed:', err);
+            toast.error('PNG export failed — see console for details.');
+          });
+        });
+      }
+      exportGroup.appendChild(pngBtn);
+
+      this.toolbar.appendChild(exportGroup);
     }
 
     // Spacer
@@ -880,6 +1142,375 @@ export class Planner {
     // Rebuild sidebar to reflect lane changes
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
     if (sidebarBody) this.buildSidebar(sidebarBody);
+    this.updateColorByLegend();
+  }
+
+  private updateColorByLegend(): void {
+    if (!this.colorByLegend) return;
+    if (this.colorBy === 'activity') {
+      this.colorByLegend.style.display = 'none';
+      return;
+    }
+    this.colorByLegend.style.display = 'flex';
+    this.colorByLegend.innerHTML = '';
+
+    // Header label
+    const hdr = document.createElement('span');
+    hdr.style.cssText = 'font-weight:600;color:var(--cp-text-muted);font-size:11px;margin-right:4px;';
+    const modeLabels: Record<ColorBy, string> = { activity: 'Activity', lane: 'Lane', label: 'Label', status: 'Status', owner: 'Owner' };
+    hdr.textContent = `${modeLabels[this.colorBy]}:`;
+    this.colorByLegend.appendChild(hdr);
+
+    const entries: Array<{ label: string; color: string }> = [];
+
+    if (this.colorBy === 'status') {
+      const statuses: Array<[string, string]> = [
+        ['planned', 'Planned'],
+        ['in_progress', 'In progress'],
+        ['done', 'Done'],
+        ['cancelled', 'Cancelled'],
+      ];
+      statuses.forEach(([key, label]) => {
+        entries.push({ label, color: STATUS_COLORS[key] });
+      });
+    } else if (this.colorBy === 'lane') {
+      this.data.lanes.forEach(lane => {
+        if (!this.filterState.hiddenLaneIds.has(lane.id)) {
+          const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(lane.color || '');
+          const color = m ? `rgba(${m[1]}, ${m[2]}, ${m[3]}, 0.85)` : (lane.color || '#999');
+          entries.push({ label: lane.name, color });
+        }
+      });
+    } else if (this.colorBy === 'label') {
+      const seen = new Set<string>();
+      this.data.lanes.forEach(lane => {
+        lane.activities.forEach(act => {
+          if (act.label && !seen.has(act.label)) {
+            seen.add(act.label);
+            entries.push({ label: act.label, color: colorForString(act.label) });
+          }
+        });
+      });
+      if (entries.length === 0) {
+        entries.push({ label: '(no label)', color: '#999' });
+      }
+    } else if (this.colorBy === 'owner') {
+      const seen = new Set<string>();
+      this.data.lanes.forEach(lane => {
+        lane.activities.forEach(act => {
+          const owner = act.createdBy || '';
+          if (!seen.has(owner)) {
+            seen.add(owner);
+            entries.push({ label: owner || '(unknown)', color: owner ? colorForString(owner) : '#999' });
+          }
+        });
+      });
+    }
+
+    entries.forEach(({ label, color }) => {
+      const item = document.createElement('span');
+      item.style.cssText = 'display:inline-flex;align-items:center;gap:4px;';
+
+      const swatch = document.createElement('span');
+      swatch.style.cssText = `display:inline-block;width:12px;height:12px;border-radius:50%;background:${color};flex-shrink:0;`;
+
+      const txt = document.createElement('span');
+      txt.textContent = label;
+      txt.style.cssText = 'font-size:11px;color:var(--cp-text);';
+
+      item.appendChild(swatch);
+      item.appendChild(txt);
+      this.colorByLegend.appendChild(item);
+    });
+  }
+
+  /** Build the "Views" dropdown control for the toolbar. */
+  private buildViewsControl(): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:relative;display:inline-block;margin-left:8px;';
+
+    const btn = document.createElement('button');
+    btn.className = 'cp-btn';
+    btn.textContent = 'Views';
+    btn.title = 'Saved views';
+    wrap.appendChild(btn);
+
+    const dropdown = document.createElement('div');
+    dropdown.style.cssText = [
+      'display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:200;',
+      'background:var(--cp-surface);border:1px solid var(--cp-border);border-radius:6px;',
+      'box-shadow:0 4px 16px rgba(0,0,0,0.15);min-width:220px;max-width:320px;',
+      'overflow:hidden;',
+    ].join('');
+    wrap.appendChild(dropdown);
+
+    let isOpen = false;
+
+    const openDropdown = async () => {
+      isOpen = true;
+      btn.classList.add('cp-btn-active');
+      dropdown.style.display = 'block';
+      await this.renderViewsDropdown(dropdown, () => closeDropdown());
+    };
+
+    const closeDropdown = () => {
+      isOpen = false;
+      btn.classList.remove('cp-btn-active');
+      dropdown.style.display = 'none';
+    };
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (isOpen) closeDropdown();
+      else openDropdown();
+    });
+
+    // Close on outside click
+    document.addEventListener('click', (e) => {
+      if (isOpen && !wrap.contains(e.target as Node)) closeDropdown();
+    });
+
+    return wrap;
+  }
+
+  /** Render (or re-render) the saved views dropdown content. */
+  private async renderViewsDropdown(dropdown: HTMLElement, close: () => void): Promise<void> {
+    dropdown.innerHTML = '';
+
+    // Loading indicator
+    const loading = document.createElement('div');
+    loading.textContent = 'Loading…';
+    loading.style.cssText = 'padding:10px 14px;font-size:12px;color:var(--cp-text-muted);';
+    dropdown.appendChild(loading);
+
+    let views: SavedView[] = [];
+    try {
+      views = await listViews(this.config.plannerId);
+    } catch {
+      dropdown.innerHTML = '';
+      const err = document.createElement('div');
+      err.textContent = 'Could not load views.';
+      err.style.cssText = 'padding:10px 14px;font-size:12px;color:var(--cp-text-muted);';
+      dropdown.appendChild(err);
+      return;
+    }
+
+    dropdown.innerHTML = '';
+
+    const listSection = document.createElement('div');
+    listSection.style.cssText = 'max-height:240px;overflow-y:auto;';
+
+    if (views.length === 0) {
+      const empty = document.createElement('div');
+      empty.textContent = 'No saved views yet.';
+      empty.style.cssText = 'padding:10px 14px;font-size:12px;color:var(--cp-text-muted);';
+      listSection.appendChild(empty);
+    } else {
+      views.forEach((v) => {
+        const row = document.createElement('div');
+        row.style.cssText = [
+          'display:flex;align-items:center;gap:6px;padding:7px 14px;cursor:pointer;',
+          'font-size:12px;color:var(--cp-text);',
+          'border-bottom:1px solid var(--cp-border);',
+        ].join('');
+        row.style.transition = 'background 0.1s';
+        row.addEventListener('mouseenter', () => { row.style.background = 'var(--cp-surface-alt, rgba(0,0,0,0.04))'; });
+        row.addEventListener('mouseleave', () => { row.style.background = ''; });
+
+        const nameSpan = document.createElement('span');
+        nameSpan.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        nameSpan.textContent = v.name;
+        row.appendChild(nameSpan);
+
+        // Show "by Username" attribution
+        {
+          const bySpan = document.createElement('span');
+          bySpan.textContent = `by ${v.createdBy.username}`;
+          bySpan.style.cssText = 'font-size:10px;color:var(--cp-text-muted);white-space:nowrap;flex-shrink:0;';
+          row.appendChild(bySpan);
+        }
+
+        // Shared indicator
+        if (v.isShared) {
+          const sharedTag = document.createElement('span');
+          sharedTag.textContent = 'shared';
+          sharedTag.style.cssText = [
+            'font-size:9px;padding:1px 4px;border-radius:3px;flex-shrink:0;',
+            'background:rgba(59,130,246,0.15);color:var(--cp-primary,#3b82f6);',
+          ].join('');
+          row.appendChild(sharedTag);
+        }
+
+        // Delete button (shown on hover via CSS approach using JS)
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '×';
+        delBtn.title = 'Delete view';
+        delBtn.style.cssText = [
+          'flex-shrink:0;border:none;background:none;cursor:pointer;',
+          'font-size:14px;line-height:1;padding:0 2px;color:var(--cp-text-muted);',
+          'opacity:0;transition:opacity 0.1s;',
+        ].join('');
+        row.addEventListener('mouseenter', () => { delBtn.style.opacity = '1'; });
+        row.addEventListener('mouseleave', () => { delBtn.style.opacity = '0'; });
+        delBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          if (!confirm(`Delete view "${v.name}"?`)) return;
+          try {
+            await deleteView(this.config.plannerId, v.id);
+            await this.renderViewsDropdown(dropdown, close);
+          } catch {
+            // toast already shown by api-client
+          }
+        });
+        row.appendChild(delBtn);
+
+        row.addEventListener('click', () => {
+          this.applyViewState(v.state);
+          close();
+        });
+
+        listSection.appendChild(row);
+      });
+    }
+
+    dropdown.appendChild(listSection);
+
+    // Separator
+    const sep = document.createElement('div');
+    sep.style.cssText = 'border-top:1px solid var(--cp-border);';
+    dropdown.appendChild(sep);
+
+    // "Save current view…" item
+    const saveRow = document.createElement('div');
+    saveRow.style.cssText = 'padding:8px 14px;';
+
+    const saveLabel = document.createElement('div');
+    saveLabel.style.cssText = 'font-size:12px;font-weight:600;color:var(--cp-text);margin-bottom:6px;';
+    saveLabel.textContent = 'Save current view…';
+    saveRow.appendChild(saveLabel);
+
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.placeholder = 'View name';
+    nameInput.maxLength = 120;
+    nameInput.style.cssText = [
+      'width:100%;box-sizing:border-box;padding:4px 6px;font-size:12px;',
+      'border:1px solid var(--cp-border);border-radius:4px;',
+      'background:var(--cp-surface);color:var(--cp-text);',
+    ].join('');
+    saveRow.appendChild(nameInput);
+
+    // Shared checkbox — only for planner owner
+    let isSharedCheckbox: HTMLInputElement | null = null;
+    if (this.config.isOwner) {
+      const sharedWrap = document.createElement('label');
+      sharedWrap.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:11px;color:var(--cp-text);margin-top:5px;cursor:pointer;';
+
+      isSharedCheckbox = document.createElement('input');
+      isSharedCheckbox.type = 'checkbox';
+      isSharedCheckbox.style.cursor = 'pointer';
+
+      const sharedText = document.createElement('span');
+      sharedText.textContent = 'Share with all planner viewers';
+      sharedWrap.appendChild(isSharedCheckbox);
+      sharedWrap.appendChild(sharedText);
+      saveRow.appendChild(sharedWrap);
+    }
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'cp-btn cp-btn-primary';
+    saveBtn.textContent = 'Save';
+    saveBtn.style.cssText = 'width:100%;margin-top:6px;font-size:12px;';
+    saveBtn.addEventListener('click', async () => {
+      const name = nameInput.value.trim();
+      if (!name) { nameInput.focus(); return; }
+
+      // Encode current state as a query string (without the planner `id` param).
+      // We strip the leading `?id=N&` portion — decode() ignores `id` anyway,
+      // but storing only the state params keeps things clean.
+      const fullQs = encodeUrlState(location.search, {
+        filterState: this.filterState,
+        viewport: this.viewport,
+        viewMode: this.viewMode,
+        colorBy: this.colorBy,
+        defaults: {
+          viewport: { windowStart: new Date(this.config.startDate), windowEnd: new Date(this.config.endDate), zoomLevel: this.viewport.zoomLevel },
+          viewMode: 'disc',
+          colorBy: 'activity',
+        },
+      });
+      // Strip leading `?` and remove the `id` param to store only state.
+      const stateParams = new URLSearchParams(fullQs.replace(/^\?/, ''));
+      stateParams.delete('id');
+      const stateStr = stateParams.toString();
+
+      const isShared = isSharedCheckbox ? isSharedCheckbox.checked : false;
+      saveBtn.disabled = true;
+      try {
+        await createView(this.config.plannerId, name, stateStr, isShared);
+        await this.renderViewsDropdown(dropdown, close);
+        toast.success('View saved');
+      } catch {
+        saveBtn.disabled = false;
+      }
+    });
+    saveRow.appendChild(saveBtn);
+
+    dropdown.appendChild(saveRow);
+  }
+
+  /** Apply a saved view state string (query-string format) to the current planner. */
+  private applyViewState(stateStr: string): void {
+    const urlState = decodeUrlState(stateStr);
+
+    if (urlState.viewport?.from && urlState.viewport?.to && urlState.viewport?.zoom) {
+      this.viewport = { windowStart: urlState.viewport.from, windowEnd: urlState.viewport.to, zoomLevel: urlState.viewport.zoom };
+    } else if (urlState.viewport?.zoom) {
+      this.viewport = { ...this.viewport, zoomLevel: urlState.viewport.zoom };
+    }
+
+    if (urlState.filterState) {
+      if (urlState.filterState.searchTerm !== undefined) this.filterState.searchTerm = urlState.filterState.searchTerm;
+      if (urlState.filterState.hiddenLaneIds) this.filterState.hiddenLaneIds = urlState.filterState.hiddenLaneIds;
+      if (urlState.filterState.activeLabels) this.filterState.activeLabels = urlState.filterState.activeLabels;
+      if (urlState.filterState.activeTaggedUserIds) this.filterState.activeTaggedUserIds = urlState.filterState.activeTaggedUserIds;
+    } else {
+      // If no filter state in the saved view, reset to defaults.
+      this.filterState = { hiddenLaneIds: new Set(), searchTerm: '', activeLabels: new Set(), activeTaggedUserIds: new Set() };
+    }
+
+    if (urlState.viewMode) {
+      this.viewMode = urlState.viewMode;
+      localStorage.setItem('cp_view_mode', this.viewMode);
+      this.applyViewMode();
+    }
+
+    if (urlState.colorBy) {
+      this.colorBy = urlState.colorBy;
+      localStorage.setItem('cp_color_by', this.colorBy);
+      this.renderer.setColorBy(this.colorBy);
+    }
+
+    this.refresh();
+    this.refreshViewport();
+    // Rebuild toolbar so view-mode buttons and color-by select reflect new state.
+    this.buildToolbar();
+  }
+
+  /** Mirror the current filter/viewport/viewMode/colorBy state into the URL (replaceState). */
+  private syncUrl(): void {
+    const qs = encodeUrlState(location.search, {
+      filterState: this.filterState,
+      viewport: this.viewport,
+      viewMode: this.viewMode,
+      colorBy: this.colorBy,
+      defaults: {
+        viewport: defaultViewport(this.config),
+        viewMode: 'disc',
+        colorBy: 'activity',
+      },
+    });
+    history.replaceState(null, '', qs);
   }
 
   private refreshViewport(): void {
@@ -887,6 +1518,7 @@ export class Planner {
     this.listRenderer?.updateViewport(this.viewport);
     this.peopleRenderer?.updateViewport(this.viewport);
     this.updateViewportState();
+    this.syncUrl();
   }
 
   /** Update only the viewport-dependent toolbar elements — no DOM rebuild */
@@ -946,6 +1578,7 @@ export class Planner {
     this.renderer.update(this.data, this.filterState); this.listRenderer?.update(this.data, this.filterState); this.peopleRenderer?.update(this.data, this.filterState);
     const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
     if (sidebarBody) this.buildSidebar(sidebarBody);
+    this.syncUrl();
   }
 
   // ==================== Import handler ====================
@@ -978,9 +1611,26 @@ export class Planner {
       (activity) => this.addActivity(activity), () => {}, this.config.endDate);
   }
 
+  private handleAddEvent(): void {
+    const firstLane = this.data.lanes.find(l => !this.filterState.hiddenLaneIds.has(l.id)) ?? this.data.lanes[0];
+    if (!firstLane) { this.handleAddLane(); return; }
+    const today = new Date();
+    const inViewport = today >= this.viewport.windowStart && today <= this.viewport.windowEnd;
+    const seedDate = inViewport
+      ? today
+      : new Date((this.viewport.windowStart.getTime() + this.viewport.windowEnd.getTime()) / 2);
+    this.handleClickLane(firstLane.id, seedDate);
+  }
+
   private handleClickActivity(activity: Activity): void {
-    showActivityDialog(activity.laneId, this.data.lanes, parseDate(activity.startDate), activity,
-      (updated) => this.updateActivity(updated), (id) => this.deleteActivity(id), this.config.endDate);
+    this.lastSelectedActivity = activity;
+    // Find the base activity (occurrences share the base's id).
+    const base = this.data.lanes.flatMap(l => l.activities).find(a => a.id === activity.id) ?? activity;
+    const isRecurring = !!base.recurrence && base.recurrence.type !== 'none';
+    const occurrenceDate = isRecurring ? activity.startDate : undefined;
+    showActivityDialog(base.laneId, this.data.lanes, parseDate(base.startDate), base,
+      (updated) => this.updateActivity(updated), (id) => this.deleteActivity(id),
+      this.config.endDate, occurrenceDate);
   }
 
   private handleAddLane(): void {
@@ -994,6 +1644,57 @@ export class Planner {
   }
 
   // ==================== State mutations ====================
+
+  private handleDragCommit(activity: Activity, newStart: Date, newEnd: Date, newLaneId: string): void {
+    let origLane: Lane | null = null;
+    let base: Activity | null = null;
+    for (const lane of this.data.lanes) {
+      const found = lane.activities.find(a => a.id === activity.id);
+      if (found) { base = found; origLane = lane; break; }
+    }
+    if (!base || !origLane) return;
+
+    const origStartStr = base.startDate;
+    const origEndStr = base.endDate;
+    const origLaneId = origLane.id;
+    const newStartStr = formatDate(newStart);
+    const newEndStr = formatDate(newEnd);
+
+    if (newStartStr === origStartStr && newEndStr === origEndStr && newLaneId === origLaneId) return;
+
+    const moveActivity = (act: Activity, fromLaneId: string, toLaneId: string, startStr: string, endStr: string) => {
+      for (const lane of this.data.lanes) {
+        const i = lane.activities.findIndex(a => a.id === act.id);
+        if (i !== -1) { lane.activities.splice(i, 1); break; }
+      }
+      const targetLane = this.data.lanes.find(l => l.id === toLaneId);
+      if (targetLane) {
+        act.startDate = startStr;
+        act.endDate = endStr;
+        act.laneId = toLaneId;
+        targetLane.activities.push(act);
+      }
+    };
+
+    moveActivity(base, origLaneId, newLaneId, newStartStr, newEndStr);
+
+    this.history.push({
+      label: `Move activity "${base.title}"`,
+      do: () => {
+        const b = this.data.lanes.flatMap(l => l.activities).find(a => a.id === activity.id);
+        if (b) moveActivity(b, b.laneId, newLaneId, newStartStr, newEndStr);
+        this.renderer.update(this.data, this.filterState);
+      },
+      undo: () => {
+        const b = this.data.lanes.flatMap(l => l.activities).find(a => a.id === activity.id);
+        if (b) moveActivity(b, b.laneId, origLaneId, origStartStr, origEndStr);
+        this.renderer.update(this.data, this.filterState);
+      },
+    });
+
+    this.save();
+    this.renderer.update(this.data, this.filterState);
+  }
 
   private addActivity(activity: Activity): void {
     const lane = this.data.lanes.find(l => l.id === activity.laneId);
@@ -1180,5 +1881,10 @@ export class Planner {
   /** Called when the global theme changes — re-renders the SVG with new CSS var values. */
   onThemeChange(): void {
     this.renderer.setTheme();
+  }
+
+  /** Open the activity dialog for the given activity (used by hash-based deep links). */
+  openActivity(activity: Activity): void {
+    this.handleClickActivity(activity);
   }
 }

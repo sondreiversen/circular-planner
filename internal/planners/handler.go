@@ -7,13 +7,17 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"planner/internal/config"
 	"planner/internal/db"
 	"planner/internal/middleware"
 )
+
+var usernameRE = regexp.MustCompile(`^[a-zA-Z0-9_.\-]{1,50}$`)
 
 // Handler handles /api/planners/* requests.
 type Handler struct {
@@ -228,7 +232,9 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	actRows, err := h.db.QueryContext(r.Context(),
 		h.db.Rebind(`SELECT a.id, a.lane_id, a.title, a.description, a.start_date, a.end_date,
 		             a.color, a.label, a.recurrence_type, a.recurrence_interval, a.recurrence_weekdays, a.recurrence_until,
-		             COALESCE(NULLIF(u.full_name, ''), u.username) AS created_by_name
+		             COALESCE(NULLIF(u.full_name, ''), u.username) AS created_by_name,
+		             a.status, a.is_milestone,
+		             a.recurrence_monthly_rule, a.recurrence_exceptions, a.recurrence_overrides
 		      FROM activities a
 		      LEFT JOIN users u ON u.id = a.created_by
 		      WHERE a.planner_id = ?`),
@@ -251,9 +257,18 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		var recWeekdays sql.NullString
 		var recUntil sql.NullString
 		var createdByName sql.NullString
+		var status string
+		var isMilestone int
+		var recMonthlyRule sql.NullString
+		var recExceptions sql.NullString
+		var recOverrides sql.NullString
 		if err := actRows.Scan(&id, &laneID, &title, &description, &startDate, &endDate, &color, &label,
-			&recType, &recInterval, &recWeekdays, &recUntil, &createdByName); err != nil {
+			&recType, &recInterval, &recWeekdays, &recUntil, &createdByName, &status, &isMilestone,
+			&recMonthlyRule, &recExceptions, &recOverrides); err != nil {
 			continue
+		}
+		if status == "" {
+			status = "planned"
 		}
 		act := map[string]any{
 			"id":          id,
@@ -264,6 +279,10 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 			"endDate":     endDate.String(),
 			"color":       color,
 			"label":       label,
+			"status":      status,
+		}
+		if isMilestone != 0 {
+			act["isMilestone"] = true
 		}
 		if createdByName.Valid {
 			act["createdBy"] = createdByName.String
@@ -278,6 +297,23 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 			}
 			if recUntil.Valid {
 				rec["until"] = recUntil.String
+			}
+			if recMonthlyRule.Valid && recMonthlyRule.String != "" {
+				if mr := parseMonthlyRule(recMonthlyRule.String); mr != nil {
+					rec["monthlyRule"] = mr
+				}
+			}
+			if recExceptions.Valid && recExceptions.String != "" {
+				var excs []string
+				if err := json.Unmarshal([]byte(recExceptions.String), &excs); err == nil && len(excs) > 0 {
+					rec["exceptions"] = excs
+				}
+			}
+			if recOverrides.Valid && recOverrides.String != "" {
+				var ovr map[string]map[string]any
+				if err := json.Unmarshal([]byte(recOverrides.String), &ovr); err == nil && len(ovr) > 0 {
+					rec["overrides"] = ovr
+				}
 			}
 			act["recurrence"] = rec
 		}
@@ -317,6 +353,29 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 			entry["fullName"] = fullName
 		}
 		tagsByActivity[activityID] = append(tagsByActivity[activityID], entry)
+	}
+
+	// Fetch pending tags for this planner
+	pendingTagRows, err := h.db.QueryContext(r.Context(),
+		h.db.Rebind("SELECT activity_id, username FROM activity_pending_tags WHERE planner_id = ? ORDER BY username"),
+		plannerID,
+	)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	defer pendingTagRows.Close()
+
+	for pendingTagRows.Next() {
+		var activityID, username string
+		if err := pendingTagRows.Scan(&activityID, &username); err != nil {
+			continue
+		}
+		tagsByActivity[activityID] = append(tagsByActivity[activityID], map[string]any{
+			"id":       nil,
+			"username": username,
+			"pending":  true,
+		})
 	}
 
 	// Attach tagged users to activity maps (only when non-empty)
@@ -359,24 +418,37 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 
 // --- PUT /api/planners/{id} ---
 
+type monthlyRuleInput struct {
+	Kind    string `json:"kind"`    // "dom" or "nthwd"
+	Day     int    `json:"day"`     // dom: 1..31
+	Week    int    `json:"week"`    // nthwd: 1..5 or -1 (last)
+	Weekday int    `json:"weekday"` // nthwd: 0..6 (Sun=0)
+}
+
 type recurrenceInput struct {
-	Type     string  `json:"type"`
-	Interval int     `json:"interval"`
-	Weekdays []int   `json:"weekdays,omitempty"`
-	Until    *string `json:"until,omitempty"`
+	Type        string                       `json:"type"`
+	Interval    int                          `json:"interval"`
+	Weekdays    []int                        `json:"weekdays,omitempty"`
+	MonthlyRule *monthlyRuleInput            `json:"monthlyRule,omitempty"`
+	Until       *string                      `json:"until,omitempty"`
+	Exceptions  []string                     `json:"exceptions,omitempty"`
+	Overrides   map[string]map[string]any    `json:"overrides,omitempty"`
 }
 
 type activityInput struct {
-	ID             string           `json:"id"`
-	LaneID         string           `json:"laneId"`
-	Title          string           `json:"title"`
-	Description    string           `json:"description"`
-	StartDate      string           `json:"startDate"`
-	EndDate        string           `json:"endDate"`
-	Color          string           `json:"color"`
-	Label          string           `json:"label"`
-	Recurrence     *recurrenceInput `json:"recurrence,omitempty"`
-	TaggedUserIDs  []int            `json:"taggedUserIds"`
+	ID               string           `json:"id"`
+	LaneID           string           `json:"laneId"`
+	Title            string           `json:"title"`
+	Description      string           `json:"description"`
+	StartDate        string           `json:"startDate"`
+	EndDate          string           `json:"endDate"`
+	Color            string           `json:"color"`
+	Label            string           `json:"label"`
+	Recurrence       *recurrenceInput `json:"recurrence,omitempty"`
+	TaggedUserIDs    []int            `json:"taggedUserIds"`
+	TaggedUsernames  []string         `json:"taggedUsernames,omitempty"`
+	Status           string           `json:"status"`
+	IsMilestone      bool             `json:"isMilestone"`
 }
 
 type laneInput struct {
@@ -577,29 +649,37 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		// Upsert activities — validate recurrence fields first, then batch-insert.
 		// Pre-process all activities into flat arg slices so we can chunk efficiently.
 		type actRow struct {
-			id          string
-			laneID      string
-			title       string
-			desc        string
-			startDate   string
-			endDate     string
-			color       string
-			label       string
-			recType     sql.NullString
-			recInterval sql.NullInt64
-			recWeekdays sql.NullString
-			recUntil    sql.NullString
-			createdBy   int
+			id              string
+			laneID          string
+			title           string
+			desc            string
+			startDate       string
+			endDate         string
+			color           string
+			label           string
+			recType         sql.NullString
+			recInterval     sql.NullInt64
+			recWeekdays     sql.NullString
+			recUntil        sql.NullString
+			createdBy       int
+			status          string
+			isMilestone     int
+			recMonthlyRule  sql.NullString
+			recExceptions   sql.NullString
+			recOverrides    sql.NullString
 		}
 		actRows := make([]actRow, 0, len(allActivities))
 		for _, a := range allActivities {
-			var recType, recWeekdays, recUntil sql.NullString
+			var recType, recWeekdays, recUntil, recMonthlyRule, recExceptions, recOverrides sql.NullString
 			var recInterval sql.NullInt64
 
 			if a.Recurrence != nil {
 				rec := a.Recurrence
-				if rec.Type != "daily" && rec.Type != "weekly" {
-					jsonError(w, http.StatusBadRequest, "recurrence.type must be 'daily' or 'weekly'")
+				switch rec.Type {
+				case "daily", "weekly", "monthly", "yearly":
+					// valid
+				default:
+					jsonError(w, http.StatusBadRequest, "recurrence.type must be 'daily', 'weekly', 'monthly', or 'yearly'")
 					return
 				}
 				if rec.Interval < 1 {
@@ -610,6 +690,75 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 					jsonError(w, http.StatusBadRequest, "recurrence.weekdays must not be empty for weekly recurrence")
 					return
 				}
+				if rec.Type == "monthly" {
+					if rec.MonthlyRule == nil {
+						jsonError(w, http.StatusBadRequest, "recurrence.monthlyRule is required for monthly recurrence")
+						return
+					}
+					mr := rec.MonthlyRule
+					switch mr.Kind {
+					case "dom":
+						if mr.Day < 1 || mr.Day > 31 {
+							jsonError(w, http.StatusBadRequest, "monthlyRule.day must be 1..31")
+							return
+						}
+						recMonthlyRule = sql.NullString{String: formatMonthlyRuleDOM(mr.Day), Valid: true}
+					case "nthwd":
+						validWeek := mr.Week == 1 || mr.Week == 2 || mr.Week == 3 || mr.Week == 4 || mr.Week == 5 || mr.Week == -1
+						if !validWeek {
+							jsonError(w, http.StatusBadRequest, "monthlyRule.week must be 1..5 or -1")
+							return
+						}
+						if mr.Weekday < 0 || mr.Weekday > 6 {
+							jsonError(w, http.StatusBadRequest, "monthlyRule.weekday must be 0..6")
+							return
+						}
+						recMonthlyRule = sql.NullString{String: formatMonthlyRuleNthWd(mr.Week, mr.Weekday), Valid: true}
+					default:
+						jsonError(w, http.StatusBadRequest, "monthlyRule.kind must be 'dom' or 'nthwd'")
+						return
+					}
+				}
+				// Validate exceptions: each must match YYYY-MM-DD.
+				for _, exc := range rec.Exceptions {
+					if !isValidDate(exc) {
+						jsonError(w, http.StatusBadRequest, "recurrence.exceptions entries must be YYYY-MM-DD")
+						return
+					}
+				}
+				if len(rec.Exceptions) > 0 {
+					excJSON, err := json.Marshal(rec.Exceptions)
+					if err != nil {
+						jsonError(w, http.StatusInternalServerError, "Internal server error")
+						return
+					}
+					recExceptions = sql.NullString{String: string(excJSON), Valid: true}
+				}
+				// Validate and serialise overrides.
+				allowedOverrideKeys := map[string]bool{
+					"title": true, "description": true, "startDate": true,
+					"endDate": true, "color": true, "label": true, "status": true,
+				}
+				if len(rec.Overrides) > 0 {
+					for dateKey, fields := range rec.Overrides {
+						if !isValidDate(dateKey) {
+							jsonError(w, http.StatusBadRequest, "recurrence.overrides keys must be YYYY-MM-DD")
+							return
+						}
+						for k := range fields {
+							if !allowedOverrideKeys[k] {
+								jsonError(w, http.StatusBadRequest, "recurrence.overrides field '"+k+"' is not allowed")
+								return
+							}
+						}
+					}
+					ovrJSON, err := json.Marshal(rec.Overrides)
+					if err != nil {
+						jsonError(w, http.StatusInternalServerError, "Internal server error")
+						return
+					}
+					recOverrides = sql.NullString{String: string(ovrJSON), Valid: true}
+				}
 				recType = sql.NullString{String: rec.Type, Valid: true}
 				recInterval = sql.NullInt64{Int64: int64(rec.Interval), Valid: true}
 				if len(rec.Weekdays) > 0 {
@@ -619,37 +768,58 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 					recUntil = sql.NullString{String: *rec.Until, Valid: true}
 				}
 			}
+
+			// Validate and default status.
+			status := a.Status
+			switch status {
+			case "planned", "in_progress", "done", "cancelled":
+				// valid
+			default:
+				status = "planned"
+			}
+
+			isMilestone := 0
+			if a.IsMilestone {
+				isMilestone = 1
+			}
+
 			actRows = append(actRows, actRow{
 				id: a.ID, laneID: a.LaneID, title: a.Title, desc: a.Description,
 				startDate: a.StartDate, endDate: a.EndDate, color: a.Color, label: a.Label,
 				recType: recType, recInterval: recInterval, recWeekdays: recWeekdays, recUntil: recUntil,
-				createdBy: userID,
+				createdBy: userID, status: status, isMilestone: isMilestone,
+				recMonthlyRule: recMonthlyRule, recExceptions: recExceptions, recOverrides: recOverrides,
 			})
 		}
 
 		// Chunked multi-row INSERT ... ON CONFLICT DO UPDATE.
-		// 50 rows × 14 cols = 700 placeholders — well under SQLite's 999 limit.
+		// 50 rows × 19 cols = 950 placeholders — still under SQLite's 999 limit.
 		const activityChunk = 50
 		const activityOnConflict = `ON CONFLICT(id, planner_id) DO UPDATE
 				  SET lane_id = excluded.lane_id, title = excluded.title,
 				      description = excluded.description, start_date = excluded.start_date,
 				      end_date = excluded.end_date, color = excluded.color, label = excluded.label,
 				      recurrence_type = excluded.recurrence_type, recurrence_interval = excluded.recurrence_interval,
-				      recurrence_weekdays = excluded.recurrence_weekdays, recurrence_until = excluded.recurrence_until`
+				      recurrence_weekdays = excluded.recurrence_weekdays, recurrence_until = excluded.recurrence_until,
+				      status = excluded.status, is_milestone = excluded.is_milestone,
+				      recurrence_monthly_rule = excluded.recurrence_monthly_rule,
+				      recurrence_exceptions = excluded.recurrence_exceptions,
+				      recurrence_overrides = excluded.recurrence_overrides`
 		for start := 0; start < len(actRows); start += activityChunk {
 			end := start + activityChunk
 			if end > len(actRows) {
 				end = len(actRows)
 			}
 			batch := actRows[start:end]
-			ph := strings.TrimSuffix(strings.Repeat("(?,?,?,?,?,?,?,?,?,?,?,?,?,?),", len(batch)), ",")
-			args := make([]any, 0, len(batch)*14)
+			ph := strings.TrimSuffix(strings.Repeat("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?),", len(batch)), ",")
+			args := make([]any, 0, len(batch)*19)
 			for _, row := range batch {
 				args = append(args, row.id, row.laneID, plannerID, row.title, row.desc,
 					row.startDate, row.endDate, row.color, row.label,
-					row.recType, row.recInterval, row.recWeekdays, row.recUntil, row.createdBy)
+					row.recType, row.recInterval, row.recWeekdays, row.recUntil, row.createdBy,
+					row.status, row.isMilestone, row.recMonthlyRule, row.recExceptions, row.recOverrides)
 			}
-			q := h.db.Rebind(`INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color, label, recurrence_type, recurrence_interval, recurrence_weekdays, recurrence_until, created_by) VALUES ` + ph + ` ` + activityOnConflict)
+			q := h.db.Rebind(`INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color, label, recurrence_type, recurrence_interval, recurrence_weekdays, recurrence_until, created_by, status, is_milestone, recurrence_monthly_rule, recurrence_exceptions, recurrence_overrides) VALUES ` + ph + ` ` + activityOnConflict)
 			if _, err := tx.ExecContext(r.Context(), q, args...); err != nil {
 				jsonError(w, http.StatusInternalServerError, "Internal server error")
 				return
@@ -680,6 +850,80 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Collect pending tag usernames per activity; validate, then resolve what we can.
+		type pendingTriple struct {
+			activityID string
+			username   string
+		}
+		var pendingTriples []pendingTriple
+		pendingSeen := make(map[string]struct{})
+		var allPendingUsernames []string
+		pendingUsernameSet := make(map[string]struct{})
+
+		for _, l := range body.Lanes {
+			for _, a := range l.Activities {
+				for _, uname := range a.TaggedUsernames {
+					if !usernameRE.MatchString(uname) {
+						jsonError(w, http.StatusBadRequest, "invalid taggedUsernames")
+						return
+					}
+					key := a.ID + "|" + strings.ToLower(uname)
+					if _, dup := pendingSeen[key]; dup {
+						continue
+					}
+					pendingSeen[key] = struct{}{}
+					pendingTriples = append(pendingTriples, pendingTriple{a.ID, uname})
+					lname := strings.ToLower(uname)
+					if _, seen := pendingUsernameSet[lname]; !seen {
+						pendingUsernameSet[lname] = struct{}{}
+						allPendingUsernames = append(allPendingUsernames, lname)
+					}
+				}
+			}
+		}
+
+		// Resolve pending usernames that already have accounts.
+		resolvedByLower := make(map[string]int) // lower(username) → user_id
+		if len(allPendingUsernames) > 0 {
+			ph := strings.TrimSuffix(strings.Repeat("?,", len(allPendingUsernames)), ",")
+			args := make([]any, len(allPendingUsernames))
+			for i, u := range allPendingUsernames {
+				args[i] = u
+			}
+			resolveRows, err := tx.QueryContext(r.Context(),
+				h.db.Rebind("SELECT id, LOWER(username) FROM users WHERE LOWER(username) IN ("+ph+")"),
+				args...,
+			)
+			if err != nil {
+				jsonError(w, http.StatusInternalServerError, "Internal server error")
+				return
+			}
+			for resolveRows.Next() {
+				var uid int
+				var lname string
+				if err := resolveRows.Scan(&uid, &lname); err != nil {
+					continue
+				}
+				resolvedByLower[lname] = uid
+			}
+			resolveRows.Close()
+		}
+
+		// Move resolved pending entries into tagTriples; keep unresolved as pendingTriples.
+		var stillPending []pendingTriple
+		for _, pt := range pendingTriples {
+			lname := strings.ToLower(pt.username)
+			if uid, ok := resolvedByLower[lname]; ok {
+				key := pt.activityID + "|" + strconv.Itoa(uid)
+				if _, dup := tagSeen[key]; !dup {
+					tagSeen[key] = struct{}{}
+					tagTriples = append(tagTriples, tagTriple{pt.activityID, uid})
+				}
+			} else {
+				stillPending = append(stillPending, pt)
+			}
+		}
+
 		if _, err := tx.ExecContext(r.Context(),
 			h.db.Rebind("DELETE FROM activity_user_tags WHERE planner_id = ?"), plannerID); err != nil {
 			jsonError(w, http.StatusInternalServerError, "Internal server error")
@@ -703,6 +947,31 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			q := h.db.Rebind("INSERT INTO activity_user_tags(activity_id, planner_id, user_id) VALUES " + ph)
 			if _, err := tx.ExecContext(r.Context(), q, args...); err != nil {
 				jsonError(w, http.StatusBadRequest, "invalid taggedUserIds")
+				return
+			}
+		}
+
+		// Sync activity_pending_tags: replace-style, same pattern as resolved tags.
+		if _, err := tx.ExecContext(r.Context(),
+			h.db.Rebind("DELETE FROM activity_pending_tags WHERE planner_id = ?"), plannerID); err != nil {
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
+
+		for start := 0; start < len(stillPending); start += tagChunk {
+			end := start + tagChunk
+			if end > len(stillPending) {
+				end = len(stillPending)
+			}
+			batch := stillPending[start:end]
+			ph := strings.TrimSuffix(strings.Repeat("(?,?,?),", len(batch)), ",")
+			args := make([]any, 0, len(batch)*3)
+			for _, pt := range batch {
+				args = append(args, pt.activityID, plannerID, pt.username)
+			}
+			q := h.db.Rebind("INSERT INTO activity_pending_tags(activity_id, planner_id, username) VALUES " + ph)
+			if _, err := tx.ExecContext(r.Context(), q, args...); err != nil {
+				jsonError(w, http.StatusInternalServerError, "Internal server error")
 				return
 			}
 		}
@@ -812,6 +1081,286 @@ func (h *Handler) ListPublic(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// --- POST /api/planners/{id}/duplicate ---
+
+func (h *Handler) Duplicate(w http.ResponseWriter, r *http.Request) {
+	plannerID, ok := plannerIDFromPath(r)
+	if !ok {
+		jsonError(w, http.StatusBadRequest, "Invalid planner ID")
+		return
+	}
+	userID := middleware.UserFrom(r).ID
+
+	var body struct {
+		TitleSuffix  *string `json:"titleSuffix"`
+		OffsetYears  *int    `json:"offsetYears"`
+		OffsetMonths *int    `json:"offsetMonths"`
+		OffsetDays   *int    `json:"offsetDays"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		// Empty body is fine — all fields are optional.
+		if err.Error() != "EOF" {
+			jsonError(w, http.StatusBadRequest, "Invalid JSON")
+			return
+		}
+	}
+
+	// Resolve defaults.
+	titleSuffix := " (copy)"
+	if body.TitleSuffix != nil {
+		titleSuffix = *body.TitleSuffix
+	}
+	offsetYears := 0
+	if body.OffsetYears != nil {
+		offsetYears = *body.OffsetYears
+	}
+	offsetMonths := 0
+	if body.OffsetMonths != nil {
+		offsetMonths = *body.OffsetMonths
+	}
+	offsetDays := 0
+	if body.OffsetDays != nil {
+		offsetDays = *body.OffsetDays
+	}
+
+	// If no offset is specified at all, default to +1 year.
+	if body.OffsetYears == nil && body.OffsetMonths == nil && body.OffsetDays == nil {
+		offsetYears = 1
+	}
+
+	// Validation: zero offset AND no explicit titleSuffix is a confusing exact-duplicate.
+	// (If they explicitly passed titleSuffix we allow zero offset — different title is enough.)
+	if offsetYears == 0 && offsetMonths == 0 && offsetDays == 0 && body.TitleSuffix == nil {
+		jsonError(w, http.StatusBadRequest, "specify at least one of offsetYears, offsetMonths, offsetDays, or a custom titleSuffix")
+		return
+	}
+
+	// 1. Verify user has view access (before opening the transaction to avoid
+	//    SQLite write-lock contention when CanAccess reads from the same pool).
+	if _, err := middleware.CanAccess(r.Context(), h.db, plannerID, userID, "view"); err != nil {
+		handleAccessErr(w, err)
+		return
+	}
+
+	tx, err := h.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	defer tx.Rollback()
+
+	// 2. SELECT source planner: title, start_date, end_date.
+	var srcTitle string
+	var srcStart, srcEnd db.DateStr
+	if err := tx.QueryRowContext(r.Context(),
+		h.db.Rebind("SELECT title, start_date, end_date FROM planners WHERE id = ?"),
+		plannerID,
+	).Scan(&srcTitle, &srcStart, &srcEnd); err != nil {
+		jsonError(w, http.StatusNotFound, "Planner not found")
+		return
+	}
+
+	// 3. Compute new title and shifted dates.
+	newTitle := srcTitle + titleSuffix
+
+	shiftDate := func(dateStr string) (string, error) {
+		t, err := time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			return "", err
+		}
+		return t.AddDate(offsetYears, offsetMonths, offsetDays).Format("2006-01-02"), nil
+	}
+
+	newStart, err := shiftDate(srcStart.String())
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	newEnd, err := shiftDate(srcEnd.String())
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	// 4. INSERT new planner row owned by current user; return new id.
+	var newPlannerID int
+	var newPlannerTitle string
+	var newPlannerStart, newPlannerEnd db.DateStr
+	if err := tx.QueryRowContext(r.Context(),
+		h.db.Rebind(`INSERT INTO planners(owner_id, title, start_date, end_date)
+		             VALUES (?, ?, ?, ?) RETURNING id, title, start_date, end_date`),
+		userID, newTitle, newStart, newEnd,
+	).Scan(&newPlannerID, &newPlannerTitle, &newPlannerStart, &newPlannerEnd); err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	// 5. SELECT lanes from source planner.
+	laneRows, err := tx.QueryContext(r.Context(),
+		h.db.Rebind("SELECT id, name, sort_order, color FROM lanes WHERE planner_id = ? ORDER BY sort_order"),
+		plannerID,
+	)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	type laneRow struct {
+		id    string
+		name  string
+		order int
+		color string
+	}
+	var lanes []laneRow
+	for laneRows.Next() {
+		var l laneRow
+		if err := laneRows.Scan(&l.id, &l.name, &l.order, &l.color); err != nil {
+			laneRows.Close()
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
+		lanes = append(lanes, l)
+	}
+	laneRows.Close()
+
+	// 6. INSERT lanes into new planner (reuse same lane ids — scoped per planner).
+	// Chunk 100 lanes × 5 cols = 500 placeholders.
+	const laneChunk = 100
+	for start := 0; start < len(lanes); start += laneChunk {
+		end := start + laneChunk
+		if end > len(lanes) {
+			end = len(lanes)
+		}
+		batch := lanes[start:end]
+		ph := strings.TrimSuffix(strings.Repeat("(?,?,?,?,?),", len(batch)), ",")
+		args := make([]any, 0, len(batch)*5)
+		for _, l := range batch {
+			args = append(args, l.id, newPlannerID, l.name, l.order, l.color)
+		}
+		q := h.db.Rebind("INSERT INTO lanes(id, planner_id, name, sort_order, color) VALUES " + ph)
+		if _, err := tx.ExecContext(r.Context(), q, args...); err != nil {
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
+	}
+
+	// 7. SELECT activities from source planner (all columns including recurrence, status, milestone).
+	actRows, err := tx.QueryContext(r.Context(),
+		h.db.Rebind(`SELECT id, lane_id, title, description, start_date, end_date, color, label,
+		             recurrence_type, recurrence_interval, recurrence_weekdays, recurrence_until,
+		             status, is_milestone, recurrence_monthly_rule, recurrence_exceptions, recurrence_overrides
+		      FROM activities WHERE planner_id = ?`),
+		plannerID,
+	)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	type dupActRow struct {
+		id             string
+		laneID         string
+		title          string
+		desc           string
+		startDate      string
+		endDate        string
+		color          string
+		label          string
+		recType        sql.NullString
+		recInterval    sql.NullInt64
+		recWeekdays    sql.NullString
+		recUntil       sql.NullString
+		status         string
+		isMilestone    int
+		recMonthlyRule sql.NullString
+		recExceptions  sql.NullString
+		recOverrides   sql.NullString
+	}
+	var acts []dupActRow
+	for actRows.Next() {
+		var a dupActRow
+		var startDate, endDate db.DateStr
+		if err := actRows.Scan(&a.id, &a.laneID, &a.title, &a.desc, &startDate, &endDate,
+			&a.color, &a.label, &a.recType, &a.recInterval, &a.recWeekdays, &a.recUntil,
+			&a.status, &a.isMilestone, &a.recMonthlyRule, &a.recExceptions, &a.recOverrides); err != nil {
+			actRows.Close()
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
+		if a.status == "" {
+			a.status = "planned"
+		}
+		// 8. Compute shifted start/end dates.
+		a.startDate, err = shiftDate(startDate.String())
+		if err != nil {
+			actRows.Close()
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
+		a.endDate, err = shiftDate(endDate.String())
+		if err != nil {
+			actRows.Close()
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
+		// Shift recurrence_until only if non-null.
+		if a.recUntil.Valid {
+			shifted, err := shiftDate(a.recUntil.String)
+			if err != nil {
+				actRows.Close()
+				jsonError(w, http.StatusInternalServerError, "Internal server error")
+				return
+			}
+			a.recUntil = sql.NullString{String: shifted, Valid: true}
+		}
+		// Note: recurrence_exceptions and recurrence_overrides are date-keyed; we intentionally
+		// do NOT shift them because they refer to specific occurrences that may not apply after
+		// date shifting. Clear both in duplicated planners.
+		a.recExceptions = sql.NullString{}
+		a.recOverrides = sql.NullString{}
+		acts = append(acts, a)
+	}
+	actRows.Close()
+
+	// 9. INSERT activities with chunked multi-row INSERTs (reuse activity IDs).
+	// 50 rows × 19 cols = 950 placeholders — still under SQLite's 999 limit.
+	const dupActChunk = 50
+	for start := 0; start < len(acts); start += dupActChunk {
+		end := start + dupActChunk
+		if end > len(acts) {
+			end = len(acts)
+		}
+		batch := acts[start:end]
+		ph := strings.TrimSuffix(strings.Repeat("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?),", len(batch)), ",")
+		args := make([]any, 0, len(batch)*19)
+		for _, a := range batch {
+			args = append(args, a.id, a.laneID, newPlannerID, a.title, a.desc,
+				a.startDate, a.endDate, a.color, a.label,
+				a.recType, a.recInterval, a.recWeekdays, a.recUntil, userID,
+				a.status, a.isMilestone, a.recMonthlyRule, a.recExceptions, a.recOverrides)
+		}
+		q := h.db.Rebind(`INSERT INTO activities(id, lane_id, planner_id, title, description, start_date, end_date, color, label,
+		                  recurrence_type, recurrence_interval, recurrence_weekdays, recurrence_until, created_by,
+		                  status, is_milestone, recurrence_monthly_rule, recurrence_exceptions, recurrence_overrides) VALUES ` + ph)
+		if _, err := tx.ExecContext(r.Context(), q, args...); err != nil {
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
+	}
+
+	// Note: activity_user_tags are intentionally not copied — different planner audience.
+
+	if err := tx.Commit(); err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":        newPlannerID,
+		"title":     newPlannerTitle,
+		"startDate": newPlannerStart.String(),
+		"endDate":   newPlannerEnd.String(),
+	})
+}
+
 // --- helpers ---
 
 // deleteNotIn deletes rows from table where pkCol = plannerID AND id NOT IN ids.
@@ -862,4 +1411,58 @@ func parseWeekdaysCSV(csv string) []int {
 		}
 	}
 	return result
+}
+
+// formatMonthlyRuleDOM serializes a day-of-month rule: "dom:15".
+func formatMonthlyRuleDOM(day int) string {
+	return "dom:" + strconv.Itoa(day)
+}
+
+// formatMonthlyRuleNthWd serializes a nth-weekday rule: "nthwd:2,3".
+func formatMonthlyRuleNthWd(week, weekday int) string {
+	return "nthwd:" + strconv.Itoa(week) + "," + strconv.Itoa(weekday)
+}
+
+// parseMonthlyRule parses stored text back into a map for JSON output.
+// Returns nil if the string is malformed.
+func parseMonthlyRule(s string) map[string]any {
+	if strings.HasPrefix(s, "dom:") {
+		dayStr := strings.TrimPrefix(s, "dom:")
+		day, err := strconv.Atoi(dayStr)
+		if err != nil {
+			return nil
+		}
+		return map[string]any{"kind": "dom", "day": day}
+	}
+	if strings.HasPrefix(s, "nthwd:") {
+		rest := strings.TrimPrefix(s, "nthwd:")
+		parts := strings.SplitN(rest, ",", 2)
+		if len(parts) != 2 {
+			return nil
+		}
+		week, err1 := strconv.Atoi(parts[0])
+		weekday, err2 := strconv.Atoi(parts[1])
+		if err1 != nil || err2 != nil {
+			return nil
+		}
+		return map[string]any{"kind": "nthwd", "week": week, "weekday": weekday}
+	}
+	return nil
+}
+
+// isValidDate returns true if s matches YYYY-MM-DD (basic length + digit check).
+func isValidDate(s string) bool {
+	if len(s) != 10 {
+		return false
+	}
+	// Quick structural check: expect digits at positions 0-3, 5-6, 8-9 and dashes at 4, 7.
+	if s[4] != '-' || s[7] != '-' {
+		return false
+	}
+	for _, i := range []int{0, 1, 2, 3, 5, 6, 8, 9} {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }

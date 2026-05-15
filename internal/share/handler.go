@@ -2,7 +2,9 @@
 package share
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -432,6 +434,170 @@ func (h *Handler) UpsertGroupMemberOverride(w http.ResponseWriter, r *http.Reque
 	`), plannerID, groupID, targetUserID, body.Permission)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+// generateToken returns a URL-safe random 32-byte token (no padding).
+func generateToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// schemeHost infers the scheme+host for a request to build absolute URLs.
+func schemeHost(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	host := r.Host
+	if host == "" {
+		host = "localhost"
+	}
+	return scheme + "://" + host
+}
+
+// POST /api/planners/{plannerID}/share-tokens
+// Idempotent: returns an existing active token if one exists.
+func (h *Handler) CreateShareToken(w http.ResponseWriter, r *http.Request) {
+	plannerID, ok := plannerIDFromPath(r)
+	if !ok {
+		jsonError(w, http.StatusBadRequest, "Invalid planner ID")
+		return
+	}
+	userID := middleware.UserFrom(r).ID
+
+	if _, err := middleware.CanAccess(r.Context(), h.db, plannerID, userID, "owner"); err != nil {
+		handleAccessErr(w, err)
+		return
+	}
+
+	// Check for existing active token (idempotent)
+	var existingToken string
+	err := h.db.QueryRowContext(r.Context(),
+		h.db.Rebind("SELECT token FROM share_tokens WHERE planner_id = ? AND revoked_at IS NULL LIMIT 1"),
+		plannerID,
+	).Scan(&existingToken)
+	if err == nil {
+		// Return existing token
+		url := schemeHost(r) + "/planner-public.html?token=" + existingToken
+		writeJSON(w, http.StatusOK, map[string]string{"token": existingToken, "url": url})
+		return
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	// Generate new token
+	token, err := generateToken()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	_, err = h.db.ExecContext(r.Context(),
+		h.db.Rebind("INSERT INTO share_tokens(token, planner_id, created_by) VALUES (?, ?, ?)"),
+		token, plannerID, userID,
+	)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	url := schemeHost(r) + "/planner-public.html?token=" + token
+	writeJSON(w, http.StatusCreated, map[string]string{"token": token, "url": url})
+}
+
+// GET /api/planners/{plannerID}/share-tokens
+func (h *Handler) ListShareTokens(w http.ResponseWriter, r *http.Request) {
+	plannerID, ok := plannerIDFromPath(r)
+	if !ok {
+		jsonError(w, http.StatusBadRequest, "Invalid planner ID")
+		return
+	}
+	userID := middleware.UserFrom(r).ID
+
+	if _, err := middleware.CanAccess(r.Context(), h.db, plannerID, userID, "owner"); err != nil {
+		handleAccessErr(w, err)
+		return
+	}
+
+	rows, err := h.db.QueryContext(r.Context(),
+		h.db.Rebind("SELECT token, created_at, revoked_at FROM share_tokens WHERE planner_id = ? ORDER BY created_at DESC"),
+		plannerID,
+	)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	defer rows.Close()
+
+	type tokenEntry struct {
+		Token     string  `json:"token"`
+		CreatedAt string  `json:"created_at"`
+		RevokedAt *string `json:"revoked_at"`
+	}
+	var result []tokenEntry
+	for rows.Next() {
+		var entry tokenEntry
+		var revokedAt sql.NullString
+		if err := rows.Scan(&entry.Token, &entry.CreatedAt, &revokedAt); err != nil {
+			continue
+		}
+		if revokedAt.Valid {
+			entry.RevokedAt = &revokedAt.String
+		}
+		result = append(result, entry)
+	}
+	if result == nil {
+		result = []tokenEntry{}
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// POST /api/planners/{plannerID}/share-tokens/{token}/revoke
+func (h *Handler) RevokeShareToken(w http.ResponseWriter, r *http.Request) {
+	plannerID, ok := plannerIDFromPath(r)
+	if !ok {
+		jsonError(w, http.StatusBadRequest, "Invalid planner ID")
+		return
+	}
+	userID := middleware.UserFrom(r).ID
+
+	if _, err := middleware.CanAccess(r.Context(), h.db, plannerID, userID, "owner"); err != nil {
+		handleAccessErr(w, err)
+		return
+	}
+
+	token := r.PathValue("token")
+	if token == "" {
+		jsonError(w, http.StatusBadRequest, "Missing token")
+		return
+	}
+
+	var nowExpr string
+	if h.db.Dialect == db.Postgres {
+		nowExpr = "NOW()"
+	} else {
+		nowExpr = "strftime('%Y-%m-%dT%H:%M:%SZ','now')"
+	}
+
+	result, err := h.db.ExecContext(r.Context(),
+		h.db.Rebind("UPDATE share_tokens SET revoked_at = "+nowExpr+" WHERE token = ? AND planner_id = ? AND revoked_at IS NULL"),
+		token, plannerID,
+	)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		jsonError(w, http.StatusNotFound, "Token not found or already revoked")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})

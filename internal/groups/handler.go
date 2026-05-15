@@ -71,6 +71,9 @@ type groupErr struct {
 func (e *groupErr) Error() string { return e.msg }
 
 func (h *Handler) checkGroupRole(r *http.Request, groupID, userID int, required string) error {
+	if middleware.UserFrom(r).IsAdmin {
+		return nil
+	}
 	var role string
 	err := h.db.QueryRowContext(r.Context(),
 		h.db.Rebind("SELECT role FROM group_members WHERE group_id = ? AND user_id = ?"),
@@ -236,13 +239,14 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		Description *string `json:"description"`
 		Role        string  `json:"role"`
 	}
+	var roleNS sql.NullString
 	err := h.db.QueryRowContext(r.Context(),
 		h.db.Rebind(`SELECT g.id, g.name, g.description, gm.role
 		FROM groups g
-		JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = ?
+		LEFT JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = ?
 		WHERE g.id = ?`),
 		userID, groupID,
-	).Scan(&group.ID, &group.Name, &group.Description, &group.Role)
+	).Scan(&group.ID, &group.Name, &group.Description, &roleNS)
 	if errors.Is(err, sql.ErrNoRows) {
 		jsonError(w, http.StatusForbidden, "Access denied")
 		return
@@ -250,6 +254,15 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "Internal server error")
 		return
+	}
+	if !roleNS.Valid {
+		if !middleware.UserFrom(r).IsAdmin {
+			jsonError(w, http.StatusForbidden, "Access denied")
+			return
+		}
+		group.Role = "admin"
+	} else {
+		group.Role = roleNS.String
 	}
 
 	rows, err := h.db.QueryContext(r.Context(),

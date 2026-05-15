@@ -34,7 +34,10 @@ import (
 	"planner/internal/importing"
 	"planner/internal/middleware"
 	"planner/internal/planners"
+	"planner/internal/publicread"
+	"planner/internal/search"
 	"planner/internal/share"
+	"planner/internal/views"
 )
 
 // Version is the application version, set at build time via:
@@ -216,6 +219,7 @@ func main() {
 	mux.HandleFunc("GET /api/planners/{id}/members", middleware.RequireAuth(cfg, database, planH.Members))
 	mux.HandleFunc("PUT /api/planners/{id}", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(planH.Update)).ServeHTTP))
 	mux.HandleFunc("DELETE /api/planners/{id}", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(planH.Delete)).ServeHTTP))
+	mux.HandleFunc("POST /api/planners/{id}/duplicate", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(planH.Duplicate)).ServeHTTP))
 
 	// --- Share management routes -------------------------------------------
 	shareH := share.NewHandler(database, cfg)
@@ -228,6 +232,21 @@ func main() {
 	mux.HandleFunc("PUT /api/planners/{plannerID}/shares/group-shares/{groupID}/overrides/{userID}", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(shareH.UpsertGroupMemberOverride)).ServeHTTP))
 	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/group-shares/{groupID}/overrides/{userID}", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(shareH.DeleteGroupMemberOverride)).ServeHTTP))
 
+	// --- Share token routes (public link generation) -----------------------
+	mux.HandleFunc("POST /api/planners/{plannerID}/share-tokens", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(shareH.CreateShareToken)).ServeHTTP))
+	mux.HandleFunc("GET /api/planners/{plannerID}/share-tokens", middleware.RequireAuth(cfg, database, shareH.ListShareTokens))
+	mux.HandleFunc("POST /api/planners/{plannerID}/share-tokens/{token}/revoke", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(shareH.RevokeShareToken)).ServeHTTP))
+
+	// --- Public (unauthenticated) planner read endpoint -------------------
+	publicH := publicread.NewHandler(database)
+	mux.HandleFunc("GET /api/public/planners/{token}", publicH.GetPublic)
+
+	// --- Saved views -------------------------------------------------------
+	viewsH := views.NewHandler(database, cfg)
+	mux.HandleFunc("GET /api/planners/{plannerID}/views", middleware.RequireAuth(cfg, database, viewsH.List))
+	mux.HandleFunc("POST /api/planners/{plannerID}/views", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(viewsH.Create)).ServeHTTP))
+	mux.HandleFunc("DELETE /api/planners/{plannerID}/views/{viewID}", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(viewsH.Delete)).ServeHTTP))
+
 	// --- Calendar file import (.ics / .csv) --------------------------------
 	importH := importing.NewHandler(database, cfg)
 	mux.HandleFunc("POST /api/planners/{id}/import", middleware.RequireAuth(cfg, database, mutLimit(http.HandlerFunc(importH.Import)).ServeHTTP))
@@ -235,6 +254,12 @@ func main() {
 	// --- Groups -----------------------------------------------------------
 	groupsH := groups.NewHandler(database, cfg)
 	groupsH.Register(mux, cfg, database)
+
+	// --- Search -----------------------------------------------------------
+	searchH := search.New(database)
+	searchH.Register(mux, func(fn http.HandlerFunc) http.HandlerFunc {
+		return middleware.RequireAuth(cfg, database, fn)
+	})
 
 	// --- Admin ------------------------------------------------------------
 	adminH := admin.NewHandler(database)

@@ -14,7 +14,7 @@ interface Member {
 
 type PersonRow = { id: number; username: string; fullName?: string };
 
-const LANE_COL_WIDTH = 160;
+const LANE_COL_WIDTH = 200;
 const SUB_ROW_HEIGHT = 26;
 const ROW_PADDING_Y = 6;
 const HEADER_ROW_HEIGHT = 32; // height of a single header row
@@ -99,6 +99,7 @@ export class PeopleRenderer {
     const tagged: PersonRow[] = [];
     allActivities.forEach(a => {
       (a.taggedUsers ?? []).forEach(u => {
+        if (u.id == null) return; // pending tags have no id; skip from people view
         if (!seenIds.has(u.id)) {
           seenIds.add(u.id);
           tagged.push({ id: u.id, username: u.username, fullName: u.fullName });
@@ -131,7 +132,7 @@ export class PeopleRenderer {
         !this.filterState.activeLabels.has(a.label)) return false;
     if (this.filterState.activeTaggedUserIds.size > 0) {
       const tagged = a.taggedUsers ?? [];
-      if (!tagged.some(u => this.filterState.activeTaggedUserIds.has(u.id))) return false;
+      if (!tagged.some(u => u.id != null && this.filterState.activeTaggedUserIds.has(u.id))) return false;
     }
     return true;
   }
@@ -260,7 +261,10 @@ export class PeopleRenderer {
       laneCell.style.width = `${LANE_COL_WIDTH}px`;
       const dn = displayName(person);
       laneCell.title = dn;
-      laneCell.textContent = dn;
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'cp-list-lane-name';
+      nameSpan.textContent = dn;
+      laneCell.appendChild(nameSpan);
       row.appendChild(laneCell);
 
       const timeline = document.createElement('div');

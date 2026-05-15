@@ -463,3 +463,136 @@ func TestR4UnknownLaneID(t *testing.T) {
 		t.Errorf("unknown laneId: got %d, want 400 (body: %s)", resp.StatusCode, raw)
 	}
 }
+
+// TestDuplicate verifies the Duplicate endpoint: date shifting, ownership, access control.
+func TestDuplicate(t *testing.T) {
+	srv, _, _ := testutil.NewServer(t)
+
+	aliceTok := registerHelper(t, srv.URL, "dup-alice", "dup-alice@example.com", "hunter2hunter2")
+	bobTok   := registerHelper(t, srv.URL, "dup-bob",   "dup-bob@example.com",   "hunter2hunter2")
+
+	// Alice creates a planner with a lane and an activity.
+	resp, raw := do(t, "POST", srv.URL+"/api/planners", aliceTok,
+		map[string]string{"title": "Orig", "startDate": "2026-01-01", "endDate": "2026-12-31"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create: %d %s", resp.StatusCode, raw)
+	}
+	var created struct{ ID int }
+	json.Unmarshal(raw, &created)
+
+	resp, raw = do(t, "PUT", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), aliceTok, map[string]any{
+		"lanes": []any{
+			map[string]any{
+				"id": "l1", "name": "Lane A", "order": 1, "color": "#ff0000",
+				"activities": []any{
+					map[string]any{
+						"id": "act1", "laneId": "l1", "title": "Event",
+						"description": "", "startDate": "2026-03-10", "endDate": "2026-03-15",
+						"color": "#000", "label": "",
+					},
+				},
+			},
+		},
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("PUT lanes: %d %s", resp.StatusCode, raw)
+	}
+
+	// Duplicate with +1 year (default).
+	resp, raw = do(t, "POST", fmt.Sprintf("%s/api/planners/%d/duplicate", srv.URL, created.ID), aliceTok,
+		map[string]any{})
+	if resp.StatusCode != 201 {
+		t.Fatalf("duplicate default: %d %s", resp.StatusCode, raw)
+	}
+	var dupResult struct {
+		ID        int    `json:"id"`
+		Title     string `json:"title"`
+		StartDate string `json:"startDate"`
+		EndDate   string `json:"endDate"`
+	}
+	json.Unmarshal(raw, &dupResult)
+	if dupResult.ID == 0 || dupResult.ID == created.ID {
+		t.Fatalf("duplicate returned bad id: %s", raw)
+	}
+	if dupResult.Title != "Orig (copy)" {
+		t.Errorf("title: got %q, want %q", dupResult.Title, "Orig (copy)")
+	}
+	if dupResult.StartDate != "2027-01-01" {
+		t.Errorf("startDate: got %q, want 2027-01-01", dupResult.StartDate)
+	}
+	if dupResult.EndDate != "2027-12-31" {
+		t.Errorf("endDate: got %q, want 2027-12-31", dupResult.EndDate)
+	}
+
+	// New planner is owned by Alice; activity dates are shifted.
+	resp, raw = do(t, "GET", fmt.Sprintf("%s/api/planners/%d", srv.URL, dupResult.ID), aliceTok, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET dup: %d %s", resp.StatusCode, raw)
+	}
+	var getResp struct {
+		Config struct {
+			IsOwner bool `json:"isOwner"`
+		} `json:"config"`
+		Data struct {
+			Lanes []struct {
+				Activities []struct {
+					StartDate string `json:"startDate"`
+					EndDate   string `json:"endDate"`
+				} `json:"activities"`
+			} `json:"lanes"`
+		} `json:"data"`
+	}
+	json.Unmarshal(raw, &getResp)
+	if !getResp.Config.IsOwner {
+		t.Error("Alice should be owner of the duplicate")
+	}
+	if len(getResp.Data.Lanes) == 0 || len(getResp.Data.Lanes[0].Activities) == 0 {
+		t.Fatal("duplicate has no lanes/activities")
+	}
+	act := getResp.Data.Lanes[0].Activities[0]
+	if act.StartDate != "2027-03-10" {
+		t.Errorf("activity startDate: got %q, want 2027-03-10", act.StartDate)
+	}
+	if act.EndDate != "2027-03-15" {
+		t.Errorf("activity endDate: got %q, want 2027-03-15", act.EndDate)
+	}
+
+	// Bob cannot duplicate Alice's private planner.
+	resp, _ = do(t, "POST", fmt.Sprintf("%s/api/planners/%d/duplicate", srv.URL, created.ID), bobTok,
+		map[string]any{})
+	if resp.StatusCode != 403 && resp.StatusCode != 404 {
+		t.Errorf("cross-user duplicate: got %d, want 403 or 404", resp.StatusCode)
+	}
+
+	// Custom offset + custom suffix.
+	resp, raw = do(t, "POST", fmt.Sprintf("%s/api/planners/%d/duplicate", srv.URL, created.ID), aliceTok,
+		map[string]any{"titleSuffix": " v2", "offsetMonths": 6})
+	if resp.StatusCode != 201 {
+		t.Fatalf("duplicate custom offset: %d %s", resp.StatusCode, raw)
+	}
+	var dup2 struct {
+		Title     string `json:"title"`
+		StartDate string `json:"startDate"`
+	}
+	json.Unmarshal(raw, &dup2)
+	if dup2.Title != "Orig v2" {
+		t.Errorf("custom title: got %q, want %q", dup2.Title, "Orig v2")
+	}
+	if dup2.StartDate != "2026-07-01" {
+		t.Errorf("custom offset startDate: got %q, want 2026-07-01", dup2.StartDate)
+	}
+
+	// Zero offset without explicit titleSuffix → 400.
+	resp, raw = do(t, "POST", fmt.Sprintf("%s/api/planners/%d/duplicate", srv.URL, created.ID), aliceTok,
+		map[string]any{"offsetYears": 0, "offsetMonths": 0, "offsetDays": 0})
+	if resp.StatusCode != 400 {
+		t.Errorf("zero-offset no suffix: got %d, want 400 (body: %s)", resp.StatusCode, raw)
+	}
+
+	// Zero offset with explicit titleSuffix → 201.
+	resp, raw = do(t, "POST", fmt.Sprintf("%s/api/planners/%d/duplicate", srv.URL, created.ID), aliceTok,
+		map[string]any{"offsetYears": 0, "offsetMonths": 0, "offsetDays": 0, "titleSuffix": " same dates"})
+	if resp.StatusCode != 201 {
+		t.Errorf("zero-offset with suffix: got %d, want 201 (body: %s)", resp.StatusCode, raw)
+	}
+}

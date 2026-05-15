@@ -5,6 +5,7 @@ import { PlannerConfig, PlannerData, ShareEntry } from './types';
 import { initTheme, applyTheme, currentTheme } from './theme';
 import { applyBranding } from './branding';
 import { installOfflineBanner, installGlobalErrorHandlers } from './toast';
+import { openHelpOverlay } from './help-overlay';
 
 installOfflineBanner();
 installGlobalErrorHandlers();
@@ -73,6 +74,17 @@ async function init(): Promise<void> {
       plannerInstance = new Planner(containerEl, config, data, updated_at);
     }
 
+    // If navigated here from global search with #activity=ID, open that activity.
+    const hashMatch = window.location.hash.match(/^#activity=(.+)$/);
+    if (hashMatch && plannerInstance) {
+      const targetId = decodeURIComponent(hashMatch[1]);
+      // Wait one tick for the first render to complete before opening the dialog.
+      setTimeout(() => {
+        const activity = data.lanes.flatMap(l => l.activities).find(a => a.id === targetId);
+        if (activity) plannerInstance!.openActivity(activity);
+      }, 0);
+    }
+
     // Empty-lane CTA: show overlay when planner has no lanes
     if (containerEl && data.lanes.length === 0) {
       const cta = document.createElement('div');
@@ -105,6 +117,7 @@ async function init(): Promise<void> {
     }
 
     document.getElementById('logout-btn')?.addEventListener('click', logout);
+    document.getElementById('help-btn')?.addEventListener('click', openHelpOverlay);
 
     const themeBtn = document.getElementById('theme-toggle') as HTMLButtonElement | null;
     if (themeBtn) {
@@ -172,18 +185,29 @@ async function openShareDialog(plannerId: number, config: PlannerConfig): Promis
     // Tab switching
     const tabUsers  = document.getElementById('share-tab-users');
     const tabGroups = document.getElementById('share-tab-groups');
+    const tabPublic = document.getElementById('share-tab-public');
     const panelUsers  = document.getElementById('share-panel-users');
     const panelGroups = document.getElementById('share-panel-groups');
+    const panelPublic = document.getElementById('share-panel-public');
 
-    tabUsers?.addEventListener('click', () => {
-      tabUsers.classList.add('active'); tabGroups?.classList.remove('active');
-      panelUsers?.classList.remove('hidden'); panelGroups?.classList.add('hidden');
-    });
+    const showTab = (active: 'users' | 'groups' | 'public') => {
+      tabUsers?.classList.toggle('active', active === 'users');
+      tabGroups?.classList.toggle('active', active === 'groups');
+      tabPublic?.classList.toggle('active', active === 'public');
+      panelUsers?.classList.toggle('hidden', active !== 'users');
+      panelGroups?.classList.toggle('hidden', active !== 'groups');
+      panelPublic?.classList.toggle('hidden', active !== 'public');
+    };
+
+    tabUsers?.addEventListener('click', () => showTab('users'));
     tabGroups?.addEventListener('click', async () => {
-      tabGroups.classList.add('active'); tabUsers?.classList.remove('active');
-      panelGroups?.classList.remove('hidden'); panelUsers?.classList.add('hidden');
+      showTab('groups');
       await refreshGroupShareList(plannerId);
       await populateGroupSelect(plannerId);
+    });
+    tabPublic?.addEventListener('click', async () => {
+      showTab('public');
+      await refreshTokenPanel(plannerId);
     });
 
     const form    = document.getElementById('share-form') as HTMLFormElement;
@@ -367,6 +391,106 @@ async function populateGroupSelect(plannerId: number): Promise<void> {
         sel.appendChild(opt);
       });
   } catch { /* ignore */ }
+}
+
+interface ShareToken {
+  token: string;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+function buildPublicUrl(plannerId: number, token: string): string {
+  // Use the API response URL if available; otherwise build from current origin.
+  return window.location.origin + '/planner-public.html?token=' + encodeURIComponent(token);
+}
+
+function setTokenPanelActive(token: string, url: string): void {
+  const noToken = document.getElementById('share-token-no-token');
+  const active  = document.getElementById('share-token-active');
+  if (noToken) noToken.classList.add('hidden');
+  if (active)  active.classList.remove('hidden');
+
+  const urlInput = document.getElementById('share-token-url-input') as HTMLInputElement | null;
+  if (urlInput) urlInput.value = url;
+
+  const embedCode = document.getElementById('share-token-embed-code') as HTMLTextAreaElement | null;
+  if (embedCode) {
+    embedCode.value = `<iframe src="${url}" width="800" height="800" style="border:0"></iframe>`;
+  }
+}
+
+function setTokenPanelNone(): void {
+  const noToken = document.getElementById('share-token-no-token');
+  const active  = document.getElementById('share-token-active');
+  if (noToken) noToken.classList.remove('hidden');
+  if (active)  active.classList.add('hidden');
+}
+
+async function refreshTokenPanel(plannerId: number): Promise<void> {
+  const errEl = document.getElementById('share-token-error');
+  if (errEl) errEl.classList.add('hidden');
+  try {
+    const tokens = await api.get<ShareToken[]>(`/api/planners/${plannerId}/share-tokens`);
+    const active = tokens.find(t => !t.revoked_at);
+    if (active) {
+      const url = buildPublicUrl(plannerId, active.token);
+      setTokenPanelActive(active.token, url);
+    } else {
+      setTokenPanelNone();
+    }
+  } catch {
+    setTokenPanelNone();
+  }
+
+  // Wire buttons once
+  const enableBtn = document.getElementById('share-token-enable-btn');
+  if (enableBtn && !enableBtn.dataset.bound) {
+    enableBtn.dataset.bound = '1';
+    enableBtn.addEventListener('click', async () => {
+      const errEl2 = document.getElementById('share-token-error');
+      try {
+        const { token, url } = await api.post<{ token: string; url: string }>(`/api/planners/${plannerId}/share-tokens`, {});
+        setTokenPanelActive(token, url);
+      } catch (err) {
+        if (errEl2) { errEl2.textContent = (err as Error).message; errEl2.classList.remove('hidden'); }
+      }
+    });
+  }
+
+  const copyBtn = document.getElementById('share-token-copy-btn');
+  if (copyBtn && !copyBtn.dataset.bound) {
+    copyBtn.dataset.bound = '1';
+    copyBtn.addEventListener('click', () => {
+      const urlInput = document.getElementById('share-token-url-input') as HTMLInputElement | null;
+      if (!urlInput) return;
+      navigator.clipboard?.writeText(urlInput.value).then(() => {
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
+      }).catch(() => {
+        urlInput.select();
+        document.execCommand('copy');
+      });
+    });
+  }
+
+  const revokeBtn = document.getElementById('share-token-revoke-btn');
+  if (revokeBtn && !revokeBtn.dataset.bound) {
+    revokeBtn.dataset.bound = '1';
+    revokeBtn.addEventListener('click', async () => {
+      const urlInput = document.getElementById('share-token-url-input') as HTMLInputElement | null;
+      const currentUrl = urlInput?.value ?? '';
+      const tokenMatch = currentUrl.match(/[?&]token=([^&]+)/);
+      if (!tokenMatch) return;
+      const tokenVal = decodeURIComponent(tokenMatch[1]);
+      const errEl3 = document.getElementById('share-token-error');
+      try {
+        await api.post(`/api/planners/${plannerId}/share-tokens/${encodeURIComponent(tokenVal)}/revoke`, {});
+        setTokenPanelNone();
+      } catch (err) {
+        if (errEl3) { errEl3.textContent = (err as Error).message; errEl3.classList.remove('hidden'); }
+      }
+    });
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);

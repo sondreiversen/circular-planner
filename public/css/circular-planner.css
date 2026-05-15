@@ -527,6 +527,16 @@
 .cp-list-lane-row .cp-list-lane-cell {
   font-weight: 500;
 }
+.cp-list-lane-row .cp-list-lane-cell .cp-list-lane-name {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  line-height: 1.25;
+  white-space: normal;
+  text-overflow: ellipsis;
+}
 .cp-list-timeline {
   position: relative;
   flex-shrink: 0;
@@ -681,5 +691,43 @@
     transition: none !important;
     animation: none !important;
   }
+}
+
+/* --- Print stylesheet --- */
+@media print {
+  /* Hide app chrome */
+  .cp-toolbar,
+  .cp-sidebar,
+  .cp-sidebar-toggle,
+  .cp-color-by-legend,
+  #cp-save-badge,
+  header,
+  .app-header,
+  .cp-page-header { display: none !important; }
+
+  /* Force light theme for print */
+  :root {
+    --cp-disc-bg-inner: #ffffff !important;
+    --cp-disc-bg-outer: #ffffff !important;
+  }
+
+  /* Let the SVG fill the page */
+  body, html { background: white !important; margin: 0 !important; padding: 0 !important; }
+  .cp-page-body { display: block !important; height: auto !important; }
+  .cp-disc-area, .cp-svg-container { width: 100% !important; max-width: 100% !important; height: auto !important; }
+  svg.circular-planner-svg { width: 100% !important; height: auto !important; max-width: 9in; max-height: 9in; display: block; margin: 0 auto; }
+
+  /* Print header — title + dates pulled from body[data-print-title] */
+  body::before {
+    content: attr(data-print-title);
+    display: block;
+    text-align: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14pt;
+    font-weight: 600;
+    padding: 12pt 0 8pt;
+  }
+
+  @page { margin: 0.5in; size: landscape; }
 }
 

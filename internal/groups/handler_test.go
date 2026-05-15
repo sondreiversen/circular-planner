@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"testing"
 
+	"planner/internal/middleware"
 	"planner/internal/testutil"
 )
 
@@ -158,6 +159,42 @@ func TestAddMemberEmptyIDs(t *testing.T) {
 		map[string]any{"user_ids": []int{}, "role": "member"}, adminToken)
 	if resp.StatusCode != 400 {
 		t.Errorf("empty user_ids: got %d, want 400 body=%s", resp.StatusCode, raw)
+	}
+}
+
+func TestGlobalAdminCanAddSelfToOthersGroup(t *testing.T) {
+	srv, _, database := testutil.NewServer(t)
+	base := srv.URL
+
+	// User A: regular user who creates a group
+	tokenA := register(t, base, "ownerA", "ownera@example.com", "password1234")
+	groupID := createGroup(t, base, tokenA, "A's Group")
+
+	// User B: global admin (promoted directly in DB)
+	tokenB := register(t, base, "globalAdmin", "gadmin@example.com", "password1234")
+	var idB int
+	_ = database.QueryRowContext(t.Context(),
+		database.Rebind("SELECT id FROM users WHERE username = ?"), "globalAdmin",
+	).Scan(&idB)
+	_, err := database.ExecContext(t.Context(),
+		database.Rebind("UPDATE users SET is_admin = 1 WHERE id = ?"), idB)
+	if err != nil {
+		t.Fatalf("promote to admin: %v", err)
+	}
+	// Invalidate cache so next request re-reads is_admin=1 from DB
+	middleware.UserCacheInvalidate(idB)
+	_ = tokenB // tokenB JWT is still valid; is_admin resolved per-request from DB
+
+	// B adds itself to A's group
+	resp, raw := postJSON(t, base+"/api/groups/"+itoa(groupID)+"/members",
+		map[string]any{"user_ids": []int{idB}, "role": "member"}, tokenB)
+	if resp.StatusCode != 200 {
+		t.Fatalf("global admin add self: status=%d body=%s", resp.StatusCode, raw)
+	}
+
+	// Verify B is now a member (group should have 2 members: A + B)
+	if n := memberCount(t, base, tokenB, groupID); n != 2 {
+		t.Errorf("member count: got %d, want 2", n)
 	}
 }
 

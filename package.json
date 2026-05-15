@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build:client": "esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts groups=client/src/groups.ts admin=client/src/admin.ts --bundle --outdir=public/js --entry-names=[name]-bundle --minify --target=es2020",
-    "dev:client": "esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts groups=client/src/groups.ts admin=client/src/admin.ts --bundle --outdir=public/js --entry-names=[name]-bundle --sourcemap=inline --target=es2020 --watch",
+    "build:client": "esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts groups=client/src/groups.ts admin=client/src/admin.ts planner-public=client/src/index-public.ts --bundle --outdir=public/js --entry-names=[name]-bundle --minify --target=es2020",
+    "dev:client": "esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts groups=client/src/groups.ts admin=client/src/admin.ts planner-public=client/src/index-public.ts --bundle --outdir=public/js --entry-names=[name]-bundle --sourcemap=inline --target=es2020 --watch",
     "start:go": "go run .",
     "build:go": "npm run build:client && go build -o planner .",
     "test": "jest"
@@ -32,7 +32,8 @@
     "d3-selection": "^3.0.0",
     "d3-shape": "^3.2.0",
     "d3-timer": "^3.0.1",
-    "d3-transition": "^3.0.1"
+    "d3-transition": "^3.0.1",
+    "marked": "^18.0.3"
   },
   "jest": {
     "preset": "ts-jest",

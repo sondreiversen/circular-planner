@@ -988,3 +988,102 @@ input:focus, select:focus {
 /* Admin panel: member display name + username sub */
 .member-display-name { font-weight: 500; }
 .member-sub { font-size: 11px; color: var(--cp-text-muted); }
+
+/* ==============================
+   Public view banner + badge
+   ============================== */
+.public-view-banner {
+  background: #fffbea;
+  border-bottom: 1px solid #f5e07a;
+  color: #7a5c00;
+  font-size: 13px;
+  padding: 8px 20px;
+  text-align: center;
+}
+[data-theme="dark"] .public-view-banner {
+  background: #2a2200;
+  border-bottom-color: #5a4800;
+  color: #e8c84a;
+}
+.public-view-badge {
+  font-size: 11px;
+  font-weight: 600;
+  background: #f5e07a;
+  color: #7a5c00;
+  border-radius: 10px;
+  padding: 2px 10px;
+  letter-spacing: 0.03em;
+}
+[data-theme="dark"] .public-view-badge {
+  background: #5a4800;
+  color: #e8c84a;
+}
+
+/* ==============================
+   Share dialog: public link section
+   ============================== */
+.share-token-section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--cp-border);
+}
+.share-token-section h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--cp-text);
+}
+.share-token-section .share-public-hint {
+  margin-bottom: 10px;
+}
+.share-token-url-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.share-token-url-row input[type="text"] {
+  flex: 1;
+  font-size: 12px;
+  padding: 5px 8px;
+  border: 1px solid var(--cp-border);
+  border-radius: 4px;
+  background: var(--cp-surface);
+  color: var(--cp-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.share-token-embed {
+  width: 100%;
+  font-size: 11px;
+  font-family: monospace;
+  padding: 6px 8px;
+  border: 1px solid var(--cp-border);
+  border-radius: 4px;
+  background: var(--cp-surface);
+  color: var(--cp-text);
+  resize: vertical;
+  min-height: 54px;
+  margin-bottom: 8px;
+}
+.share-token-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.share-token-warning {
+  font-size: 11px;
+  color: var(--cp-text-muted);
+  margin-top: 4px;
+}
+.btn-danger-sm {
+  padding: 4px 12px;
+  font-size: 12px;
+  background: var(--cp-feedback-err-bg, #fdecea);
+  color: var(--cp-feedback-err-fg, #c0392b);
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn-danger-sm:hover { opacity: 0.8; }

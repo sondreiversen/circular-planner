@@ -1,5 +1,5 @@
 import { scaleTime } from 'd3-scale';
-import { Activity } from './types';
+import { Activity, MonthlyRule } from './types';
 
 export const FONT_FAMILY = '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif';
 
@@ -72,6 +72,41 @@ export function addMonths(d: Date, n: number): Date {
   return result;
 }
 
+/**
+ * Given a year/month (0-indexed month), compute the Date matching a MonthlyRule.
+ * Returns null if the rule produces a date that falls outside the given month
+ * (e.g. dom:31 in February, or nthwd:5,0 when there is no 5th Sunday).
+ */
+export function applyMonthlyRule(rule: MonthlyRule, year: number, month: number): Date | null {
+  if (rule.kind === 'dom') {
+    const d = new Date(year, month, rule.day);
+    // Overflow means the month doesn't have that day (e.g. Feb 30)
+    if (d.getMonth() !== month) return null;
+    return d;
+  }
+  // nthwd
+  const { week, weekday } = rule;
+  if (week === -1) {
+    // Last occurrence of weekday in month: start from the last day and walk back.
+    const lastDay = new Date(year, month + 1, 0); // last day of month
+    let d = lastDay.getDate();
+    while (new Date(year, month, d).getDay() !== weekday) {
+      d--;
+    }
+    return new Date(year, month, d);
+  }
+  // Positive week (1..5): find the first occurrence, then jump forward (week-1) * 7 days.
+  const firstOfMonth = new Date(year, month, 1);
+  const firstWd = firstOfMonth.getDay();
+  // Days until the first matching weekday (0..6)
+  const daysUntil = (weekday - firstWd + 7) % 7;
+  const dayNum = 1 + daysUntil + (week - 1) * 7;
+  const result = new Date(year, month, dayNum);
+  // If the computed date rolled into the next month, this Nth weekday doesn't exist.
+  if (result.getMonth() !== month) return null;
+  return result;
+}
+
 /** Snap a date to the previous Monday (or same day if already Monday) */
 export function getMonday(d: Date): Date {
   const result = new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -116,6 +151,34 @@ export const COLOR_PALETTE: string[] = [
   '#37474F', // dark slate
 ];
 
+// ===== Color-by utilities =====
+
+export type ColorBy = 'activity' | 'lane' | 'label' | 'status' | 'owner';
+
+/** Deterministic FNV-1a-style hash mapping a string to a COLOR_PALETTE index. */
+export function colorForString(s: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return COLOR_PALETTE[Math.abs(h) % COLOR_PALETTE.length];
+}
+
+/** Strip alpha from rgba(r,g,b,a) and return rgba with new alpha. Pass-through for hex/non-rgba. */
+export function withAlpha(color: string, alpha: number): string {
+  const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(color);
+  if (!m) return color;
+  return `rgba(${m[1]}, ${m[2]}, ${m[3]}, ${alpha})`;
+}
+
+export const STATUS_COLORS: Record<string, string> = {
+  planned: '#4a90e2',      // blue
+  in_progress: '#fb8c00',  // amber
+  done: '#43a047',         // green
+  cancelled: '#9e9e9e',    // grey
+};
+
 /** Default lane background colors */
 export const LANE_COLORS: string[] = [
   'rgba(66,133,244,0.25)',   // blue
@@ -148,6 +211,19 @@ const MAX_OCCURRENCES = 1000;
  *
  * Output is capped at MAX_OCCURRENCES as a safety guard.
  */
+/** Apply any recurrence override for the given occurrence start date. */
+function applyOverride(
+  activity: Activity,
+  occStart: Date,
+  occEnd: Date
+): { start: Date; end: Date } {
+  const ovr = activity.recurrence?.overrides?.[formatDate(occStart)];
+  if (!ovr) return { start: occStart, end: occEnd };
+  const start = ovr.startDate ? parseDate(ovr.startDate) : occStart;
+  const end   = ovr.endDate   ? parseDate(ovr.endDate)   : occEnd;
+  return { start, end };
+}
+
 export function expandOccurrences(
   activity: Activity,
   rangeStart: Date,
@@ -168,13 +244,16 @@ export function expandOccurrences(
 
   const results: Array<{ start: Date; end: Date }> = [];
 
+  // Build a set of exception dates (YYYY-MM-DD) for O(1) lookup.
+  const exceptionSet = new Set(rec.exceptions ?? []);
+
   if (rec.type === 'daily') {
     const step = rec.interval;
     let cur = new Date(actStart.getTime());
     while (cur <= hardEnd && results.length < MAX_OCCURRENCES) {
       const occEnd = new Date(cur.getTime() + durationMs);
-      if (occEnd >= rangeStart) {
-        results.push({ start: new Date(cur.getTime()), end: occEnd });
+      if (occEnd >= rangeStart && !exceptionSet.has(formatDate(cur))) {
+        results.push(applyOverride(activity, new Date(cur.getTime()), occEnd));
       }
       cur = addDays(cur, step);
     }
@@ -200,10 +279,71 @@ export function expandOccurrences(
         if (occStart > rangeEnd) continue;
         const occEnd = new Date(occStart.getTime() + durationMs);
         if (occEnd < rangeStart) continue;
-        results.push({ start: new Date(occStart.getTime()), end: occEnd });
+        if (exceptionSet.has(formatDate(occStart))) continue;
+        results.push(applyOverride(activity, new Date(occStart.getTime()), occEnd));
         if (results.length >= MAX_OCCURRENCES) break;
       }
       weekAnchor = addDays(weekAnchor, weekStepDays);
+    }
+    return results;
+  }
+
+  if (rec.type === 'monthly') {
+    const rule = rec.monthlyRule;
+    if (!rule) return [];
+
+    // Walk month-by-month from actStart's month, stepping by rec.interval months.
+    let year = actStart.getFullYear();
+    let month = actStart.getMonth(); // 0-indexed
+
+    while (results.length < MAX_OCCURRENCES) {
+      const occStart = applyMonthlyRule(rule, year, month);
+      if (occStart !== null) {
+        // Enforce lower bound (actStart) and upper bound (hardEnd / rangeEnd).
+        if (occStart > hardEnd) break;
+        if (occStart >= actStart && occStart <= rangeEnd) {
+          const occEnd = new Date(occStart.getTime() + durationMs);
+          if (occEnd >= rangeStart && !exceptionSet.has(formatDate(occStart))) {
+            results.push(applyOverride(activity, new Date(occStart.getTime()), occEnd));
+          }
+        }
+        // If we haven't yet reached rangeStart, keep walking forward.
+      }
+      // Advance by interval months.
+      month += rec.interval;
+      while (month >= 12) { month -= 12; year++; }
+      // Safety: stop if we've gone far past hardEnd (handles months with no valid dom).
+      if (new Date(year, month, 1) > hardEnd) break;
+    }
+    return results;
+  }
+
+  if (rec.type === 'yearly') {
+    // Anchor to the same month+day as actStart; step by rec.interval years.
+    const anchorMonth = actStart.getMonth();
+    const anchorDay   = actStart.getDate();
+
+    for (
+      let y = actStart.getFullYear();
+      results.length < MAX_OCCURRENCES;
+      y += rec.interval
+    ) {
+      // Handle Feb 29 → fall back to Feb 28 in non-leap years.
+      let d = new Date(y, anchorMonth, anchorDay);
+      if (d.getMonth() !== anchorMonth) {
+        // Overflow: go to last day of the intended month.
+        d = new Date(y, anchorMonth + 1, 0);
+      }
+
+      if (d > hardEnd) break;
+      if (d < actStart) continue;
+
+      if (d <= rangeEnd) {
+        const occEnd = new Date(d.getTime() + durationMs);
+        if (occEnd >= rangeStart && !exceptionSet.has(formatDate(d))) {
+          results.push(applyOverride(activity, new Date(d.getTime()), occEnd));
+        }
+      }
     }
     return results;
   }
