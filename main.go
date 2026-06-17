@@ -29,6 +29,7 @@ import (
 	"planner/internal/clienterrors"
 	"planner/internal/config"
 	"planner/internal/db"
+	"planner/internal/favicon"
 	"planner/internal/groups"
 	"planner/internal/health"
 	"planner/internal/importing"
@@ -197,8 +198,11 @@ func main() {
 
 	// --- Auth routes (own rate limiting via register/login throttles) ------
 	authH := auth.NewHandler(database, cfg)
-	mux.HandleFunc("POST /api/auth/register", authH.Register)
-	mux.HandleFunc("POST /api/auth/login", authH.Login)
+	// Brute-force defence: tight per-IP token bucket on the unauthenticated
+	// credential endpoints (separate from the general mutation limiter).
+	authLimit := middleware.AuthAttempts(cfg.TrustProxy)
+	mux.HandleFunc("POST /api/auth/register", authLimit(http.HandlerFunc(authH.Register)).ServeHTTP)
+	mux.HandleFunc("POST /api/auth/login", authLimit(http.HandlerFunc(authH.Login)).ServeHTTP)
 	mux.HandleFunc("POST /api/auth/logout", authH.Logout)
 	mux.HandleFunc("GET /api/auth/me", middleware.RequireAuth(cfg, database, authH.Me))
 	mux.HandleFunc("GET /api/users", middleware.RequireAuth(cfg, database, authH.SearchUsers))
@@ -276,6 +280,15 @@ func main() {
 	mux.HandleFunc("DELETE /api/admin/groups/{id}/members/{userID}", requireAdmin(mutLimit(http.HandlerFunc(adminH.RemoveGroupMember)).ServeHTTP))
 	mux.HandleFunc("GET /api/admin/settings", requireAdmin(adminH.GetSettings))
 	mux.HandleFunc("PATCH /api/admin/settings", requireAdmin(mutLimit(http.HandlerFunc(adminH.PatchSettings)).ServeHTTP))
+
+	// --- Favicon (default embedded + admin-uploadable override) -----------
+	faviconH := favicon.NewHandler(database, cfg, func() ([]byte, error) {
+		return publicFS.ReadFile("public/favicon.svg")
+	})
+	faviconH.RegisterPublic(mux)
+	mux.HandleFunc("GET /api/admin/favicon", requireAdmin(faviconH.GetStatus))
+	mux.HandleFunc("POST /api/admin/favicon", requireAdmin(mutLimit(http.HandlerFunc(faviconH.Upload)).ServeHTTP))
+	mux.HandleFunc("DELETE /api/admin/favicon", requireAdmin(mutLimit(http.HandlerFunc(faviconH.Reset)).ServeHTTP))
 
 	// Static files embedded from public/ (HTML, CSS, JS bundles)
 	sub, err := fs.Sub(publicFS, "public")
@@ -439,7 +452,7 @@ func securityHeaders(allowedOrigin string, trustProxy bool) func(http.Handler) h
 			w.Header().Set("X-Frame-Options", "DENY")
 			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 			w.Header().Set("Content-Security-Policy",
-				"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'")
+				"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'")
 			// HSTS: only set when the connection is over TLS to avoid downgrade loops.
 			if r.TLS != nil {
 				w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")

@@ -219,6 +219,12 @@ function formatYearMonth(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+/** Compact "MMM d" format, e.g. "Jun 15" */
+function formatMonthDay(d: Date): string {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${months[d.getMonth()]} ${d.getDate()}`;
+}
+
 /** ISO-formatted label for the current viewport */
 export function viewportLabel(viewport: Viewport): string {
   const { windowStart, windowEnd, zoomLevel } = viewport;
@@ -242,7 +248,7 @@ export function viewportLabel(viewport: Viewport): string {
       return formatYearMonth(windowStart);
     case ZoomLevel.Week: {
       const end = addDays(windowStart, 6);
-      return `${formatDate(windowStart)} – ${formatDate(end)}`;
+      return `${formatMonthDay(windowStart)} – ${formatMonthDay(end)}`;
     }
   }
 }

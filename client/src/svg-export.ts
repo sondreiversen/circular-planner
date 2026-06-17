@@ -38,6 +38,14 @@ export function serializeSVGWithStyles(svg: SVGSVGElement): string {
   clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
   clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
 
+  // Firefox refuses to render an SVG loaded via <img> without explicit
+  // width/height — viewBox alone is not enough. Derive them from viewBox.
+  const vb = svg.viewBox.baseVal;
+  const w = vb && vb.width  > 0 ? vb.width  : 800;
+  const h = vb && vb.height > 0 ? vb.height : 800;
+  clone.setAttribute('width',  String(w));
+  clone.setAttribute('height', String(h));
+
   // Add a solid background rect so the PNG is not transparent.
   const bgColor = getComputedStyle(document.documentElement)
     .getPropertyValue('--cp-disc-bg-outer').trim() || '#ffffff';
@@ -129,8 +137,8 @@ export async function exportSVGToPNG(
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
-          // 6. Release blob URLs.
-          URL.revokeObjectURL(pngUrl);
+          // Defer revoke so the browser has time to start the download.
+          setTimeout(() => URL.revokeObjectURL(pngUrl), 5000);
           resolve();
         }, 'image/png');
       };

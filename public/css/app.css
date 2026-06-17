@@ -8,6 +8,7 @@
   --cp-text: #1a2332;
   --cp-text-muted: #5a6b7a;
   --cp-border: #e4e7ed;
+  --cp-border-subtle: #e4e7ed;
   --cp-border-strong: #d0d4db;
   --cp-accent: #0052cc;
   --cp-accent-hover: #0065ff;
@@ -55,6 +56,7 @@
   --cp-text: #e6ebf2;
   --cp-text-muted: #8b95a5;
   --cp-border: #2d323c;
+  --cp-border-subtle: #2d323c;
   --cp-border-strong: #3a4049;
   --cp-accent: #4c8bf5;
   --cp-accent-hover: #6ea3f8;
@@ -624,6 +626,7 @@ input:focus, select:focus {
 
 .share-public-label {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 8px;
   font-size: 13px;

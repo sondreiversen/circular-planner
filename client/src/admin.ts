@@ -111,13 +111,24 @@ function switchTab(tab: 'users' | 'groups' | 'settings'): void {
 
 async function loadSettings(): Promise<void> {
   const cb = document.getElementById('setting-allow-registration') as HTMLInputElement | null;
+  const cbPwdLogin = document.getElementById('setting-allow-password-login') as HTMLInputElement | null;
   const feedback = document.getElementById('settings-feedback');
   if (!cb) return;
 
   try {
-    const result = await api.get<{ allowRegistration: boolean }>('/api/admin/settings');
+    const result = await api.get<{ allowRegistration: boolean; allowPasswordLogin: boolean }>('/api/admin/settings');
     cb.checked = result.allowRegistration;
+    if (cbPwdLogin) cbPwdLogin.checked = result.allowPasswordLogin;
   } catch { /* toast already shown */ }
+
+  function showFeedback(ok: boolean): void {
+    if (!feedback) return;
+    feedback.textContent = ok ? 'Settings saved.' : 'Failed to save settings.';
+    feedback.style.background = ok ? 'var(--cp-surface-2, #f0f4ff)' : 'var(--cp-feedback-err-bg)';
+    feedback.style.color = ok ? 'var(--cp-accent, #0052cc)' : 'var(--cp-feedback-err-fg)';
+    feedback.classList.remove('hidden');
+    setTimeout(() => feedback.classList.add('hidden'), 2000);
+  }
 
   // Remove previous listener by cloning
   const newCb = cb.cloneNode(true) as HTMLInputElement;
@@ -126,23 +137,132 @@ async function loadSettings(): Promise<void> {
   newCb.addEventListener('change', async () => {
     try {
       await api.patch<{ allowRegistration: boolean }>('/api/admin/settings', { allowRegistration: newCb.checked });
-      if (feedback) {
-        feedback.textContent = 'Settings saved.';
-        feedback.style.background = 'var(--cp-surface-2, #f0f4ff)';
-        feedback.style.color = 'var(--cp-accent, #0052cc)';
-        feedback.classList.remove('hidden');
-        setTimeout(() => feedback.classList.add('hidden'), 2000);
-      }
+      showFeedback(true);
     } catch {
-      if (feedback) {
-        feedback.textContent = 'Failed to save settings.';
-        feedback.style.background = 'var(--cp-feedback-err-bg)';
-        feedback.style.color = 'var(--cp-feedback-err-fg)';
-        feedback.classList.remove('hidden');
-        setTimeout(() => feedback.classList.add('hidden'), 2000);
-      }
+      showFeedback(false);
     }
   });
+
+  // Bind the password-login checkbox
+  if (cbPwdLogin) {
+    const newCbPwd = cbPwdLogin.cloneNode(true) as HTMLInputElement;
+    cbPwdLogin.parentNode?.replaceChild(newCbPwd, cbPwdLogin);
+
+    newCbPwd.addEventListener('change', async () => {
+      try {
+        await api.patch<{ allowPasswordLogin: boolean }>('/api/admin/settings', { allowPasswordLogin: newCbPwd.checked });
+        showFeedback(true);
+      } catch {
+        showFeedback(false);
+      }
+    });
+  }
+
+  await loadFaviconSection();
+}
+
+// --- Favicon section -------------------------------------------------------
+
+function showFaviconFeedback(msg: string, isError = false): void {
+  const el = document.getElementById('favicon-feedback');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.background = isError ? 'var(--cp-feedback-err-bg)' : 'var(--cp-surface-2, #f0f4ff)';
+  el.style.color = isError ? 'var(--cp-feedback-err-fg)' : 'var(--cp-accent, #0052cc)';
+  el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 2500);
+}
+
+// Bust the favicon URL so the browser tab + preview both refresh after change.
+function refreshFaviconCache(): void {
+  const stamp = Date.now();
+  const img = document.getElementById('favicon-preview') as HTMLImageElement | null;
+  if (img) img.src = `/favicon.svg?t=${stamp}`;
+
+  // Replace the document-level link so the browser tab icon refreshes too.
+  document.querySelectorAll('link[rel="icon"]').forEach((node) => {
+    const link = node as HTMLLinkElement;
+    link.href = `/favicon.svg?t=${stamp}`;
+  });
+}
+
+async function refreshFaviconStatus(): Promise<void> {
+  const status = document.getElementById('favicon-status');
+  try {
+    const res = await api.get<{ custom: boolean; contentType: string }>('/api/admin/favicon');
+    if (status) {
+      status.textContent = res.custom
+        ? `Custom favicon (${res.contentType})`
+        : 'Using default favicon';
+    }
+  } catch {
+    if (status) status.textContent = 'Failed to load favicon status';
+  }
+  refreshFaviconCache();
+}
+
+async function loadFaviconSection(): Promise<void> {
+  const input = document.getElementById('favicon-input') as HTMLInputElement | null;
+  const uploadBtn = document.getElementById('favicon-upload') as HTMLButtonElement | null;
+  const resetBtn = document.getElementById('favicon-reset') as HTMLButtonElement | null;
+  if (!input || !uploadBtn || !resetBtn) return;
+
+  // Defensive: clone to drop any listeners from a prior render.
+  const freshInput = input.cloneNode(true) as HTMLInputElement;
+  input.parentNode?.replaceChild(freshInput, input);
+  const freshUpload = uploadBtn.cloneNode(true) as HTMLButtonElement;
+  uploadBtn.parentNode?.replaceChild(freshUpload, uploadBtn);
+  const freshReset = resetBtn.cloneNode(true) as HTMLButtonElement;
+  resetBtn.parentNode?.replaceChild(freshReset, resetBtn);
+
+  freshUpload.disabled = true;
+  freshInput.addEventListener('change', () => {
+    freshUpload.disabled = !(freshInput.files && freshInput.files.length > 0);
+  });
+
+  freshUpload.addEventListener('click', async () => {
+    const file = freshInput.files?.[0];
+    if (!file) return;
+    if (file.size > 1024 * 1024) {
+      showFaviconFeedback('File too large (max 1 MiB)', true);
+      return;
+    }
+    freshUpload.disabled = true;
+    const fd = new FormData();
+    fd.append('favicon', file);
+    try {
+      const res = await fetch('/api/admin/favicon', {
+        method: 'POST',
+        credentials: 'include',
+        body: fd,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showFaviconFeedback((err as { error?: string }).error || `Upload failed (${res.status})`, true);
+      } else {
+        showFaviconFeedback('Favicon updated.');
+        freshInput.value = '';
+        await refreshFaviconStatus();
+      }
+    } catch {
+      showFaviconFeedback('Network error during upload', true);
+    } finally {
+      freshUpload.disabled = !(freshInput.files && freshInput.files.length > 0);
+    }
+  });
+
+  freshReset.addEventListener('click', async () => {
+    if (!confirm('Reset favicon to the default? This deletes the current custom favicon.')) return;
+    try {
+      await api.delete('/api/admin/favicon');
+      showFaviconFeedback('Reset to default favicon.');
+      await refreshFaviconStatus();
+    } catch {
+      // toast already shown by api helper
+    }
+  });
+
+  await refreshFaviconStatus();
 }
 
 async function loadUsers(): Promise<void> {

@@ -4,18 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Admin — Circular Planner</title>
-  <script>
-    (function () {
-      try {
-        var t = localStorage.getItem('cp_theme');
-        if (t === 'dark' || t === 'light') {
-          document.documentElement.setAttribute('data-theme', t);
-        }
-      } catch (e) {}
-    })();
-  </script>
-  <link rel="preload" as="script" href="/js/admin-bundle.js">
-  <link rel="stylesheet" href="/css/app.css">
+  <link rel="icon" href="/favicon.svg">
+  <script src="/theme-init.js?v=2"></script>
+  <link rel="preload" as="script" href="/js/admin-bundle.js?v=2">
+  <link rel="stylesheet" href="/css/app.css?v=2">
   <style>
     .admin-page {
       max-width: 960px;
@@ -186,7 +178,7 @@
         <h2>Settings</h2>
       </div>
       <div class="table-wrap" style="padding: 20px 24px;">
-        <label style="display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer;">
+        <label style="display:flex;flex-direction:row;align-items:center;gap:10px;font-size:14px;cursor:pointer;">
           <input type="checkbox" id="setting-allow-registration" style="width:16px;height:16px;cursor:pointer;">
           Allow user registration
         </label>
@@ -194,11 +186,44 @@
           When disabled, the registration form is hidden on the login page.
           GitLab SSO continues to auto-create users on first login.
         </p>
+        <label style="display:flex;flex-direction:row;align-items:center;gap:10px;font-size:14px;cursor:pointer;margin-top:14px;">
+          <input type="checkbox" id="setting-allow-password-login" style="width:16px;height:16px;cursor:pointer;">
+          Allow username/password login
+        </label>
+        <p class="hint" style="margin:10px 0 0;font-size:13px;color:var(--cp-text-muted);">
+          When disabled, users must sign in via SSO (e.g., GitLab).
+        </p>
         <div id="settings-feedback" class="hidden" style="margin-top:12px;font-size:13px;padding:8px 12px;border-radius:6px;"></div>
+      </div>
+
+      <div class="section-header" style="margin-top:32px;">
+        <h2>Favicon</h2>
+      </div>
+      <div class="table-wrap" style="padding:20px 24px;">
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;">
+          <img id="favicon-preview" alt="Current favicon" width="48" height="48"
+               style="width:48px;height:48px;border:1px solid var(--cp-border);border-radius:6px;padding:4px;background:var(--cp-surface-2);">
+          <div style="font-size:13px;">
+            <div id="favicon-status" style="font-weight:600;">Loading…</div>
+            <div class="hint" style="margin-top:2px;color:var(--cp-text-muted);">
+              Shown in browser tabs and bookmarks for every page.
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <input type="file" id="favicon-input" accept="image/svg+xml,image/png,image/x-icon,image/vnd.microsoft.icon,image/jpeg,image/webp,image/gif"
+                 style="font-size:13px;">
+          <button id="favicon-upload" class="btn btn-primary" type="button" disabled>Upload</button>
+          <button id="favicon-reset" class="btn btn-ghost" type="button">Reset to default</button>
+        </div>
+        <p class="hint" style="margin:10px 0 0;font-size:13px;color:var(--cp-text-muted);">
+          SVG, PNG, ICO, JPEG, WEBP, or GIF. Max 1 MiB. SVG is recommended — it scales crisply.
+        </p>
+        <div id="favicon-feedback" class="hidden" style="margin-top:12px;font-size:13px;padding:8px 12px;border-radius:6px;"></div>
       </div>
     </section>
   </main>
 
-  <script src="/js/admin-bundle.js"></script>
+  <script src="/js/admin-bundle.js?v=2"></script>
 </body>
 </html>

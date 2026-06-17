@@ -404,9 +404,12 @@ func (h *Handler) RemoveGroupMember(w http.ResponseWriter, r *http.Request) {
 
 // GetSettings returns the current values of all admin-configurable settings.
 func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
-	allowReg := settings.GetBool(r.Context(), h.db, "allow_registration", true)
+	ctx := r.Context()
+	allowReg := settings.GetBool(ctx, h.db, "allow_registration", true)
+	allowPwdLogin := settings.GetBool(ctx, h.db, "allow_password_login", true)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"allowRegistration": allowReg,
+		"allowRegistration":  allowReg,
+		"allowPasswordLogin": allowPwdLogin,
 	})
 }
 
@@ -416,24 +419,36 @@ func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
 // the new full state. Omitted fields are left unchanged.
 func (h *Handler) PatchSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AllowRegistration *bool `json:"allowRegistration"`
+		AllowRegistration  *bool `json:"allowRegistration"`
+		AllowPasswordLogin *bool `json:"allowPasswordLogin"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		jsonError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
 
+	ctx := r.Context()
+
 	if body.AllowRegistration != nil {
-		if err := settings.SetBool(r.Context(), h.db, "allow_registration", *body.AllowRegistration); err != nil {
+		if err := settings.SetBool(ctx, h.db, "allow_registration", *body.AllowRegistration); err != nil {
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
+		}
+	}
+
+	if body.AllowPasswordLogin != nil {
+		if err := settings.SetBool(ctx, h.db, "allow_password_login", *body.AllowPasswordLogin); err != nil {
 			jsonError(w, http.StatusInternalServerError, "Internal server error")
 			return
 		}
 	}
 
 	// Return the new full state.
-	allowReg := settings.GetBool(r.Context(), h.db, "allow_registration", true)
+	allowReg := settings.GetBool(ctx, h.db, "allow_registration", true)
+	allowPwdLogin := settings.GetBool(ctx, h.db, "allow_password_login", true)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"allowRegistration": allowReg,
+		"allowRegistration":  allowReg,
+		"allowPasswordLogin": allowPwdLogin,
 	})
 }
 

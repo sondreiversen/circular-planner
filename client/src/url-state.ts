@@ -73,6 +73,12 @@ export function decode(search: string): UrlState {
     if (ids.length > 0) filterState.activeTaggedUserIds = new Set(ids);
   }
 
+  const sp = params.get('sp');
+  if (sp) {
+    const ids = sp.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+    if (ids.length > 0) filterState.selectedPeopleIds = new Set(ids);
+  }
+
   if (Object.keys(filterState).length > 0) {
     result.filterState = filterState;
   }
@@ -146,6 +152,11 @@ export function encode(
   // Active tagged user IDs
   if (filterState.activeTaggedUserIds.size > 0) {
     params.set('tu', [...filterState.activeTaggedUserIds].join(','));
+  }
+
+  // Selected people IDs (people-view picker)
+  if (filterState.selectedPeopleIds.size > 0) {
+    params.set('sp', [...filterState.selectedPeopleIds].join(','));
   }
 
   // View mode — omit if disc (default)

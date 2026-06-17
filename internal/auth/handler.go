@@ -166,6 +166,12 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 // --- POST /api/auth/login ---
 
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
+	// Gate: if password login is disabled, reject immediately (before any body parsing).
+	if !settings.GetBool(r.Context(), h.db, "allow_password_login", true) {
+		jsonError(w, http.StatusForbidden, "Password login is disabled. Please use SSO.")
+		return
+	}
+
 	var body struct {
 		Identifier string `json:"identifier"` // username or email
 		Email      string `json:"email"`       // legacy alias — accepted for compatibility

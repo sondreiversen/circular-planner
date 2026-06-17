@@ -71,11 +71,20 @@ export class Renderer {
   // Timer to re-render at local midnight so the today indicator advances automatically.
   private midnightTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Milestones collected during renderLanes() and drawn last so they paint above all arcs.
+  private pendingMilestones: Array<{
+    activity: Activity;
+    lane: Lane;
+    startDate: Date;
+    innerR: number;
+    outerR: number;
+  }> = [];
+
   constructor(container: HTMLElement, config: PlannerConfig, data: PlannerData, viewport: Viewport) {
     this.config = config;
     this.data = data;
     this.viewport = viewport;
-    this.filterState = { hiddenLaneIds: new Set(), searchTerm: '', activeLabels: new Set(), activeTaggedUserIds: new Set() };
+    this.filterState = { hiddenLaneIds: new Set(), searchTerm: '', activeLabels: new Set(), activeTaggedUserIds: new Set(), selectedPeopleIds: new Set() };
 
     this.svg = select(container)
       .append('svg')
@@ -322,6 +331,7 @@ export class Renderer {
       this.midnightTimer = null;
     }
     this.textPathSeq = 0;
+    this.pendingMilestones = [];
     const visibleLanes = this.data.lanes.filter(l => !this.filterState.hiddenLaneIds.has(l.id));
     const activityCount = visibleLanes.reduce((sum, l) => sum + l.activities.length, 0);
     this.svg.attr('aria-label',
@@ -336,6 +346,7 @@ export class Renderer {
     this.renderBackground(g);
     this.renderGrid(g);
     this.renderLanes(g);
+    this.renderMilestonesTopPass(g);
     this.renderSeamShadow(g);
     this.renderTodayIndicator(g);
     this.renderCenterLabel(g);
@@ -595,21 +606,77 @@ export class Renderer {
         }
       }
 
-      // Greedy interval colouring: assign each occurrence a sub-row
-      const sortedOcc = [...allOccurrences].sort((a, b) => a.start.getTime() - b.start.getTime());
+      // Greedy interval colouring: assign each occurrence a sub-row.
+      // Milestones are excluded from the layout pass — they don't consume a row slot
+      // and are instead drawn later via renderMilestonesTopPass().
+      const layoutOcc = allOccurrences.filter(o => !o.master.isMilestone);
+      const sortedOcc = [...layoutOcc].sort((a, b) => a.start.getTime() - b.start.getTime());
       const rowEnds: Date[] = [];
-      const subRows: number[] = sortedOcc.map(occ => {
+      const subRowMap = new Map<string, number>();
+      sortedOcc.forEach(occ => {
         const row = rowEnds.findIndex(end => end < occ.start);
         const assigned = row === -1 ? rowEnds.length : row;
         rowEnds[assigned] = occ.end;
-        return assigned;
+        // Key: activity id + occurrence start ms (stable even for expanded recurrences)
+        subRowMap.set(`${occ.master.id}:${occ.start.getTime()}`, assigned);
       });
       const totalSubRows = Math.max(rowEnds.length, 1);
 
-      sortedOcc.forEach((occ, i) => {
-        this.renderOccurrence(laneGroup, occ.master, occ.start, occ.end, innerR, borderInner, subRows[i], totalSubRows, lane);
+      allOccurrences.forEach((occ) => {
+        const subRow = subRowMap.get(`${occ.master.id}:${occ.start.getTime()}`) ?? 0;
+        this.renderOccurrence(laneGroup, occ.master, occ.start, occ.end, innerR, borderInner, subRow, totalSubRows, lane);
       });
     });
+  }
+
+  /** Second pass: render all milestones collected during renderLanes() into a top group.
+   *  This ensures milestones always paint above regular arcs regardless of lane/activity order. */
+  private renderMilestonesTopPass(g: Selection<SVGGElement, unknown, null, undefined>): void {
+    if (this.pendingMilestones.length === 0) return;
+
+    const topGroup = g.append('g').attr('class', 'cp-milestones-top');
+
+    for (const { activity, lane, startDate, innerR, outerR } of this.pendingMilestones) {
+      if (startDate > this.viewport.windowEnd || startDate < this.viewport.windowStart) continue;
+
+      const startAngle = this.angleScale(startDate);
+      const midR = (innerR + outerR) / 2;
+      const halfSize = Math.min((outerR - innerR) * 0.45, 8);
+      // Diamond: top, right, bottom, left points in SVG space (disc center at origin)
+      const px = (r: number, a: number) => Math.sin(a) * r;
+      const py = (r: number, a: number) => -Math.cos(a) * r;
+      const points = [
+        `${px(midR - halfSize, startAngle)},${py(midR - halfSize, startAngle)}`,
+        `${px(midR, startAngle + halfSize / midR)},${py(midR, startAngle + halfSize / midR)}`,
+        `${px(midR + halfSize, startAngle)},${py(midR + halfSize, startAngle)}`,
+        `${px(midR, startAngle - halfSize / midR)},${py(midR, startAngle - halfSize / midR)}`,
+      ].join(' ');
+
+      const milestoneGroup = topGroup.append('g')
+        .attr('class', 'activity')
+        .attr('data-activity-id', activity.id)
+        .style('cursor', 'pointer');
+
+      milestoneGroup.append('polygon')
+        .attr('points', points)
+        .attr('fill', this.fillFor(activity, lane))
+        .attr('fill-opacity', 0.92)
+        .attr('stroke', 'rgba(255,255,255,0.7)')
+        .attr('stroke-width', 1)
+        .on('click', (event: MouseEvent) => {
+          event.stopPropagation();
+          this.onClickActivity(activity);
+        });
+
+      milestoneGroup.append('title')
+        .text([
+          `◆ ${activity.title}`,
+          formatDate(startDate),
+          activity.description || '',
+          activity.createdBy ? `Created by ${activity.createdBy}` : '',
+          activity.status && activity.status !== 'planned' ? `Status: ${activity.status}` : '',
+        ].filter(Boolean).join('\n'));
+    }
   }
 
   private fillFor(activity: Activity, lane: Lane): string {
@@ -647,38 +714,12 @@ export class Renderer {
       .attr('data-activity-id', activity.id)
       .style('cursor', 'pointer');
 
-    // --- Milestone rendering: a diamond at the startAngle ---
+    // --- Milestone rendering: deferred to top pass so diamonds always paint above arcs ---
     if (activity.isMilestone) {
-      const midAngle = startAngle;
-      const midR = (innerR + outerR) / 2;
-      const halfSize = Math.min((outerR - innerR) * 0.45, 8);
-      // Diamond: top, right, bottom, left points in SVG space (disc center at origin)
-      const px = (r: number, a: number) => Math.sin(a) * r;
-      const py = (r: number, a: number) => -Math.cos(a) * r;
-      const points = [
-        `${px(midR - halfSize, midAngle)},${py(midR - halfSize, midAngle)}`,
-        `${px(midR, midAngle + halfSize / midR)},${py(midR, midAngle + halfSize / midR)}`,
-        `${px(midR + halfSize, midAngle)},${py(midR + halfSize, midAngle)}`,
-        `${px(midR, midAngle - halfSize / midR)},${py(midR, midAngle - halfSize / midR)}`,
-      ].join(' ');
-      actGroup.append('polygon')
-        .attr('points', points)
-        .attr('fill', this.fillFor(activity, lane ?? { id: '', name: '', color: '', order: 0, activities: [] }))
-        .attr('fill-opacity', 0.92)
-        .attr('stroke', 'rgba(255,255,255,0.7)')
-        .attr('stroke-width', 1)
-        .on('click', (event: MouseEvent) => {
-          event.stopPropagation();
-          this.onClickActivity(activity);
-        });
-      actGroup.append('title')
-        .text([
-          `◆ ${activity.title}`,
-          formatDate(startDate),
-          activity.description || '',
-          activity.createdBy ? `Created by ${activity.createdBy}` : '',
-          activity.status && activity.status !== 'planned' ? `Status: ${activity.status}` : '',
-        ].filter(Boolean).join('\n'));
+      // Record for renderMilestonesTopPass(); do not draw here.
+      this.pendingMilestones.push({ activity, lane: lane ?? { id: '', name: '', color: '', order: 0, activities: [] }, startDate, innerR, outerR });
+      // Remove the placeholder group — nothing was appended to it.
+      actGroup.remove();
       return;
     }
 
@@ -751,11 +792,14 @@ export class Renderer {
     // Top half: path goes clockwise (start→end) so text reads outward-up.
     // Bottom half: path goes counter-clockwise (end→start) so text still reads
     // right-side up to a viewer outside the disc.
-    if (subHeight >= 10) {
+    const fontSize = Math.max(7, Math.min(9, Math.floor(subHeight * 0.6)));
+    if (subHeight >= fontSize + 3) {
       const midAngle = (startAngle + endAngle) / 2;
       const textR = (subInnerR + subOuterR) / 2;
-      const isBottom = Math.cos(midAngle) < 0;
-      const fontSize = 9;
+      // Match the lane-label tolerance at line ~551. Without the -0.1 margin,
+      // arcs centred exactly on 3 / 9 o'clock flicker between top/bottom
+      // orientations on successive renders due to floating-point noise.
+      const isBottom = Math.cos(midAngle) < -0.1;
       // Compensate for the dominant-baseline='central' offset so the text's
       // visual centre lands on textR. Top text extends radially outward from
       // its path; bottom-flipped text extends radially inward.
@@ -930,13 +974,22 @@ export class Renderer {
     const label = viewportLabel(this.viewport);
     const titleText = this.config.title;
 
-    g.append('text')
+    // Measure-fit the label into the hub: start at 15px, shrink until it fits
+    // within the hub diameter (CORE_RADIUS - 6) * 2, floor at 8px.
+    const maxLabelWidth = (CORE_RADIUS - 6) * 2;
+    const labelNode = g.append('text')
       .attr('text-anchor', 'middle').attr('dominant-baseline', 'middle')
-      .attr('font-size', label.length > 10 ? '11' : '15')
+      .attr('font-size', '15')
       .attr('font-weight', '600').attr('font-family', FONT_FAMILY)
       .attr('fill', textMain)
       .attr('y', titleText ? -8 : 0)
       .text(label);
+    let labelFontSize = 15;
+    const labelEl = labelNode.node() as SVGTextElement;
+    while (labelEl.getComputedTextLength() > maxLabelWidth && labelFontSize > 8) {
+      labelFontSize -= 1;
+      labelNode.attr('font-size', String(labelFontSize));
+    }
 
     if (titleText) {
       const truncated = titleText.length > 14 ? titleText.slice(0, 14) + '…' : titleText;

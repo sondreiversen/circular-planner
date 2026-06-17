@@ -32,19 +32,35 @@ func (h *Handler) Members(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Single query: owner row UNION sharees.
-	// The CASE puts the owner first (sort key 0) and sharees second (sort key 1).
+	// CTE collects all (user_id, role) pairs from three sources:
+	//   1. the planner owner
+	//   2. direct planner_shares
+	//   3. group-share members (via planner_group_shares → group_members)
+	// Dedup by user_id keeping the strongest role: 'owner' < 'edit' < 'view' lexicographically,
+	// so MIN(role) gives the strongest (owner beats edit beats view).
 	rows, err := h.db.QueryContext(r.Context(), h.db.Rebind(`
 		SELECT u.id,
 		       u.username,
 		       COALESCE(NULLIF(u.full_name,''), '') AS full_name,
-		       CASE WHEN p.owner_id = u.id THEN 'owner' ELSE ps.permission END AS role
-		FROM planners p
-		LEFT JOIN planner_shares ps ON ps.planner_id = p.id
-		JOIN users u ON u.id = COALESCE(ps.user_id, p.owner_id)
-		WHERE p.id = ?
-		ORDER BY (CASE WHEN p.owner_id = u.id THEN 0 ELSE 1 END), u.username
-	`), plannerID)
+		       MIN(src.role) AS role
+		FROM (
+		  SELECT p.owner_id AS uid, 'owner' AS role
+		  FROM planners p
+		  WHERE p.id = ?
+		  UNION ALL
+		  SELECT ps.user_id, ps.permission
+		  FROM planner_shares ps
+		  WHERE ps.planner_id = ?
+		  UNION ALL
+		  SELECT gm.user_id, pgs.default_permission
+		  FROM planner_group_shares pgs
+		  JOIN group_members gm ON gm.group_id = pgs.group_id
+		  WHERE pgs.planner_id = ?
+		) src
+		JOIN users u ON u.id = src.uid
+		GROUP BY u.id, u.username, u.full_name
+		ORDER BY MIN(CASE WHEN src.role = 'owner' THEN 0 ELSE 1 END), u.username
+	`), plannerID, plannerID, plannerID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "Internal server error")
 		return

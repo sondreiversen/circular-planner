@@ -87,15 +87,15 @@ export function openHelpOverlay(): void {
     const keyEl = document.createElement('span');
     keyEl.style.cssText = [
       'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;',
-      'background:var(--cp-border-subtle,#e4e7ed);',
-      'color:var(--cp-text,#1a2332);',
+      'background:var(--cp-border-subtle);',
+      'color:var(--cp-text);',
       'border-radius:5px;padding:3px 8px;',
       'font-size:12px;white-space:nowrap;align-self:start;',
     ].join('');
     keyEl.textContent = key;
 
     const actionEl = document.createElement('span');
-    actionEl.style.cssText = 'align-self:center;color:var(--cp-text-muted,#4b5563);';
+    actionEl.style.cssText = 'align-self:center;color:var(--cp-text-muted);';
     actionEl.textContent = action;
 
     grid.appendChild(keyEl);

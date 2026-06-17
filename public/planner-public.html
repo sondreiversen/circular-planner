@@ -4,19 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Circular Planner — Public View</title>
-  <script>
-    (function () {
-      try {
-        var t = localStorage.getItem('cp_theme');
-        if (t === 'dark' || t === 'light') {
-          document.documentElement.setAttribute('data-theme', t);
-        }
-      } catch (e) {}
-    })();
-  </script>
-  <link rel="preload" as="script" href="/js/planner-public-bundle.js">
-  <link rel="stylesheet" href="/css/app.css">
-  <link rel="stylesheet" href="/css/circular-planner.css">
+  <link rel="icon" href="/favicon.svg">
+  <script src="/theme-init.js?v=2"></script>
+  <link rel="preload" as="script" href="/js/planner-public-bundle.js?v=2">
+  <link rel="stylesheet" href="/css/app.css?v=2">
+  <link rel="stylesheet" href="/css/circular-planner.css?v=2">
 </head>
 <body class="app-page">
   <header class="app-header">
@@ -41,6 +33,6 @@
     <div id="planner-container" class="hidden"></div>
   </main>
 
-  <script src="/js/planner-public-bundle.js"></script>
+  <script src="/js/planner-public-bundle.js?v=2"></script>
 </body>
 </html>

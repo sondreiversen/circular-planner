@@ -33,7 +33,6 @@ document.addEventListener('DOMContentLoaded', () => {
     .then((status: { enabled: boolean }) => {
       if (!status.enabled) {
         document.getElementById('register-form')?.classList.add('hidden');
-        document.getElementById('registration-disabled-msg')?.classList.remove('hidden');
         // Also hide the Register tab
         document.querySelectorAll<HTMLButtonElement>('.tab').forEach(tab => {
           if (tab.dataset.tab === 'register') tab.style.display = 'none';

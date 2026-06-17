@@ -4,19 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Circular Planner</title>
-  <script>
-    (function () {
-      try {
-        var t = localStorage.getItem('cp_theme');
-        if (t === 'dark' || t === 'light') {
-          document.documentElement.setAttribute('data-theme', t);
-        }
-      } catch (e) {}
-    })();
-  </script>
-  <link rel="preload" as="script" href="/js/planner-bundle.js">
-  <link rel="stylesheet" href="/css/app.css">
-  <link rel="stylesheet" href="/css/circular-planner.css">
+  <link rel="icon" href="/favicon.svg">
+  <script src="/theme-init.js?v=2"></script>
+  <link rel="preload" as="script" href="/js/planner-bundle.js?v=2">
+  <link rel="stylesheet" href="/css/app.css?v=2">
+  <link rel="stylesheet" href="/css/circular-planner.css?v=2">
 </head>
 <body class="app-page">
   <header class="app-header">
@@ -27,6 +19,7 @@
     <div class="header-right">
       <button id="share-btn" class="btn btn-ghost" title="Share this planner">Share</button>
       <span id="header-username" class="header-user"></span>
+      <button id="guide-btn" class="btn btn-ghost" title="Guide & help">Guide</button>
       <button id="help-btn" class="btn-theme" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
       <button id="theme-toggle" class="btn-theme" title="Toggle dark mode">🌙</button>
       <button id="logout-btn" class="btn btn-ghost">Sign Out</button>
@@ -132,6 +125,6 @@
     </div>
   </div>
 
-  <script src="/js/planner-bundle.js"></script>
+  <script src="/js/planner-bundle.js?v=2"></script>
 </body>
 </html>

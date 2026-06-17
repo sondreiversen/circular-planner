@@ -101,6 +101,7 @@ export interface FilterState {
   searchTerm: string;
   activeLabels: Set<string>;          // inclusive OR filter; empty = show all
   activeTaggedUserIds: Set<number>;   // inclusive OR filter; empty = show all
+  selectedPeopleIds: Set<number>;     // people-view picker; empty = auto (tagged + members)
 }
 
 export interface User {

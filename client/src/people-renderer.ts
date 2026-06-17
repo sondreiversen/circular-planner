@@ -1,7 +1,10 @@
-import { PlannerData, Activity, Viewport, FilterState, TaggedUser } from './types';
+import { PlannerData, Activity, Viewport, FilterState, TaggedUser, PlannerConfig } from './types';
 import { parseDate, formatDate, expandOccurrences, displayName } from './utils';
 import { getGridSpec } from './viewport';
 import { api } from './api-client';
+import { attachLinearDrag } from './pointer-drag';
+
+export type DragCommitHandler = (activity: Activity, newStart: Date, newEnd: Date, newLaneId: string) => void;
 
 export type ClickActivityHandler = (activity: Activity) => void;
 
@@ -24,10 +27,12 @@ export class PeopleRenderer {
   private data: PlannerData;
   private viewport: Viewport;
   private filterState: FilterState;
+  private config: PlannerConfig;
   private plannerId: number;
   private members: Member[] = [];
   private membersLoaded = false;
   private onClickActivity?: (a: Activity) => void;
+  private onDragCommit: DragCommitHandler | null = null;
 
   private root!: HTMLElement;
   private resizeObs: ResizeObserver | null = null;
@@ -37,12 +42,14 @@ export class PeopleRenderer {
     data: PlannerData,
     viewport: Viewport,
     filterState: FilterState,
-    plannerId: number
+    plannerId: number,
+    config: PlannerConfig
   ) {
     this.container = container;
     this.data = data;
     this.viewport = viewport;
     this.filterState = filterState;
+    this.config = config;
     this.plannerId = plannerId;
     this.mount();
     this.loadMembers();
@@ -50,6 +57,10 @@ export class PeopleRenderer {
 
   setHandlers(onClickActivity: (a: Activity) => void): void {
     this.onClickActivity = onClickActivity;
+  }
+
+  setDragCommitHandler(fn: DragCommitHandler | null): void {
+    this.onDragCommit = fn;
   }
 
   update(data: PlannerData, filterState?: FilterState): void {
@@ -92,9 +103,39 @@ export class PeopleRenderer {
   }
 
   private buildPersonRows(): PersonRow[] {
+    // If a manual selection is active, show exactly those people.
+    if (this.filterState.selectedPeopleIds.size > 0) {
+      const allActivities = this.data.lanes.flatMap(l => l.activities);
+
+      // Build a fallback lookup from tagged users scraped from activities.
+      const taggedById = new Map<number, PersonRow>();
+      allActivities.forEach(a => {
+        (a.taggedUsers ?? []).forEach(u => {
+          if (u.id != null && !taggedById.has(u.id)) {
+            taggedById.set(u.id, { id: u.id, username: u.username, fullName: u.fullName });
+          }
+        });
+      });
+
+      const rows: PersonRow[] = [];
+      this.filterState.selectedPeopleIds.forEach(id => {
+        // Prefer the member record (has the authoritative display name); fall back to tagged.
+        const member = this.members.find(m => m.id === id);
+        if (member) {
+          rows.push({ id: member.id, username: member.username, fullName: member.fullName });
+        } else {
+          const tagged = taggedById.get(id);
+          if (tagged) rows.push(tagged);
+        }
+      });
+
+      rows.sort((a, b) => displayName(a).localeCompare(displayName(b)));
+      return rows;
+    }
+
+    // Default behaviour: union of tagged users across activities + members.
     const allActivities = this.data.lanes.flatMap(l => l.activities);
 
-    // Collect all tagged users across all activities
     const seenIds = new Set<number>();
     const tagged: PersonRow[] = [];
     allActivities.forEach(a => {
@@ -126,6 +167,7 @@ export class PeopleRenderer {
   }
 
   private passesFilter(a: Activity): boolean {
+    if (this.filterState.hiddenLaneIds.has(a.laneId)) return false;
     if (this.filterState.searchTerm &&
         !a.title.toLowerCase().includes(this.filterState.searchTerm)) return false;
     if (this.filterState.activeLabels.size > 0 &&
@@ -141,7 +183,11 @@ export class PeopleRenderer {
     subRowMap: Map<string, number>;
     totalSubRows: number;
   } {
-    const sorted = [...occurrences].sort((a, b) => a.start.getTime() - b.start.getTime());
+    // Milestones are excluded from layout — they don't consume a row slot and
+    // are rendered on top (z-index 3) with their own pass.
+    const sorted = [...occurrences]
+      .filter(occ => !occ.activity.isMilestone)
+      .sort((a, b) => a.start.getTime() - b.start.getTime());
     const rowEnds: Date[] = [];
     const subRowMap = new Map<string, number>();
     sorted.forEach(occ => {
@@ -226,7 +272,12 @@ export class PeopleRenderer {
     if (persons.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'cp-list-empty';
-      empty.textContent = 'No people to display. Tag users in activities or share this planner.';
+      // Different copy depending on whether the picker is in use. If the user
+      // has explicitly cleared the picker, the right hint is "you're in manual
+      // mode, pick someone" — not "tag users."
+      empty.textContent = this.filterState.selectedPeopleIds.size > 0
+        ? 'No selected people to display. Open "Visible people" in the sidebar to add some, or Clear to fall back to auto mode.'
+        : 'No people to display. Use the "Visible people" picker in the sidebar to choose who appears here, or tag users in activities.';
       body.appendChild(empty);
       return;
     }
@@ -296,8 +347,11 @@ export class PeopleRenderer {
         timeline.appendChild(t);
       }
 
-      // Activity bars (expanded occurrences)
-      expandedOccs.forEach((occ) => {
+      // Activity bars (expanded occurrences) — regular bars first, milestones last so they appear on top
+      const regularOccs = expandedOccs.filter(occ => !occ.activity.isMilestone);
+      const milestoneOccs = expandedOccs.filter(occ => occ.activity.isMilestone);
+
+      regularOccs.forEach((occ) => {
         const { start, end, activity, occIdx } = occ;
         const clampedStart = start < this.viewport.windowStart ? this.viewport.windowStart : start;
         const clampedEnd = end > this.viewport.windowEnd ? this.viewport.windowEnd : end;
@@ -319,11 +373,74 @@ export class PeopleRenderer {
         const recurBadge = activity.recurrence ? ' ↻' : '';
         box.title = `${activity.title}${recurBadge}\n${formatDate(start)} → ${formatDate(end)}${activity.description ? '\n' + activity.description : ''}`;
         box.textContent = activity.title + recurBadge;
+
+        const isDraggable =
+          !activity.isMilestone &&
+          !(activity.recurrence && activity.recurrence.type !== 'none') &&
+          this.config.permission !== 'view' &&
+          this.onDragCommit !== null;
+
+        if (isDraggable) box.classList.add('cp-list-activity--draggable');
+
+        const wasDragged = isDraggable
+          ? attachLinearDrag({
+              box, timeline, timelineWidth,
+              windowStart: this.viewport.windowStart,
+              windowEnd:   this.viewport.windowEnd,
+              plannerStart: parseDate(this.config.startDate),
+              plannerEnd:   parseDate(this.config.endDate),
+              dateToX,
+              getOriginalDates: () => ({
+                start: parseDate(activity.startDate),
+                end:   parseDate(activity.endDate),
+              }),
+              onCommit: (ns, ne) => this.onDragCommit!(activity, ns, ne, activity.laneId),
+            })
+          : () => false;
+
         box.addEventListener('click', (e) => {
+          if (wasDragged()) return;
           e.stopPropagation();
           this.onClickActivity?.(activity);
         });
         timeline.appendChild(box);
+      });
+
+      milestoneOccs.forEach((occ) => {
+        const { start, activity, occIdx } = occ;
+        if (start > this.viewport.windowEnd || start < this.viewport.windowStart) return;
+
+        const subRow = subRowMap.get(`${activity.id}:${occIdx}`) ?? 0;
+        const xCenter = dateToX(start);
+        const topCenter = ROW_PADDING_Y + subRow * SUB_ROW_HEIGHT + (SUB_ROW_HEIGHT - 14) / 2;
+        const recurBadge = activity.recurrence ? ' ↻' : '';
+        const tooltipText = `${activity.title}${recurBadge}\n${formatDate(start)}${activity.description ? '\n' + activity.description : ''}`;
+
+        // Diamond shape
+        const diamond = document.createElement('div');
+        diamond.className = 'cp-list-activity cp-list-activity--milestone';
+        diamond.style.left = `${xCenter - 7}px`;
+        diamond.style.top = `${topCenter}px`;
+        diamond.style.background = activity.color || '#4c8bf5';
+        diamond.title = tooltipText;
+        diamond.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.onClickActivity?.(activity);
+        });
+        timeline.appendChild(diamond);
+
+        // Label to the right of the diamond
+        const label = document.createElement('span');
+        label.className = 'cp-list-activity--milestone-label';
+        label.style.left = `${xCenter + 10}px`;
+        label.style.top = `${topCenter}px`;
+        label.textContent = activity.title + recurBadge;
+        label.title = tooltipText;
+        label.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.onClickActivity?.(activity);
+        });
+        timeline.appendChild(label);
       });
 
       row.appendChild(timeline);

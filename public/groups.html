@@ -4,18 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Groups — Circular Planner</title>
-  <script>
-    (function () {
-      try {
-        var t = localStorage.getItem('cp_theme');
-        if (t === 'dark' || t === 'light') {
-          document.documentElement.setAttribute('data-theme', t);
-        }
-      } catch (e) {}
-    })();
-  </script>
-  <link rel="preload" as="script" href="/js/groups-bundle.js">
-  <link rel="stylesheet" href="/css/app.css">
+  <link rel="icon" href="/favicon.svg">
+  <script src="/theme-init.js?v=2"></script>
+  <link rel="preload" as="script" href="/js/groups-bundle.js?v=2">
+  <link rel="stylesheet" href="/css/app.css?v=2">
   <style>
     .groups-page {
       max-width: 960px;
@@ -218,6 +210,6 @@
     </div>
   </div>
 
-  <script src="/js/groups-bundle.js"></script>
+  <script src="/js/groups-bundle.js?v=2"></script>
 </body>
 </html>

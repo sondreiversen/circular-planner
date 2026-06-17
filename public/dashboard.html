@@ -4,18 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Circular Planner — Dashboard</title>
-  <script>
-    (function () {
-      try {
-        var t = localStorage.getItem('cp_theme');
-        if (t === 'dark' || t === 'light') {
-          document.documentElement.setAttribute('data-theme', t);
-        }
-      } catch (e) {}
-    })();
-  </script>
-  <link rel="preload" as="script" href="/js/dashboard-bundle.js">
-  <link rel="stylesheet" href="/css/app.css">
+  <link rel="icon" href="/favicon.svg">
+  <script src="/theme-init.js?v=2"></script>
+  <link rel="preload" as="script" href="/js/dashboard-bundle.js?v=2">
+  <link rel="stylesheet" href="/css/app.css?v=2">
 </head>
 <body class="app-page">
   <header class="app-header">
@@ -91,6 +83,6 @@
     </div>
   </div>
 
-  <script src="/js/dashboard-bundle.js"></script>
+  <script src="/js/dashboard-bundle.js?v=2"></script>
 </body>
 </html>

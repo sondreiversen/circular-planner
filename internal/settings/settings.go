@@ -29,7 +29,34 @@ func SetBool(ctx context.Context, database *db.DB, key string, val bool) error {
 	if val {
 		v = "true"
 	}
+	return setRaw(ctx, database, key, v)
+}
 
+// GetString reads a string setting from app_settings by key.
+// Returns fallback if the row does not exist or cannot be read.
+func GetString(ctx context.Context, database *db.DB, key, fallback string) string {
+	var v string
+	err := database.QueryRowContext(ctx,
+		database.Rebind("SELECT value FROM app_settings WHERE key = ?"), key).Scan(&v)
+	if err != nil {
+		return fallback
+	}
+	return v
+}
+
+// SetString writes a string setting, upserting the row.
+func SetString(ctx context.Context, database *db.DB, key, val string) error {
+	return setRaw(ctx, database, key, val)
+}
+
+// Delete removes a setting row. Idempotent (no error if missing).
+func Delete(ctx context.Context, database *db.DB, key string) error {
+	_, err := database.ExecContext(ctx,
+		database.Rebind("DELETE FROM app_settings WHERE key = ?"), key)
+	return err
+}
+
+func setRaw(ctx context.Context, database *db.DB, key, val string) error {
 	var nowExpr string
 	if database.Dialect == db.Postgres {
 		nowExpr = "NOW()"
@@ -40,6 +67,6 @@ func SetBool(ctx context.Context, database *db.DB, key string, val bool) error {
 	_, err := database.ExecContext(ctx, database.Rebind(`
 		INSERT INTO app_settings(key, value, updated_at) VALUES (?, ?, `+nowExpr+`)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = `+nowExpr+`
-	`), key, v)
+	`), key, val)
 	return err
 }

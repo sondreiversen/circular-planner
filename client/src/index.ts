@@ -6,6 +6,7 @@ import { initTheme, applyTheme, currentTheme } from './theme';
 import { applyBranding } from './branding';
 import { installOfflineBanner, installGlobalErrorHandlers } from './toast';
 import { openHelpOverlay } from './help-overlay';
+import { openGuidePanel, maybeShowFirstVisitPrompt } from './guide';
 
 installOfflineBanner();
 installGlobalErrorHandlers();
@@ -118,6 +119,7 @@ async function init(): Promise<void> {
 
     document.getElementById('logout-btn')?.addEventListener('click', logout);
     document.getElementById('help-btn')?.addEventListener('click', openHelpOverlay);
+    document.getElementById('guide-btn')?.addEventListener('click', openGuidePanel);
 
     const themeBtn = document.getElementById('theme-toggle') as HTMLButtonElement | null;
     if (themeBtn) {
@@ -129,6 +131,9 @@ async function init(): Promise<void> {
         plannerInstance?.onThemeChange();
       });
     }
+
+    // First-visit nudge offering the guided tour (shown once, never blocks).
+    maybeShowFirstVisitPrompt();
 
   } catch (err: unknown) {
     if (loadingEl) loadingEl.style.display = 'none';

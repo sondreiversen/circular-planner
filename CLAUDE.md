@@ -25,7 +25,7 @@ npm run dev:client     # esbuild watch while running Go server separately
 - **TypeScript + D3.js**, bundled by **esbuild** into three entry points
 - Output goes to `public/js/` (gitignored) — not `dist/` like the old webpack setup
 - Entry points: `client/src/index.ts` → `planner-bundle.js`, `auth.ts` → `auth-bundle.js`, `dashboard.ts` → `dashboard-bundle.js`
-- **Auth**: JWT in `Authorization: Bearer` header, stored in `localStorage` as `cp_token`
+- **Auth**: JWT in an HttpOnly cookie named `cp_token`, set by the server on login. The browser sends it automatically with `credentials: 'include'`; the client never reads or stores the token. Any legacy `cp_token` in `localStorage` is cleared on load in `api-client.ts`.
 
 ### Go backend
 - `net/http` + Go 1.22 ServeMux — no framework
@@ -74,7 +74,7 @@ internal/               Go packages
 
 ### Data flow
 
-1. User logs in → JWT stored in `localStorage` as `cp_token`
+1. User logs in → server sets HttpOnly cookie `cp_token` (JWT); client never sees it
 2. Dashboard fetches `GET /api/planners` (owned + shared)
 3. Planner page fetches `GET /api/planners/:id` → gets `{ config, data }` → creates `Planner` instance
 4. On data change, `DataManager.scheduleSave()` debounces then calls `PUT /api/planners/:id` with full `PlannerData`

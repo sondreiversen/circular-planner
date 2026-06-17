@@ -70,7 +70,11 @@ function createColorPicker(selectedColor: string, palette: string[]): HTMLElemen
       presetMatched = true;
     }
     swatch.setAttribute('data-color', color);
-    swatch.addEventListener('click', () => {
+    swatch.addEventListener('click', (e) => {
+      // If this picker is rendered inside a <label>, the browser would
+      // otherwise forward the click to the inner <input type="color">
+      // and pop up the native picker.
+      e.preventDefault();
       wrapper.querySelectorAll('[data-color]').forEach(s => {
         s.removeAttribute('data-selected');
       });
@@ -182,7 +186,7 @@ export function showActivityDialog(
   const weekdayCheckboxes = weekdayLabels.map((label, idx) => {
     const val = weekdayValues[idx];
     const checked = recWeekdays.has(val) ? 'checked' : '';
-    return `<label style="display:inline-flex;align-items:center;gap:2px;font-size:12px;cursor:pointer;">
+    return `<label style="display:inline-flex;flex-direction:row;align-items:center;gap:2px;font-size:12px;cursor:pointer;">
       <input type="checkbox" name="cp-act-wd" value="${val}" ${checked}> ${label}
     </label>`;
   }).join('');
@@ -199,10 +203,10 @@ export function showActivityDialog(
       <h2 id="cp-act-dialog-title" class="cp-dialog-title">${isEdit ? 'Edit Activity' : 'Add Activity'}</h2>
       ${showOccurrenceRadio ? `
       <div id="cp-occ-scope" style="display:flex;gap:16px;padding:8px 0 4px;margin-bottom:4px;border-bottom:1px solid var(--cp-border,#d1d5db);">
-        <label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+        <label style="display:inline-flex;flex-direction:row;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
           <input type="radio" name="cp-occ-scope" value="all" checked> Edit all occurrences
         </label>
-        <label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+        <label style="display:inline-flex;flex-direction:row;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
           <input type="radio" name="cp-occ-scope" value="one"> Edit this occurrence only
         </label>
       </div>` : ''}
@@ -223,7 +227,7 @@ export function showActivityDialog(
             class="cp-dialog-input">
         </label>
       </div>
-      <label class="cp-dialog-label" style="flex-direction:row;align-items:center;gap:8px;cursor:pointer;">
+      <label class="cp-dialog-label" style="display:flex;flex-direction:row;align-items:center;gap:8px;cursor:pointer;">
         <input id="cp-act-milestone" type="checkbox" ${existingIsMilestone ? 'checked' : ''}>
         <span>Milestone</span>
         <span id="cp-act-milestone-note" class="cp-dialog-hint" style="${existingIsMilestone ? '' : 'display:none'}">A milestone is a single date.</span>
@@ -385,9 +389,26 @@ export function showActivityDialog(
     });
   }
 
+  // Selectable items in the currently-rendered dropdown, with their commit handler.
+  let dropdownItems: Array<{ el: HTMLElement; commit: () => void }> = [];
+  let activeIndex = -1;
+
+  function setActive(i: number): void {
+    if (dropdownItems.length === 0) { activeIndex = -1; return; }
+    if (i < 0) i = 0;
+    if (i >= dropdownItems.length) i = dropdownItems.length - 1;
+    activeIndex = i;
+    dropdownItems.forEach(({ el }, idx) => {
+      el.style.background = idx === activeIndex ? 'var(--cp-accent-bg)' : '';
+    });
+    dropdownItems[activeIndex].el.scrollIntoView({ block: 'nearest' });
+  }
+
   function hideTagDropdown(): void {
     tagDropdownEl.style.display = 'none';
     tagDropdownEl.innerHTML = '';
+    dropdownItems = [];
+    activeIndex = -1;
   }
 
   renderTagChips();
@@ -400,6 +421,7 @@ export function showActivityDialog(
       try {
         const users = await api.get<Array<{ id: number; username: string; email: string; fullName?: string | null }>>(`/api/users?q=${encodeURIComponent(q)}&includeSelf=1`);
         tagDropdownEl.innerHTML = '';
+        dropdownItems = [];
         const hasExactMatch = users.some(u => u.username.toLowerCase() === q.toLowerCase());
 
         if (users.length === 0) {
@@ -413,12 +435,9 @@ export function showActivityDialog(
           if (selectedTags.find(t => t.id === u.id)) return; // already selected
           const item = document.createElement('div');
           item.style.cssText = 'padding:8px 12px;font-size:13px;cursor:pointer;';
-          item.addEventListener('mouseenter', () => { item.style.background = 'var(--cp-accent-bg)'; });
-          item.addEventListener('mouseleave', () => { item.style.background = ''; });
           const dn = displayName({ username: u.username, fullName: u.fullName ?? undefined });
           item.textContent = dn + (u.email ? ` <${u.email}>` : '');
-          item.addEventListener('mousedown', (e) => {
-            e.preventDefault(); // prevent blur on input
+          const commit = () => {
             const tag: TaggedUser = { id: u.id, username: u.username, fullName: u.fullName ?? undefined };
             if (!selectedTags.find(t => t.id === tag.id)) {
               selectedTags.push(tag);
@@ -427,8 +446,12 @@ export function showActivityDialog(
             tagInputEl.value = '';
             hideTagDropdown();
             tagInputEl.focus();
-          });
+          };
+          const idx = dropdownItems.length;
+          item.addEventListener('mouseenter', () => setActive(idx));
+          item.addEventListener('mousedown', (e) => { e.preventDefault(); commit(); });
           tagDropdownEl.appendChild(item);
+          dropdownItems.push({ el: item, commit });
         });
 
         // Offer "Tag as pending" if query is a valid username, no exact match exists,
@@ -439,22 +462,42 @@ export function showActivityDialog(
           const pendingItem = document.createElement('div');
           pendingItem.style.cssText = 'padding:8px 12px;font-size:13px;cursor:pointer;font-style:italic;color:var(--cp-text-muted);border-top:1px solid var(--cp-border,#d1d5db);';
           pendingItem.textContent = `Tag "@${q}" as pending (will link when they register)`;
-          pendingItem.addEventListener('mouseenter', () => { pendingItem.style.background = 'var(--cp-accent-bg)'; });
-          pendingItem.addEventListener('mouseleave', () => { pendingItem.style.background = ''; });
-          pendingItem.addEventListener('mousedown', (e) => {
-            e.preventDefault();
+          const commit = () => {
             selectedTags.push({ username: q, pending: true });
             renderTagChips();
             tagInputEl.value = '';
             hideTagDropdown();
             tagInputEl.focus();
-          });
+          };
+          const idx = dropdownItems.length;
+          pendingItem.addEventListener('mouseenter', () => setActive(idx));
+          pendingItem.addEventListener('mousedown', (e) => { e.preventDefault(); commit(); });
           tagDropdownEl.appendChild(pendingItem);
+          dropdownItems.push({ el: pendingItem, commit });
         }
 
         tagDropdownEl.style.display = '';
+        setActive(0);
       } catch { hideTagDropdown(); }
     }, 200);
+  });
+
+  tagInputEl?.addEventListener('keydown', (e) => {
+    const isOpen = tagDropdownEl.style.display !== 'none' && dropdownItems.length > 0;
+    if (!isOpen) return;
+    switch (e.key) {
+      case 'ArrowDown': e.preventDefault(); setActive(activeIndex + 1); break;
+      case 'ArrowUp':   e.preventDefault(); setActive(activeIndex - 1); break;
+      case 'Enter':
+      case 'Tab':
+        if (activeIndex >= 0) { e.preventDefault(); dropdownItems[activeIndex].commit(); }
+        break;
+      case 'Escape':
+        e.preventDefault();
+        e.stopPropagation();  // don't let the dialog Esc handler fire
+        hideTagDropdown();
+        break;
+    }
   });
 
   tagInputEl?.addEventListener('blur', () => {

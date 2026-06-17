@@ -359,6 +359,7 @@
 
 .cp-lane-toggle {
   display: inline-flex;
+  flex-direction: row;
   align-items: center;
   gap: 4px;
   flex-wrap: nowrap;
@@ -575,6 +576,40 @@
   transition: filter 0.1s;
 }
 .cp-list-activity:hover { filter: brightness(1.1); }
+/* Drag affordance only when the renderer marked the bar as draggable
+   (rules out view-only planners, recurring activities, and milestones). */
+.cp-list-activity--draggable { cursor: grab; touch-action: none; }
+.cp-list-activity--draggable:active { cursor: grabbing; }
+.cp-list-activity--milestone {
+  width: 14px !important;
+  height: 14px !important;
+  padding: 0 !important;
+  transform: rotate(45deg);
+  border: 2px solid var(--cp-text);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  border-radius: 2px;
+  z-index: 3;
+  cursor: pointer !important; /* milestones aren't draggable */
+  touch-action: auto;
+  /* override the text styles inherited from .cp-list-activity */
+  font-size: 0;
+  text-overflow: clip;
+  overflow: visible;
+}
+.cp-list-activity--milestone-label {
+  position: absolute;
+  font-weight: 700;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+  z-index: 3;
+  color: var(--cp-text);
+  background: transparent;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.cp-list-activity--milestone-label:hover { background: var(--cp-border-subtle, rgba(0,0,0,0.05)); }
 .cp-list-empty {
   padding: 24px;
   text-align: center;
@@ -711,11 +746,25 @@
     --cp-disc-bg-outer: #ffffff !important;
   }
 
-  /* Let the SVG fill the page */
+  /* Common page setup */
   body, html { background: white !important; margin: 0 !important; padding: 0 !important; }
   .cp-page-body { display: block !important; height: auto !important; }
-  .cp-disc-area, .cp-svg-container { width: 100% !important; max-width: 100% !important; height: auto !important; }
-  svg.circular-planner-svg { width: 100% !important; height: auto !important; max-width: 9in; max-height: 9in; display: block; margin: 0 auto; }
+  .cp-disc-area { width: 100% !important; max-width: 100% !important; height: auto !important; overflow: visible !important; }
+
+  /* --- Disc view print: hide list/people containers, size SVG --- */
+  body[data-print-view="disc"] .cp-list-container { display: none !important; }
+  body[data-print-view="disc"] .cp-svg-container { width: 100% !important; max-width: 100% !important; height: auto !important; }
+  body[data-print-view="disc"] svg.circular-planner-svg { width: 100% !important; height: auto !important; max-width: 9in; max-height: 9in; display: block; margin: 0 auto; }
+
+  /* --- List view print: hide disc + people, size list container --- */
+  body[data-print-view="list"] .cp-svg-container { display: none !important; }
+  body[data-print-view="list"] .cp-list-container { width: 100% !important; max-width: 100% !important; height: auto !important; overflow: visible !important; }
+  body[data-print-view="list"] .cp-list-timeline { overflow: visible !important; }
+
+  /* --- People view print: hide disc + list, size people container --- */
+  body[data-print-view="people"] .cp-svg-container { display: none !important; }
+  body[data-print-view="people"] .cp-list-container { width: 100% !important; max-width: 100% !important; height: auto !important; overflow: visible !important; }
+  body[data-print-view="people"] .cp-list-timeline { overflow: visible !important; }
 
   /* Print header — title + dates pulled from body[data-print-title] */
   body::before {
@@ -731,3 +780,86 @@
   @page { margin: 0.5in; size: landscape; }
 }
 
+
+/* ============================================================
+   In-app guide: reference panel, coachmark tour, first-visit prompt
+   ============================================================ */
+
+/* --- Reference panel --- */
+.cp-guide-panel-backdrop {
+  position: fixed; inset: 0; z-index: 9000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.cp-guide-panel {
+  background: var(--cp-surface); color: var(--cp-text);
+  border: 1px solid var(--cp-border); border-radius: 10px;
+  padding: 24px 28px; width: 92%; max-width: 600px; max-height: 85vh;
+  overflow-y: auto; box-shadow: 0 12px 48px rgba(0, 0, 0, 0.22);
+}
+.cp-guide-panel-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 6px;
+}
+.cp-guide-panel-header h2 { margin: 0; font-size: 17px; font-weight: 700; }
+.cp-guide-panel-intro {
+  margin: 0 0 14px; font-size: 13px; color: var(--cp-text-muted);
+}
+.cp-guide-tour-btn { margin-bottom: 18px; }
+.cp-guide-section { border-top: 1px solid var(--cp-border); padding: 10px 0; }
+.cp-guide-section > summary {
+  cursor: pointer; font-weight: 600; font-size: 14px; list-style: none;
+  display: flex; align-items: center; gap: 8px; user-select: none;
+}
+.cp-guide-section > summary::before {
+  content: '▸'; color: var(--cp-text-muted); font-size: 11px;
+  transition: transform 0.15s ease;
+}
+.cp-guide-section[open] > summary::before { transform: rotate(90deg); }
+.cp-guide-section ul {
+  margin: 8px 0 2px; padding-left: 22px;
+  font-size: 13px; color: var(--cp-text-muted); line-height: 1.5;
+}
+.cp-guide-section li { margin-bottom: 5px; }
+
+/* --- Coachmark tour --- */
+.cp-guide-tour-backdrop { position: fixed; inset: 0; z-index: 9498; }
+.cp-guide-spotlight {
+  position: fixed; z-index: 9499; border-radius: 8px; pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  transition: left 0.2s ease, top 0.2s ease, width 0.2s ease, height 0.2s ease;
+}
+.cp-guide-tooltip {
+  position: fixed; z-index: 9500; width: 320px; max-width: calc(100vw - 16px);
+  background: var(--cp-surface); color: var(--cp-text);
+  border: 1px solid var(--cp-border); border-radius: 10px;
+  padding: 16px 18px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+}
+.cp-guide-tooltip-counter {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--cp-accent);
+}
+.cp-guide-tooltip-title { margin: 6px 0 6px; font-size: 15px; font-weight: 700; }
+.cp-guide-tooltip-body {
+  margin: 0 0 14px; font-size: 13px; line-height: 1.5; color: var(--cp-text-muted);
+}
+.cp-guide-tooltip-actions {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.cp-guide-tooltip-nav { display: flex; gap: 6px; }
+.cp-guide-skip { color: var(--cp-text-muted); }
+
+/* --- First-visit prompt --- */
+.cp-guide-prompt {
+  position: fixed; right: 20px; bottom: 20px; z-index: 8500;
+  width: 300px; max-width: calc(100vw - 32px);
+  background: var(--cp-surface); color: var(--cp-text);
+  border: 1px solid var(--cp-border); border-radius: 10px;
+  padding: 14px 16px; box-shadow: 0 10px 32px rgba(0, 0, 0, 0.22);
+  opacity: 0; transform: translateY(12px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.cp-guide-prompt-visible { opacity: 1; transform: translateY(0); }
+.cp-guide-prompt-msg { margin: 0 0 12px; font-size: 13px; line-height: 1.45; }
+.cp-guide-prompt-actions { display: flex; gap: 8px; justify-content: flex-end; }

@@ -25,6 +25,14 @@ import { decode as decodeUrlState, encode as encodeUrlState } from './url-state'
 import { listViews, createView, deleteView, SavedView } from './saved-views';
 import { exportSVGToPNG } from './svg-export';
 import { setClip, getClip, hasClip } from './activity-clipboard';
+import { api } from './api-client';
+
+interface Member {
+  id: number;
+  username: string;
+  fullName?: string;
+  role: 'owner' | 'edit' | 'view';
+}
 
 /**
  * Main controller for a single circular planner instance.
@@ -57,6 +65,8 @@ export class Planner {
   private viewListBtn!: HTMLButtonElement;
   private viewPeopleBtn!: HTMLButtonElement;
   private searchInputEl: HTMLInputElement | null = null;
+  private pngBtn: HTMLButtonElement | null = null;
+  private members: Member[] = [];
 
   // Refs to toolbar elements that change on viewport updates
   private vpLabelEl!: HTMLSpanElement;
@@ -71,7 +81,7 @@ export class Planner {
     this.config = config;
     this.data = initialData;
     this.viewport = defaultViewport(this.config);
-    this.filterState = { hiddenLaneIds: new Set(), searchTerm: '', activeLabels: new Set(), activeTaggedUserIds: new Set() };
+    this.filterState = { hiddenLaneIds: new Set(), searchTerm: '', activeLabels: new Set(), activeTaggedUserIds: new Set(), selectedPeopleIds: new Set() };
     this.dataManager = new DataManager(this.config);
     if (updatedAt) this.dataManager.setUpdatedAt(updatedAt);
 
@@ -103,6 +113,7 @@ export class Planner {
     if (urlState.filterState?.hiddenLaneIds) this.filterState.hiddenLaneIds = urlState.filterState.hiddenLaneIds;
     if (urlState.filterState?.activeLabels) this.filterState.activeLabels = urlState.filterState.activeLabels;
     if (urlState.filterState?.activeTaggedUserIds) this.filterState.activeTaggedUserIds = urlState.filterState.activeTaggedUserIds;
+    if (urlState.filterState?.selectedPeopleIds) this.filterState.selectedPeopleIds = urlState.filterState.selectedPeopleIds;
     if (urlState.viewMode) this.viewMode = urlState.viewMode;
     if (urlState.colorBy) this.colorBy = urlState.colorBy;
 
@@ -234,6 +245,16 @@ export class Planner {
 
     this.applyViewMode();
     this.installGlobalKeyHandler();
+    this.loadMembers();
+  }
+
+  private loadMembers(): void {
+    api.get<Member[]>(`/api/planners/${this.config.plannerId}/members`).then(members => {
+      this.members = members;
+      // Re-render sidebar so the "Visible people" section shows member names immediately.
+      const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
+      if (sidebarBody) this.buildSidebar(sidebarBody);
+    }).catch(() => { /* non-fatal; people picker may be empty */ });
   }
 
   /** Returns true when focus is inside an editable element (input/textarea/contenteditable). */
@@ -418,10 +439,13 @@ export class Planner {
 
     if (isList) {
       if (!this.listRenderer) {
-        this.listRenderer = new ListRenderer(this.listContainer, this.data, this.viewport, this.filterState);
+        this.listRenderer = new ListRenderer(this.listContainer, this.data, this.viewport, this.filterState, this.config);
         this.listRenderer.setHandlers(
           (activity) => this.handleClickActivity(activity),
           (laneId, date) => this.handleClickLane(laneId, date)
+        );
+        this.listRenderer.setDragCommitHandler((act, newStart, newEnd, newLaneId) =>
+          this.handleDragCommit(act, newStart, newEnd, newLaneId)
         );
       } else {
         this.listRenderer.update(this.data, this.filterState);
@@ -435,10 +459,14 @@ export class Planner {
           this.data,
           this.viewport,
           this.filterState,
-          this.config.plannerId
+          this.config.plannerId,
+          this.config
         );
         this.peopleRenderer.setHandlers(
           (activity) => this.handleClickActivity(activity)
+        );
+        this.peopleRenderer.setDragCommitHandler((act, newStart, newEnd, newLaneId) =>
+          this.handleDragCommit(act, newStart, newEnd, newLaneId)
         );
       } else {
         this.peopleRenderer.update(this.data, this.filterState);
@@ -454,6 +482,20 @@ export class Planner {
       this.viewListBtn.classList.toggle('cp-btn-active', isList);
       this.viewPeopleBtn.classList.toggle('cp-btn-active', isPeople);
     }
+
+    this.updatePngBtnState();
+  }
+
+  private updatePngBtnState(): void {
+    if (!this.pngBtn) return;
+    const canvasSupported = typeof document.createElement('canvas').toDataURL === 'function';
+    if (this.viewMode === 'disc' && canvasSupported) {
+      this.pngBtn.disabled = false;
+      this.pngBtn.title = 'Download disc as PNG';
+    } else {
+      this.pngBtn.disabled = true;
+      this.pngBtn.title = 'PNG export is only available for the disc view. Use Print to save list/people as PDF.';
+    }
   }
 
   private setViewMode(mode: ViewMode): void {
@@ -461,6 +503,9 @@ export class Planner {
     this.viewMode = mode;
     localStorage.setItem('cp_view_mode', mode);
     this.applyViewMode();
+    // Rebuild sidebar so "Visible people" section shows/hides with view mode change.
+    const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
+    if (sidebarBody) this.buildSidebar(sidebarBody);
     this.syncUrl();
   }
 
@@ -723,6 +768,87 @@ export class Planner {
       body.appendChild(taggedUsersSection);
     }
 
+    // Section: Visible people — only shown when in people view
+    if (this.viewMode === 'people' && this.members.length > 0) {
+      const { section: peopleSection, content: peopleContent } =
+        this.makeCollapsibleSection('Visible people', 'selected_people');
+
+      // Header controls: Select all / Clear
+      const pickerControls = document.createElement('div');
+      pickerControls.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;';
+
+      const selectAllBtn = document.createElement('button');
+      selectAllBtn.textContent = 'Select all';
+      selectAllBtn.className = 'cp-btn';
+      selectAllBtn.style.cssText = 'padding:2px 8px;font-size:11px;';
+      selectAllBtn.addEventListener('click', () => this.handleSelectAllPeople());
+      pickerControls.appendChild(selectAllBtn);
+
+      const clearBtn = document.createElement('button');
+      clearBtn.textContent = 'Clear';
+      clearBtn.className = 'cp-btn';
+      clearBtn.style.cssText = 'padding:2px 8px;font-size:11px;';
+      clearBtn.addEventListener('click', () => this.handleClearSelectedPeople());
+      pickerControls.appendChild(clearBtn);
+
+      peopleContent.appendChild(pickerControls);
+
+      // Search input — only worth showing once the list is long enough to scroll.
+      const rows: Array<{ row: HTMLElement; name: string }> = [];
+      const searchInput = document.createElement('input');
+      searchInput.type = 'search';
+      searchInput.placeholder = 'Search people…';
+      searchInput.style.cssText = 'width:100%;box-sizing:border-box;margin-bottom:6px;padding:4px 8px;font-size:12px;border:1px solid var(--cp-border);border-radius:4px;background:var(--cp-surface);color:var(--cp-text);';
+      if (this.members.length > 8) peopleContent.appendChild(searchInput);
+
+      // Sort members by display name
+      const sortedMembers = [...this.members].sort((a, b) => {
+        const na = a.fullName?.trim() || a.username;
+        const nb = b.fullName?.trim() || b.username;
+        return na.localeCompare(nb);
+      });
+
+      sortedMembers.forEach(m => {
+        const isSelected = this.filterState.selectedPeopleIds.has(m.id);
+        const dn = m.fullName?.trim() || m.username;
+
+        const row = document.createElement('label');
+        row.className = 'cp-lane-toggle';
+        row.style.cssText = 'cursor:pointer;gap:6px;';
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = isSelected;
+        cb.style.cssText = 'margin:0;cursor:pointer;flex-shrink:0;';
+        cb.addEventListener('change', () => this.handleToggleSelectedPerson(m.id));
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = dn;
+        nameSpan.style.cssText = `flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;opacity:${this.filterState.selectedPeopleIds.size > 0 && !isSelected ? '0.4' : '1'};`;
+
+        row.appendChild(nameSpan);
+        row.appendChild(cb);
+        peopleContent.appendChild(row);
+        rows.push({ row, name: dn.toLowerCase() });
+      });
+
+      // Live-filter rows as the user types. Debounced lightly to avoid layout
+      // thrash when typing fast; the rows toggle display:none so the scroll
+      // height shrinks with the filter result.
+      let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+      searchInput.addEventListener('input', () => {
+        if (searchDebounce) clearTimeout(searchDebounce);
+        searchDebounce = setTimeout(() => {
+          const q = searchInput.value.trim().toLowerCase();
+          for (const { row, name } of rows) {
+            row.style.display = !q || name.includes(q) ? '' : 'none';
+          }
+        }, 100);
+      });
+
+      body.appendChild(peopleSection);
+    }
+
     // Section: Appearance (lane border colour)
     const apprSection = document.createElement('div');
     apprSection.className = 'cp-sidebar-section';
@@ -738,7 +864,7 @@ export class Planner {
       onChange: (v: boolean) => void
     ): HTMLLabelElement => {
       const row = document.createElement('label');
-      row.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;user-select:none;';
+      row.style.cssText = 'display:flex;flex-direction:row;align-items:center;gap:6px;font-size:12px;cursor:pointer;user-select:none;';
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = checked;
@@ -902,6 +1028,34 @@ export class Planner {
     this.syncUrl();
   }
 
+  private handleToggleSelectedPerson(userId: number): void {
+    if (this.filterState.selectedPeopleIds.has(userId)) {
+      this.filterState.selectedPeopleIds.delete(userId);
+    } else {
+      this.filterState.selectedPeopleIds.add(userId);
+    }
+    this.peopleRenderer?.update(this.data, this.filterState);
+    const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
+    if (sidebarBody) this.buildSidebar(sidebarBody);
+    this.syncUrl();
+  }
+
+  private handleSelectAllPeople(): void {
+    this.members.forEach(m => this.filterState.selectedPeopleIds.add(m.id));
+    this.peopleRenderer?.update(this.data, this.filterState);
+    const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
+    if (sidebarBody) this.buildSidebar(sidebarBody);
+    this.syncUrl();
+  }
+
+  private handleClearSelectedPeople(): void {
+    this.filterState.selectedPeopleIds.clear();
+    this.peopleRenderer?.update(this.data, this.filterState);
+    const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
+    if (sidebarBody) this.buildSidebar(sidebarBody);
+    this.syncUrl();
+  }
+
   private buildToolbar(): void {
     this.toolbar.innerHTML = '';
     this.toolbar.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 8px;background:var(--cp-surface);border-bottom:1px solid var(--cp-border);';
@@ -935,6 +1089,7 @@ export class Planner {
     const viewGroup = document.createElement('div');
     viewGroup.className = 'cp-zoom-controls';
     viewGroup.style.marginLeft = '8px';
+    viewGroup.dataset.tour = 'views';
 
     const discBtn = document.createElement('button');
     discBtn.textContent = 'Disc';
@@ -965,6 +1120,7 @@ export class Planner {
     // Color-by select
     const colorByWrap = document.createElement('div');
     colorByWrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;margin-left:8px;';
+    colorByWrap.dataset.tour = 'colorby';
 
     const colorByLabel = document.createElement('label');
     colorByLabel.textContent = 'Color by';
@@ -1008,6 +1164,7 @@ export class Planner {
       addEventBtn.title = 'Add a new event (n)';
       addEventBtn.className = 'cp-btn cp-btn-primary';
       addEventBtn.style.marginLeft = '8px';
+      addEventBtn.dataset.tour = 'add-event';
       addEventBtn.addEventListener('click', () => this.handleAddEvent());
       this.toolbar.appendChild(addEventBtn);
 
@@ -1024,6 +1181,7 @@ export class Planner {
       const exportGroup = document.createElement('div');
       exportGroup.className = 'cp-zoom-controls';
       exportGroup.style.marginLeft = '8px';
+      exportGroup.dataset.tour = 'export';
 
       // Print button
       const printBtn = document.createElement('button');
@@ -1035,8 +1193,10 @@ export class Planner {
         const start = this.config.startDate;
         const end   = this.config.endDate;
         document.body.setAttribute('data-print-title', `${title} — ${start} to ${end}`);
+        document.body.dataset.printView = this.viewMode;
         const cleanup = () => {
           document.body.removeAttribute('data-print-title');
+          delete document.body.dataset.printView;
           window.removeEventListener('afterprint', cleanup);
         };
         window.addEventListener('afterprint', cleanup);
@@ -1049,21 +1209,20 @@ export class Planner {
       const pngBtn = document.createElement('button');
       pngBtn.textContent = 'PNG';
       pngBtn.className = 'cp-btn';
-      if (!canvasSupported) {
-        pngBtn.disabled = true;
-        pngBtn.title = 'Export not supported in this browser';
-      } else {
-        pngBtn.title = 'Download disc as PNG';
+      if (canvasSupported) {
         pngBtn.addEventListener('click', () => {
           const slug = (s: string) =>
             s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'planner';
           const filename = `${slug(this.config.title)}-${formatDate(new Date())}.png`;
           exportSVGToPNG(this.renderer.getSVGNode(), filename).catch((err) => {
             console.error('PNG export failed:', err);
-            toast.error('PNG export failed — see console for details.');
+            const msg = err instanceof Error && err.message ? err.message : String(err);
+            toast.error(`PNG export failed: ${msg}`);
           });
         });
       }
+      this.pngBtn = pngBtn;
+      this.updatePngBtnState();
       exportGroup.appendChild(pngBtn);
 
       this.toolbar.appendChild(exportGroup);
@@ -1084,6 +1243,7 @@ export class Planner {
     // Navigation + zoom controls
     const zoomControls = document.createElement('div');
     zoomControls.className = 'cp-zoom-controls';
+    zoomControls.dataset.tour = 'nav';
 
     const navLeft = document.createElement('button');
     navLeft.textContent = '◀';
@@ -1404,7 +1564,7 @@ export class Planner {
     let isSharedCheckbox: HTMLInputElement | null = null;
     if (this.config.isOwner) {
       const sharedWrap = document.createElement('label');
-      sharedWrap.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:11px;color:var(--cp-text);margin-top:5px;cursor:pointer;';
+      sharedWrap.style.cssText = 'display:flex;flex-direction:row;align-items:center;gap:5px;font-size:11px;color:var(--cp-text);margin-top:5px;cursor:pointer;';
 
       isSharedCheckbox = document.createElement('input');
       isSharedCheckbox.type = 'checkbox';
@@ -1474,9 +1634,10 @@ export class Planner {
       if (urlState.filterState.hiddenLaneIds) this.filterState.hiddenLaneIds = urlState.filterState.hiddenLaneIds;
       if (urlState.filterState.activeLabels) this.filterState.activeLabels = urlState.filterState.activeLabels;
       if (urlState.filterState.activeTaggedUserIds) this.filterState.activeTaggedUserIds = urlState.filterState.activeTaggedUserIds;
+      if (urlState.filterState.selectedPeopleIds) this.filterState.selectedPeopleIds = urlState.filterState.selectedPeopleIds;
     } else {
       // If no filter state in the saved view, reset to defaults.
-      this.filterState = { hiddenLaneIds: new Set(), searchTerm: '', activeLabels: new Set(), activeTaggedUserIds: new Set() };
+      this.filterState = { hiddenLaneIds: new Set(), searchTerm: '', activeLabels: new Set(), activeTaggedUserIds: new Set(), selectedPeopleIds: new Set() };
     }
 
     if (urlState.viewMode) {
@@ -1683,17 +1844,26 @@ export class Planner {
       do: () => {
         const b = this.data.lanes.flatMap(l => l.activities).find(a => a.id === activity.id);
         if (b) moveActivity(b, b.laneId, newLaneId, newStartStr, newEndStr);
-        this.renderer.update(this.data, this.filterState);
+        this.refreshActiveView();
       },
       undo: () => {
         const b = this.data.lanes.flatMap(l => l.activities).find(a => a.id === activity.id);
         if (b) moveActivity(b, b.laneId, origLaneId, origStartStr, origEndStr);
-        this.renderer.update(this.data, this.filterState);
+        this.refreshActiveView();
       },
     });
 
     this.save();
-    this.renderer.update(this.data, this.filterState);
+    this.refreshActiveView();
+  }
+
+  // Update only the currently visible renderer. The other two are re-rendered
+  // lazily when the user switches to them via applyViewMode(), which already
+  // calls .update() on the renderer it's switching into.
+  private refreshActiveView(): void {
+    if (this.viewMode === 'list')        this.listRenderer?.update(this.data, this.filterState);
+    else if (this.viewMode === 'people') this.peopleRenderer?.update(this.data, this.filterState);
+    else                                  this.renderer.update(this.data, this.filterState);
   }
 
   private addActivity(activity: Activity): void {

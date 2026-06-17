@@ -1,9 +1,11 @@
-import { PlannerData, Activity, Viewport, FilterState, Lane } from './types';
+import { PlannerData, Activity, Viewport, FilterState, Lane, PlannerConfig } from './types';
 import { parseDate, formatDate } from './utils';
 import { getGridSpec } from './viewport';
+import { attachLinearDrag } from './pointer-drag';
 
 export type ClickActivityHandler = (activity: Activity) => void;
 export type ClickLaneSlotHandler = (laneId: string, date: Date) => void;
+export type DragCommitHandler = (activity: Activity, newStart: Date, newEnd: Date, newLaneId: string) => void;
 
 const LANE_COL_WIDTH = 200;
 const SUB_ROW_HEIGHT = 26;
@@ -16,8 +18,10 @@ export class ListRenderer {
   private data: PlannerData;
   private viewport: Viewport;
   private filterState: FilterState;
+  private config: PlannerConfig;
   private onClickActivity: ClickActivityHandler = () => {};
   private onClickLaneSlot: ClickLaneSlotHandler = () => {};
+  private onDragCommit: DragCommitHandler | null = null;
 
   private root!: HTMLElement;
   private timelineEl!: HTMLElement;
@@ -27,18 +31,24 @@ export class ListRenderer {
     container: HTMLElement,
     data: PlannerData,
     viewport: Viewport,
-    filterState: FilterState
+    filterState: FilterState,
+    config: PlannerConfig
   ) {
     this.container = container;
     this.data = data;
     this.viewport = viewport;
     this.filterState = filterState;
+    this.config = config;
     this.mount();
   }
 
   setHandlers(onClickActivity: ClickActivityHandler, onClickLaneSlot: ClickLaneSlotHandler): void {
     this.onClickActivity = onClickActivity;
     this.onClickLaneSlot = onClickLaneSlot;
+  }
+
+  setDragCommitHandler(fn: DragCommitHandler | null): void {
+    this.onDragCommit = fn;
   }
 
   update(data: PlannerData, filterState?: FilterState): void {
@@ -198,12 +208,15 @@ export class ListRenderer {
         this.onClickLaneSlot(lane.id, new Date(t));
       });
 
-      // Activities
+      // Activities — render regular bars first, milestones last so they appear on top
       const visibleActivities = lane.activities.filter(a => this.passesFilter(a));
       const sortedActs = [...visibleActivities].sort(
         (a, b) => parseDate(a.startDate).getTime() - parseDate(b.startDate).getTime()
       );
-      sortedActs.forEach((activity) => {
+      const regular = sortedActs.filter(a => !a.isMilestone);
+      const milestones = sortedActs.filter(a => a.isMilestone);
+
+      regular.forEach((activity) => {
         const start = parseDate(activity.startDate);
         const end = parseDate(activity.endDate);
         if (end < this.viewport.windowStart || start > this.viewport.windowEnd) return;
@@ -224,11 +237,74 @@ export class ListRenderer {
         const recurBadge = activity.recurrence ? ' ↻' : '';
         box.title = `${activity.title}${recurBadge}\n${formatDate(start)} → ${formatDate(end)}${activity.description ? '\n' + activity.description : ''}`;
         box.textContent = activity.title + recurBadge;
+
+        const isDraggable =
+          !activity.isMilestone &&
+          !(activity.recurrence && activity.recurrence.type !== 'none') &&
+          this.config.permission !== 'view' &&
+          this.onDragCommit !== null;
+
+        if (isDraggable) box.classList.add('cp-list-activity--draggable');
+
+        const wasDragged = isDraggable
+          ? attachLinearDrag({
+              box, timeline, timelineWidth,
+              windowStart: this.viewport.windowStart,
+              windowEnd:   this.viewport.windowEnd,
+              plannerStart: parseDate(this.config.startDate),
+              plannerEnd:   parseDate(this.config.endDate),
+              dateToX,
+              getOriginalDates: () => ({
+                start: parseDate(activity.startDate),
+                end:   parseDate(activity.endDate),
+              }),
+              onCommit: (ns, ne) => this.onDragCommit!(activity, ns, ne, activity.laneId),
+            })
+          : () => false;
+
         box.addEventListener('click', (e) => {
+          if (wasDragged()) return;
           e.stopPropagation();
           this.onClickActivity(activity);
         });
         timeline.appendChild(box);
+      });
+
+      milestones.forEach((activity) => {
+        const start = parseDate(activity.startDate);
+        if (start > this.viewport.windowEnd || start < this.viewport.windowStart) return;
+
+        const subRow = subRows.get(activity.id) ?? 0;
+        const xCenter = dateToX(start);
+        const topCenter = ROW_PADDING_Y + subRow * SUB_ROW_HEIGHT + (SUB_ROW_HEIGHT - 14) / 2;
+        const recurBadge = activity.recurrence ? ' ↻' : '';
+        const tooltipText = `${activity.title}${recurBadge}\n${formatDate(start)}${activity.description ? '\n' + activity.description : ''}`;
+
+        // Diamond shape
+        const diamond = document.createElement('div');
+        diamond.className = 'cp-list-activity cp-list-activity--milestone';
+        diamond.style.left = `${xCenter - 7}px`;
+        diamond.style.top = `${topCenter}px`;
+        diamond.style.background = activity.color || '#4c8bf5';
+        diamond.title = tooltipText;
+        diamond.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.onClickActivity(activity);
+        });
+        timeline.appendChild(diamond);
+
+        // Label to the right of the diamond
+        const label = document.createElement('span');
+        label.className = 'cp-list-activity--milestone-label';
+        label.style.left = `${xCenter + 10}px`;
+        label.style.top = `${topCenter}px`;
+        label.textContent = activity.title + recurBadge;
+        label.title = tooltipText;
+        label.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.onClickActivity(activity);
+        });
+        timeline.appendChild(label);
       });
 
       row.appendChild(timeline);
@@ -256,7 +332,9 @@ export class ListRenderer {
   }
 
   private assignSubRows(lane: Lane): { subRows: Map<string, number>; totalSubRows: number } {
-    const visible = lane.activities.filter(a => this.passesFilter(a));
+    // Milestones are excluded from layout — they don't consume a row slot and
+    // are rendered on top of existing bars with z-index 3.
+    const visible = lane.activities.filter(a => this.passesFilter(a) && !a.isMilestone);
     const sorted = [...visible].sort(
       (a, b) => parseDate(a.startDate).getTime() - parseDate(b.startDate).getTime()
     );
