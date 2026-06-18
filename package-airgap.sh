@@ -86,7 +86,11 @@ echo ""
 # ─── Step 1: Build frontend ───────────────────────────────────────────────────
 info "[1/5] Building frontend bundles..."
 cd "$SCRIPT_DIR"
-npm ci --ignore-scripts=false
+# --no-audit / --no-fund silence the noisy summary lines; the grep filter
+# drops `npm warn deprecated` lines from transitive deps inside jest's own
+# chain that we can't control. Real warnings and errors still pass through.
+npm ci --ignore-scripts=false --no-audit --no-fund \
+  2> >(grep -v 'npm warn deprecated' >&2)
 npm run build:client
 
 # ─── Step 2: Build Go binary ──────────────────────────────────────────────────
