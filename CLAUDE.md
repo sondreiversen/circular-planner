@@ -22,9 +22,9 @@ npm run dev:client     # esbuild watch while running Go server separately
 ## Architecture
 
 ### Frontend
-- **TypeScript + D3.js**, bundled by **esbuild** into three entry points
+- **TypeScript + D3.js**, bundled by **esbuild** into six entry points
 - Output goes to `public/js/` (gitignored) — not `dist/` like the old webpack setup
-- Entry points: `client/src/index.ts` → `planner-bundle.js`, `auth.ts` → `auth-bundle.js`, `dashboard.ts` → `dashboard-bundle.js`
+- Entry points: `client/src/index.ts` → `planner-bundle.js`, `auth.ts` → `auth-bundle.js`, `dashboard.ts` → `dashboard-bundle.js`, `groups.ts` → `groups-bundle.js`, `admin.ts` → `admin-bundle.js`, `index-public.ts` → `planner-public-bundle.js`
 - **Auth**: JWT in an HttpOnly cookie named `cp_token`, set by the server on login. The browser sends it automatically with `credentials: 'include'`; the client never reads or stores the token. Any legacy `cp_token` in `localStorage` is cleared on load in `api-client.ts`.
 
 ### Go backend
@@ -70,6 +70,18 @@ internal/               Go packages
   auth/                 /api/auth/* handlers (register, login, me, GitLab SSO)
   planners/             /api/planners/* handlers
   share/                /api/planners/:id/shares/* handlers
+  admin/                /api/admin/* handlers (global admin management)
+  branding/             GET /api/branding
+  clienterrors/         POST /api/client-errors (unauthenticated client error reporting)
+  favicon/              Site favicon (default embedded SVG or custom upload)
+  groups/               /api/groups/* handlers
+  health/               GET /api/health (liveness/readiness probe)
+  importing/            Calendar-import routes
+  publicread/           Unauthenticated public planner read endpoint
+  search/               GET /api/search
+  settings/             app_settings table read/write access
+  testutil/             In-memory test server backed by a temp-dir SQLite DB
+  views/                /api/planners/:id/views/* handlers
 ```
 
 ### Data flow
@@ -137,7 +149,7 @@ Four zoom levels: **Year → Quarter → Month → Week**
 |---|---|---|
 | `DATABASE_URL` | `sqlite:./data/planner.db` | Database connection. Use `postgres://...` for Postgres. |
 | `DATA_DIR` | `./data` | SQLite data directory |
-| `JWT_SECRET` | *(insecure default)* | **Must be set in production** |
+| `JWT_SECRET` | *(none — required)* | Secret for signing JWT tokens. **The server refuses to start** (`log.Fatal`) unless this is at least 32 characters and not a known placeholder value (e.g. `changeme`, `change-this-to-a-long-random-string`, or a single repeated character). Generate one with `openssl rand -hex 32`. |
 | `PORT` | `3000` | HTTP port |
 | `HTTPS_PORT` | `3443` | HTTPS port (when TLS configured) |
 | `TLS_CERT_FILE` | — | TLS certificate path |
@@ -145,6 +157,7 @@ Four zoom levels: **Year → Quarter → Month → Week**
 | `FORCE_HTTPS` | `true` | HTTP → HTTPS redirect when TLS active |
 | `ALLOW_REGISTRATION` | `true` | Allow new user self-registration. **Set to `false` for any publicly reachable instance.** Default `true` only because most deployments are private/LAN. |
 | `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` headers (set `true` behind a reverse proxy) |
+| `COOKIE_SECURE` | `auto` | Secure flag on the `cp_token` cookie: `auto` (Secure when TLS is configured or `TRUST_PROXY=true`), `true`, or `false`. |
 | `GITLAB_SSO_ENABLED` | `false` | Enable GitLab OAuth2 |
 | `GITLAB_INSTANCE_URL` | — | GitLab base URL |
 | `GITLAB_CLIENT_ID` | — | GitLab OAuth2 app ID |
