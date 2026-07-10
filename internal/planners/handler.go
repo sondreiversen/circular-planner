@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"regexp"
@@ -178,7 +179,8 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := middleware.UserFrom(r).ID
 
-	if _, err := middleware.CanAccess(r.Context(), h.db, plannerID, userID, "view"); err != nil {
+	accessLevel, err := middleware.CanAccess(r.Context(), h.db, plannerID, userID, "view")
+	if err != nil {
 		handleAccessErr(w, err)
 		return
 	}
@@ -189,7 +191,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	var startDate, endDate db.DateStr
 	var updatedAt string
 	var isPublic int
-	err := h.db.QueryRowContext(r.Context(),
+	err = h.db.QueryRowContext(r.Context(),
 		h.db.Rebind("SELECT owner_id, title, start_date, end_date, updated_at, is_public FROM planners WHERE id = ?"),
 		plannerID,
 	).Scan(&ownerID, &title, &startDate, &endDate, &updatedAt, &isPublic)
@@ -397,10 +399,6 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	perm := "edit"
-	if ownerID == userID {
-		perm = "owner"
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"config": map[string]any{
 			"plannerId":  plannerID,
@@ -408,7 +406,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 			"startDate":  startDate.String(),
 			"endDate":    endDate.String(),
 			"isOwner":    ownerID == userID,
-			"permission": perm,
+			"permission": accessLevel,
 			"updated_at": updatedAt,
 			"isPublic":   isPublic == 1,
 		},
@@ -563,11 +561,20 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		var willDeleteLane bool
 		for existingLaneRows.Next() {
 			var eid string
-			existingLaneRows.Scan(&eid)
+			if err := existingLaneRows.Scan(&eid); err != nil {
+				existingLaneRows.Close()
+				jsonError(w, http.StatusInternalServerError, "Internal server error")
+				return
+			}
 			if _, ok := incomingLaneIDs[eid]; !ok {
 				willDeleteLane = true
 				break
 			}
+		}
+		if err := existingLaneRows.Err(); err != nil {
+			existingLaneRows.Close()
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
 		}
 		existingLaneRows.Close()
 
@@ -587,11 +594,20 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		var willDeleteAct bool
 		for existingActRows.Next() {
 			var eid string
-			existingActRows.Scan(&eid)
+			if err := existingActRows.Scan(&eid); err != nil {
+				existingActRows.Close()
+				jsonError(w, http.StatusInternalServerError, "Internal server error")
+				return
+			}
 			if _, ok := incomingActIDs[eid]; !ok {
 				willDeleteAct = true
 				break
 			}
+		}
+		if err := existingActRows.Err(); err != nil {
+			existingActRows.Close()
+			jsonError(w, http.StatusInternalServerError, "Internal server error")
+			return
 		}
 		existingActRows.Close()
 
@@ -1099,7 +1115,7 @@ func (h *Handler) Duplicate(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 		// Empty body is fine — all fields are optional.
-		if err.Error() != "EOF" {
+		if !errors.Is(err, io.EOF) {
 			jsonError(w, http.StatusBadRequest, "Invalid JSON")
 			return
 		}

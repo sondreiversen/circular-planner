@@ -341,6 +341,7 @@ export function showActivityDialog(
         <div id="cp-color-picker-holder"></div>
       </label>
       ${isEdit && existingActivity?.createdBy ? `<div class="cp-dialog-meta">Created by ${escapeHtml(existingActivity.createdBy)}</div>` : ''}
+      <div id="cp-act-error" class="cp-dialog-error" style="display:none;"></div>
       <div class="cp-dialog-actions">
         <div>
           ${isEdit ? '<button id="cp-act-delete" class="cp-dialog-btn cp-dialog-btn--danger">Delete</button>' : ''}
@@ -354,6 +355,17 @@ export function showActivityDialog(
   `;
 
   document.body.appendChild(dialog);
+
+  // Inline validation error region (replaces alert() popups)
+  const errorEl = document.getElementById('cp-act-error') as HTMLElement;
+  function showDialogError(msg: string): void {
+    errorEl.textContent = msg;
+    errorEl.style.display = 'block';
+  }
+  function clearDialogError(): void {
+    errorEl.textContent = '';
+    errorEl.style.display = 'none';
+  }
 
   // Mount color picker
   const pickerSlot = document.getElementById('cp-color-picker-holder');
@@ -614,6 +626,7 @@ export function showActivityDialog(
   document.getElementById('cp-act-cancel')?.addEventListener('click', closeAndCleanup);
 
   document.getElementById('cp-act-save')?.addEventListener('click', () => {
+    clearDialogError();
     const title = (document.getElementById('cp-act-title') as HTMLInputElement).value.trim();
     const startRaw = (document.getElementById('cp-act-start') as HTMLInputElement).value;
     const endRaw   = (document.getElementById('cp-act-end') as HTMLInputElement).value;
@@ -624,12 +637,12 @@ export function showActivityDialog(
     const isMilestone = (document.getElementById('cp-act-milestone') as HTMLInputElement).checked;
     const status = (document.getElementById('cp-act-status') as HTMLSelectElement).value as ActivityStatus;
 
-    if (!title || !startRaw) { alert('Please fill in title and start date.'); return; }
+    if (!title || !startRaw) { showDialogError('Please fill in title and start date.'); return; }
     const start = startRaw;
     // For milestones, end = start; otherwise require end date.
     let end = isMilestone ? startRaw : endRaw;
-    if (!isMilestone && !endRaw) { alert('Please fill in the end date.'); return; }
-    if (!isMilestone && start > end) { alert('Start date must be before end date.'); return; }
+    if (!isMilestone && !endRaw) { showDialogError('Please fill in the end date.'); return; }
+    if (!isMilestone && start > end) { showDialogError('Start date must be before end date.'); return; }
 
     // Check if user chose "edit this occurrence only"
     const scopeRadio = dialog.querySelector<HTMLInputElement>('input[name="cp-occ-scope"]:checked');
@@ -664,7 +677,7 @@ export function showActivityDialog(
     const selectedRecurType = (document.getElementById('cp-act-recur-type') as HTMLSelectElement)?.value;
     if (selectedRecurType && selectedRecurType !== 'none') {
       const intervalVal = parseInt((document.getElementById('cp-act-recur-interval') as HTMLInputElement)?.value || '1', 10);
-      if (isNaN(intervalVal) || intervalVal < 1) { alert('Repeat interval must be at least 1.'); return; }
+      if (isNaN(intervalVal) || intervalVal < 1) { showDialogError('Repeat interval must be at least 1.'); return; }
 
       const untilVal = (document.getElementById('cp-act-recur-until') as HTMLInputElement)?.value || undefined;
       const currentExceptions = exceptions.length > 0 ? [...exceptions] : undefined;
@@ -672,7 +685,7 @@ export function showActivityDialog(
       if (selectedRecurType === 'weekly') {
         const checkedBoxes = Array.from(dialog.querySelectorAll<HTMLInputElement>('input[name="cp-act-wd"]:checked'));
         const selectedWeekdays = checkedBoxes.map(cb => parseInt(cb.value, 10));
-        if (selectedWeekdays.length === 0) { alert('Please select at least one weekday for weekly recurrence.'); return; }
+        if (selectedWeekdays.length === 0) { showDialogError('Please select at least one weekday for weekly recurrence.'); return; }
         recurrence = { type: 'weekly', interval: intervalVal, weekdays: selectedWeekdays, until: untilVal, exceptions: currentExceptions };
       } else if (selectedRecurType === 'monthly') {
         const subMode = (document.getElementById('cp-act-monthly-sub') as HTMLSelectElement)?.value ?? 'dom';

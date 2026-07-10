@@ -12,9 +12,12 @@ import (
 	"planner/internal/config"
 	"planner/internal/db"
 	"planner/internal/groups"
+	"planner/internal/importing"
 	"planner/internal/middleware"
 	"planner/internal/planners"
+	"planner/internal/publicread"
 	"planner/internal/share"
+	"planner/internal/views"
 )
 
 // NewServer returns a started *httptest.Server wired up with all API routes
@@ -58,6 +61,28 @@ func NewServer(t *testing.T) (*httptest.Server, *config.Config, *db.DB) {
 	mux.HandleFunc("GET /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, database, shareH.List))
 	mux.HandleFunc("POST /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, database, shareH.Create))
 	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/{userID}", middleware.RequireAuth(cfg, database, shareH.Delete))
+	mux.HandleFunc("GET /api/planners/{plannerID}/shares/group-shares", middleware.RequireAuth(cfg, database, shareH.ListGroupShares))
+	mux.HandleFunc("POST /api/planners/{plannerID}/shares/group-shares", middleware.RequireAuth(cfg, database, shareH.CreateGroupShare))
+	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/group-shares/{groupID}", middleware.RequireAuth(cfg, database, shareH.DeleteGroupShare))
+	mux.HandleFunc("PUT /api/planners/{plannerID}/shares/group-shares/{groupID}/overrides/{userID}", middleware.RequireAuth(cfg, database, shareH.UpsertGroupMemberOverride))
+	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/group-shares/{groupID}/overrides/{userID}", middleware.RequireAuth(cfg, database, shareH.DeleteGroupMemberOverride))
+	mux.HandleFunc("POST /api/planners/{plannerID}/share-tokens", middleware.RequireAuth(cfg, database, shareH.CreateShareToken))
+	mux.HandleFunc("GET /api/planners/{plannerID}/share-tokens", middleware.RequireAuth(cfg, database, shareH.ListShareTokens))
+	mux.HandleFunc("POST /api/planners/{plannerID}/share-tokens/{token}/revoke", middleware.RequireAuth(cfg, database, shareH.RevokeShareToken))
+
+	// Public (unauthenticated) planner read endpoint.
+	publicH := publicread.NewHandler(database)
+	mux.HandleFunc("GET /api/public/planners/{token}", publicH.GetPublic)
+
+	// Saved views.
+	viewsH := views.NewHandler(database, cfg)
+	mux.HandleFunc("GET /api/planners/{plannerID}/views", middleware.RequireAuth(cfg, database, viewsH.List))
+	mux.HandleFunc("POST /api/planners/{plannerID}/views", middleware.RequireAuth(cfg, database, viewsH.Create))
+	mux.HandleFunc("DELETE /api/planners/{plannerID}/views/{viewID}", middleware.RequireAuth(cfg, database, viewsH.Delete))
+
+	// Calendar file import (.ics / .csv).
+	importH := importing.NewHandler(database, cfg)
+	mux.HandleFunc("POST /api/planners/{id}/import", middleware.RequireAuth(cfg, database, importH.Import))
 
 	groupH := groups.NewHandler(database, cfg)
 	groupH.Register(mux, cfg, database)

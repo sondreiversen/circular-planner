@@ -1090,3 +1090,194 @@ input:focus, select:focus {
   cursor: pointer;
 }
 .btn-danger-sm:hover { opacity: 0.8; }
+
+/* ------------------------------------------------------------------------
+ * Admin page (public/admin.html)
+ * Moved out of an inline <style> block so the CSP's style-src-elem 'self'
+ * (which blocks injected <style> elements) doesn't break the page.
+ * ------------------------------------------------------------------------ */
+.admin-page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 28px 20px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tab-bar { display: flex; gap: 4px; margin-bottom: 28px; border-bottom: 1px solid var(--cp-border); }
+.tab-btn {
+  padding: 8px 20px;
+  border: none;
+  background: none;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--cp-text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.tab-btn.active { color: var(--cp-accent); border-bottom-color: var(--cp-accent); }
+
+.admin-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.admin-table th {
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--cp-text-muted);
+  border-bottom: 1px solid var(--cp-border);
+}
+.admin-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--cp-border);
+  vertical-align: middle;
+}
+.admin-table tr:last-child td { border-bottom: none; }
+.admin-table tr:hover td { background: var(--cp-surface-2); }
+
+.table-wrap {
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.action-cell { display: flex; gap: 6px; justify-content: flex-end; }
+
+.group-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+.group-row-header:hover { background: var(--cp-surface-2); }
+.group-row-name { font-weight: 600; font-size: 14px; }
+.group-row-meta { font-size: 12px; color: var(--cp-text-muted); }
+.group-members-panel {
+  background: var(--cp-surface-2);
+  border: 1px solid var(--cp-border);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.add-member-form {
+  background: var(--cp-surface-2);
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 12px;
+}
+.add-member-form h4 { font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+.add-member-fields { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.add-member-fields label { flex: 1; min-width: 180px; }
+
+.search-results {
+  border: 1px solid var(--cp-border-strong);
+  border-radius: 6px;
+  background: var(--cp-surface);
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+.search-result-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  border-bottom: 1px solid var(--cp-border);
+}
+.search-result-item:last-child { border-bottom: none; }
+.search-result-item:hover { background: var(--cp-surface-2); }
+.search-result-name { font-weight: 500; }
+.search-result-email { font-size: 12px; color: var(--cp-text-muted); }
+
+.section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.section-header h2 { margin: 0; }
+
+/* ------------------------------------------------------------------------
+ * Groups page (public/groups.html)
+ * Moved out of an inline <style> block for the same CSP reason as above.
+ * Some selectors (.search-results, .search-result-item, etc.) duplicate
+ * rules already defined for the admin page above — harmless, same rules.
+ * ------------------------------------------------------------------------ */
+.groups-page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 28px 20px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Group list view */
+.groups-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+.group-card {
+  background: var(--cp-surface);
+  border-radius: 10px;
+  border: 1px solid var(--cp-border);
+  padding: 20px;
+  cursor: pointer;
+  transition: box-shadow 0.15s, border-color 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.group-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.10); border-color: var(--cp-border-strong); }
+.group-card-name { font-weight: 600; font-size: 15px; }
+.group-card-desc { font-size: 12px; color: var(--cp-text-muted); }
+.group-card-meta { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+
+/* Group detail view */
+.group-detail { max-width: 680px; }
+.group-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+.group-detail-title { font-size: 22px; font-weight: 700; }
+.group-detail-desc-edit {
+  font-size: 13px;
+  color: var(--cp-text-muted);
+  margin-top: 4px;
+  cursor: pointer;
+}
+.group-detail-desc-edit:hover { color: var(--cp-accent); }
+
+.members-section { margin-top: 28px; }
+.members-section h3 { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
+.members-list { display: flex; flex-direction: column; gap: 8px; }
+.member-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--cp-surface-2);
+  border-radius: 7px;
+  font-size: 13px;
+}
+.member-info { display: flex; flex-direction: column; gap: 2px; }
+.member-name { font-weight: 500; }
+.member-email { font-size: 12px; color: var(--cp-text-muted); }
+.member-actions { display: flex; gap: 8px; align-items: center; }
+
+.add-member-form { margin-top: 16px; }
+
+.edit-name-form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 12px; }
+.edit-name-form label { flex: 1; min-width: 180px; }

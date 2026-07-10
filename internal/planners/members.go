@@ -36,13 +36,18 @@ func (h *Handler) Members(w http.ResponseWriter, r *http.Request) {
 	//   1. the planner owner
 	//   2. direct planner_shares
 	//   3. group-share members (via planner_group_shares → group_members)
-	// Dedup by user_id keeping the strongest role: 'owner' < 'edit' < 'view' lexicographically,
-	// so MIN(role) gives the strongest (owner beats edit beats view).
+	// Dedup by user_id keeping the strongest role. Roles do NOT sort correctly
+	// lexicographically ('edit' < 'owner' < 'view'), so rank them explicitly:
+	// owner=0, edit=1, view=2, and take MIN(rank) to find the strongest.
 	rows, err := h.db.QueryContext(r.Context(), h.db.Rebind(`
 		SELECT u.id,
 		       u.username,
 		       COALESCE(NULLIF(u.full_name,''), '') AS full_name,
-		       MIN(src.role) AS role
+		       CASE MIN(CASE src.role WHEN 'owner' THEN 0 WHEN 'edit' THEN 1 ELSE 2 END)
+		         WHEN 0 THEN 'owner'
+		         WHEN 1 THEN 'edit'
+		         ELSE 'view'
+		       END AS role
 		FROM (
 		  SELECT p.owner_id AS uid, 'owner' AS role
 		  FROM planners p
@@ -59,7 +64,7 @@ func (h *Handler) Members(w http.ResponseWriter, r *http.Request) {
 		) src
 		JOIN users u ON u.id = src.uid
 		GROUP BY u.id, u.username, u.full_name
-		ORDER BY MIN(CASE WHEN src.role = 'owner' THEN 0 ELSE 1 END), u.username
+		ORDER BY MIN(CASE src.role WHEN 'owner' THEN 0 WHEN 'edit' THEN 1 ELSE 2 END), u.username
 	`), plannerID, plannerID, plannerID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "Internal server error")

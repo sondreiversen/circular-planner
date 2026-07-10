@@ -90,12 +90,17 @@ export class Planner {
     this.dataManager.on('error', () => this.setSaveBadge('error'));
     this.dataManager.on('conflict', () => {
       this.setSaveBadge('error');
-      toast.error('Planner was modified elsewhere — reload?', { duration: 0 });
+      const toastEl = toast.error('Planner was modified elsewhere — reload?', { duration: 0 });
       // Make the toast clickable to reload
-      const toastEl = document.querySelector('.cp-toast-error') as HTMLElement | null;
-      if (toastEl) {
-        toastEl.style.cursor = 'pointer';
-        toastEl.addEventListener('click', () => location.reload(), { once: true });
+      toastEl.style.cursor = 'pointer';
+      toastEl.addEventListener('click', () => location.reload(), { once: true });
+    });
+
+    // Warn before closing/navigating away with unsaved or in-flight changes.
+    window.addEventListener('beforeunload', (e: BeforeUnloadEvent) => {
+      if (this.dataManager.isDirty()) {
+        e.preventDefault();
+        e.returnValue = '';
       }
     });
 
@@ -2036,8 +2041,10 @@ export class Planner {
 
     if (state === 'saving') {
       this.saveBadgeEl.textContent = 'Saving\u2026';
+      this.saveBadgeEl.onclick = null;
     } else if (state === 'saved') {
       this.saveBadgeEl.textContent = 'Saved \u2713';
+      this.saveBadgeEl.onclick = null;
       this.saveFadeTimer = setTimeout(() => {
         if (this.saveBadgeEl) this.saveBadgeEl.className = 'cp-save-badge cp-save-badge--idle';
         this.saveFadeTimer = null;

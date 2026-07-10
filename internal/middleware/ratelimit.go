@@ -99,16 +99,18 @@ func startJanitor() {
 }
 
 // clientIP extracts the client IP from r.RemoteAddr, optionally honouring
-// the leftmost X-Forwarded-For entry when trustProxy is set. Returns the
+// the rightmost X-Forwarded-For entry when trustProxy is set. Returns the
 // IP without port — handles IPv6 (where r.RemoteAddr is "[::1]:1234").
+//
+// The rightmost entry is the one appended by our own (trusted) reverse
+// proxy; every entry to its left is client-supplied request-header data and
+// can be freely spoofed — a client that sends a fresh fake value on every
+// request would otherwise dodge the limiter entirely.
 func clientIP(r *http.Request, trustProxy bool) string {
 	if trustProxy {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// Take the leftmost (original client) hop.
-			if comma := strings.IndexByte(xff, ','); comma >= 0 {
-				xff = xff[:comma]
-			}
-			if ip := strings.TrimSpace(xff); ip != "" {
+			parts := strings.Split(xff, ",")
+			if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
 				return ip
 			}
 		}

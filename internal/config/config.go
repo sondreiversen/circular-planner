@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type GitLab struct {
@@ -22,6 +23,7 @@ type Config struct {
 	TLSKeyFile    string
 	ForceHTTPS        bool
 	TrustProxy        bool
+	CookieSecure      string // "auto" (default), "true", or "false"
 	AllowRegistration bool
 	DatabaseURL       string
 	JWTSecret     string
@@ -38,6 +40,9 @@ func Load() *Config {
 	if len(jwtSecret) < 32 {
 		log.Fatal("FATAL: JWT_SECRET must be set to a random string of at least 32 characters — generate one with: openssl rand -hex 32")
 	}
+	if isPlaceholderSecret(jwtSecret) {
+		log.Fatal("FATAL: JWT_SECRET is set to a known placeholder or low-entropy value — generate a real random secret with: openssl rand -hex 32")
+	}
 	allowedOrigin := env("ALLOWED_ORIGIN", "http://localhost:3000")
 
 	dataDir := env("DATA_DIR", "./data")
@@ -51,6 +56,10 @@ func Load() *Config {
 		forceHTTPS = false
 	}
 	trustProxy := os.Getenv("TRUST_PROXY") == "true"
+	cookieSecure := strings.ToLower(strings.TrimSpace(env("COOKIE_SECURE", "auto")))
+	if cookieSecure != "true" && cookieSecure != "false" {
+		cookieSecure = "auto"
+	}
 	allowRegistration := os.Getenv("ALLOW_REGISTRATION") != "false"
 
 	// GitLab SSO validation: when enabled all four vars are required.
@@ -76,6 +85,7 @@ func Load() *Config {
 		TLSKeyFile:    env("TLS_KEY_FILE", ""),
 		ForceHTTPS:        forceHTTPS,
 		TrustProxy:        trustProxy,
+		CookieSecure:      cookieSecure,
 		AllowRegistration: allowRegistration,
 		DatabaseURL:       dbURL,
 		JWTSecret:     jwtSecret,
@@ -112,4 +122,35 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// placeholderSecrets are known example/placeholder values that must never be
+// used as a real JWT_SECRET (e.g. copied verbatim from .env.example).
+var placeholderSecrets = map[string]bool{
+	"change-this-to-a-long-random-string": true,
+	"your-secret-here":                    true,
+	"your-secret-here-please-change":      true,
+	"changeme":                            true,
+	"change-me":                           true,
+	"insecure-default-secret":             true,
+	"replace-me-with-a-random-string":     true,
+}
+
+// isPlaceholderSecret rejects known placeholder strings (case-insensitive)
+// and any secret made up of a single repeated character (e.g. "aaaa...").
+func isPlaceholderSecret(s string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(s))
+	if placeholderSecrets[trimmed] {
+		return true
+	}
+	if len(trimmed) == 0 {
+		return false
+	}
+	first := trimmed[0]
+	for i := 1; i < len(trimmed); i++ {
+		if trimmed[i] != first {
+			return false
+		}
+	}
+	return true
 }

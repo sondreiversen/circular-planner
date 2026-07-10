@@ -9,6 +9,12 @@ export class DataManager {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private lastKnownUpdatedAt: string | null = null;
   private listeners: Map<SaveEvent, SaveHandler[]> = new Map();
+  /** True while a PUT is in flight */
+  private saving = false;
+  /** Latest data queued while a save is already in flight; run once the current save completes */
+  private pendingData: PlannerData | null = null;
+  /** True whenever there is unsaved (or unconfirmed-saved) local data */
+  private dirty = false;
 
   constructor(config: PlannerConfig) {
     this.config = config;
@@ -31,8 +37,21 @@ export class DataManager {
 
   /** Debounced save — waits 800ms after last call before sending */
   scheduleSave(data: PlannerData): void {
+    this.dirty = true;
     if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => this.save(data), 800);
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      this.save(data);
+    }, 800);
+  }
+
+  /**
+   * True if there is local state that is not confirmed saved on the server:
+   * a debounce timer is pending, a PUT is currently in flight, or the last
+   * attempted save has not yet succeeded.
+   */
+  isDirty(): boolean {
+    return this.dirty || this.saving || this.saveTimer !== null;
   }
 
   /** Serialise PlannerData for the wire: strip client-only fields, convert taggedUsers → taggedUserIds + taggedUsernames */
@@ -53,11 +72,28 @@ export class DataManager {
     }));
   }
 
+  /**
+   * Save the given data. If a save is already in flight, the data is stashed
+   * as `pendingData` and a single follow-up save runs automatically once the
+   * in-flight PUT completes (looping until no data is left pending) — this
+   * prevents two overlapping PUTs from racing on `lastKnownUpdatedAt` and
+   * triggering spurious 409s.
+   */
   async save(data: PlannerData): Promise<void> {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
+    this.dirty = true;
+    if (this.saving) {
+      this.pendingData = data;
+      return;
+    }
+    await this.performSave(data);
+  }
+
+  private async performSave(data: PlannerData): Promise<void> {
+    this.saving = true;
     this.emit('saving');
     try {
       const body: Record<string, unknown> = { lanes: this.serialiseLanes(data) };
@@ -72,6 +108,10 @@ export class DataManager {
         this.lastKnownUpdatedAt = result.updated_at;
       }
       this.emit('saved');
+      // Only clear dirty if nothing newer arrived while this PUT was in flight
+      if (!this.pendingData) {
+        this.dirty = false;
+      }
     } catch (e: unknown) {
       // api-client throws with the server error message; check for conflict
       const msg = e instanceof Error ? e.message : String(e);
@@ -81,6 +121,13 @@ export class DataManager {
         this.emit('error');
       }
       console.error('CircularPlanner: failed to save', e);
+    } finally {
+      this.saving = false;
+      if (this.pendingData) {
+        const next = this.pendingData;
+        this.pendingData = null;
+        await this.performSave(next);
+      }
     }
   }
 }

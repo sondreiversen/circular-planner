@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"planner/internal/middleware"
+	"planner/internal/planners"
 	"planner/internal/testutil"
 )
 
@@ -594,5 +597,178 @@ func TestDuplicate(t *testing.T) {
 		map[string]any{"offsetYears": 0, "offsetMonths": 0, "offsetDays": 0, "titleSuffix": " same dates"})
 	if resp.StatusCode != 201 {
 		t.Errorf("zero-offset with suffix: got %d, want 201 (body: %s)", resp.StatusCode, raw)
+	}
+}
+
+// TestGetPlannerPermissionField verifies GET /api/planners/{id} reports the
+// caller's *actual* access level ("owner"/"edit"/"view") rather than always
+// reporting "edit" for non-owners. A view-only sharee must see "view" so the
+// client's read-only mode activates.
+func TestGetPlannerPermissionField(t *testing.T) {
+	srv, _, _ := testutil.NewServer(t)
+
+	ownerTok := registerHelper(t, srv.URL, "permowner", "permowner@example.com", "hunter2hunter2")
+	editTok := registerHelper(t, srv.URL, "permeditor", "permeditor@example.com", "hunter2hunter2")
+	viewTok := registerHelper(t, srv.URL, "permviewer", "permviewer@example.com", "hunter2hunter2")
+
+	resp, raw := do(t, "POST", srv.URL+"/api/planners", ownerTok,
+		map[string]string{"title": "PermTest", "startDate": "2026-01-01", "endDate": "2026-12-31"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create: %d %s", resp.StatusCode, raw)
+	}
+	var created struct{ ID int }
+	json.Unmarshal(raw, &created)
+
+	// Share edit access with permeditor.
+	resp, raw = do(t, "POST", fmt.Sprintf("%s/api/planners/%d/shares", srv.URL, created.ID), ownerTok,
+		map[string]any{"email": "permeditor@example.com", "permission": "edit"})
+	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		t.Fatalf("share edit: %d %s", resp.StatusCode, raw)
+	}
+	// Share view access with permviewer.
+	resp, raw = do(t, "POST", fmt.Sprintf("%s/api/planners/%d/shares", srv.URL, created.ID), ownerTok,
+		map[string]any{"email": "permviewer@example.com", "permission": "view"})
+	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		t.Fatalf("share view: %d %s", resp.StatusCode, raw)
+	}
+
+	type getResp struct {
+		Config struct {
+			Permission string `json:"permission"`
+			IsOwner    bool   `json:"isOwner"`
+		} `json:"config"`
+	}
+
+	// Owner sees "owner".
+	resp, raw = do(t, "GET", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), ownerTok, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("owner GET: %d %s", resp.StatusCode, raw)
+	}
+	var ownerOut getResp
+	json.Unmarshal(raw, &ownerOut)
+	if ownerOut.Config.Permission != "owner" {
+		t.Errorf("owner permission: got %q, want %q", ownerOut.Config.Permission, "owner")
+	}
+	if !ownerOut.Config.IsOwner {
+		t.Error("owner isOwner: got false, want true")
+	}
+
+	// Edit sharee sees "edit".
+	resp, raw = do(t, "GET", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), editTok, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("editor GET: %d %s", resp.StatusCode, raw)
+	}
+	var editOut getResp
+	json.Unmarshal(raw, &editOut)
+	if editOut.Config.Permission != "edit" {
+		t.Errorf("editor permission: got %q, want %q", editOut.Config.Permission, "edit")
+	}
+
+	// View sharee sees "view" — this is the regression this test guards: the
+	// handler used to hardcode "edit" for any non-owner.
+	resp, raw = do(t, "GET", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), viewTok, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("viewer GET: %d %s", resp.StatusCode, raw)
+	}
+	var viewOut getResp
+	json.Unmarshal(raw, &viewOut)
+	if viewOut.Config.Permission != "view" {
+		t.Errorf("viewer permission: got %q, want %q", viewOut.Config.Permission, "view")
+	}
+	if viewOut.Config.IsOwner {
+		t.Error("viewer isOwner: got true, want false")
+	}
+}
+
+// TestViewShareCannotPUT verifies that a view-only sharee is rejected with
+// 403 when attempting to PUT (edit) a planner.
+func TestViewShareCannotPUT(t *testing.T) {
+	srv, _, _ := testutil.NewServer(t)
+
+	ownerTok := registerHelper(t, srv.URL, "vwowner", "vwowner@example.com", "hunter2hunter2")
+	viewTok := registerHelper(t, srv.URL, "vwviewer", "vwviewer@example.com", "hunter2hunter2")
+
+	resp, raw := do(t, "POST", srv.URL+"/api/planners", ownerTok,
+		map[string]string{"title": "ViewOnly", "startDate": "2026-01-01", "endDate": "2026-12-31"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create: %d %s", resp.StatusCode, raw)
+	}
+	var created struct{ ID int }
+	json.Unmarshal(raw, &created)
+
+	resp, raw = do(t, "POST", fmt.Sprintf("%s/api/planners/%d/shares", srv.URL, created.ID), ownerTok,
+		map[string]any{"email": "vwviewer@example.com", "permission": "view"})
+	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		t.Fatalf("share view: %d %s", resp.StatusCode, raw)
+	}
+
+	resp, raw = do(t, "PUT", fmt.Sprintf("%s/api/planners/%d", srv.URL, created.ID), viewTok, map[string]any{
+		"title": "Hacked",
+	})
+	if resp.StatusCode != 403 {
+		t.Errorf("view-share PUT: got %d, want 403 (body: %s)", resp.StatusCode, raw)
+	}
+}
+
+// TestMembersRoleDedupOwnerWithRedundantEditShare verifies that the
+// /members endpoint's role de-duplication picks the *strongest* access level
+// per user. Previously it used MIN(role) on the raw string, and because
+// 'edit' < 'owner' < 'view' lexicographically, an owner who also held a
+// redundant direct edit-share would be mislabeled "edit" instead of "owner".
+//
+// The share API refuses self-shares, so the redundant row is inserted
+// directly via the DB (same trick a stale/imported dataset could produce).
+// The shared testutil server doesn't wire up the /members route (that's
+// main.go's job), so this test stands up a second minimal server around the
+// same DB/config purely to exercise planners.Handler.Members.
+func TestMembersRoleDedupOwnerWithRedundantEditShare(t *testing.T) {
+	srv, cfg, database := testutil.NewServer(t)
+
+	ownerTok := registerHelper(t, srv.URL, "mowner", "mowner@example.com", "hunter2hunter2")
+	ownerID := getUserID(t, srv.URL, ownerTok)
+
+	resp, raw := do(t, "POST", srv.URL+"/api/planners", ownerTok,
+		map[string]string{"title": "MembersTest", "startDate": "2026-01-01", "endDate": "2026-12-31"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create: %d %s", resp.StatusCode, raw)
+	}
+	var created struct{ ID int }
+	json.Unmarshal(raw, &created)
+
+	// Insert a redundant direct edit-share for the owner, bypassing the API's
+	// "cannot share with yourself" guard.
+	if _, err := database.Exec(
+		database.Rebind("INSERT INTO planner_shares(planner_id, user_id, permission) VALUES (?, ?, ?)"),
+		created.ID, ownerID, "edit",
+	); err != nil {
+		t.Fatalf("insert redundant share: %v", err)
+	}
+
+	planH := planners.NewHandler(database, cfg)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/planners/{id}/members", middleware.RequireAuth(cfg, database, planH.Members))
+	membersSrv := httptest.NewServer(mux)
+	defer membersSrv.Close()
+
+	resp, raw = do(t, "GET", fmt.Sprintf("%s/api/planners/%d/members", membersSrv.URL, created.ID), ownerTok, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("members: %d %s", resp.StatusCode, raw)
+	}
+
+	var members []struct {
+		ID   int    `json:"id"`
+		Role string `json:"role"`
+	}
+	if err := json.Unmarshal(raw, &members); err != nil {
+		t.Fatalf("unmarshal members: %v (body: %s)", err, raw)
+	}
+	if len(members) != 1 {
+		t.Fatalf("members: got %d entries, want 1 (body: %s)", len(members), raw)
+	}
+	if members[0].ID != ownerID {
+		t.Fatalf("members[0].ID: got %d, want %d", members[0].ID, ownerID)
+	}
+	if members[0].Role != "owner" {
+		t.Errorf("owner-with-redundant-edit-share role: got %q, want %q", members[0].Role, "owner")
 	}
 }

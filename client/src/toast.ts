@@ -19,14 +19,21 @@ function getRoot(): HTMLElement {
   return root;
 }
 
-function show(type: ToastType, message: string, opts?: ToastOptions): void {
+function show(type: ToastType, message: string, opts?: ToastOptions): HTMLElement {
   const root = getRoot();
   const el = document.createElement('div');
   el.className = `cp-toast cp-toast-${type}`;
   el.setAttribute('role', 'alert');
 
   const icon = type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ';
-  el.innerHTML = `<span class="cp-toast-icon">${icon}</span><span class="cp-toast-msg">${message}</span>`;
+  const iconEl = document.createElement('span');
+  iconEl.className = 'cp-toast-icon';
+  iconEl.textContent = icon;
+  const msgEl = document.createElement('span');
+  msgEl.className = 'cp-toast-msg';
+  msgEl.textContent = message;
+  el.appendChild(iconEl);
+  el.appendChild(msgEl);
 
   // Close on click
   el.addEventListener('click', () => dismiss(el));
@@ -40,6 +47,7 @@ function show(type: ToastType, message: string, opts?: ToastOptions): void {
   if (duration > 0) {
     setTimeout(() => dismiss(el), duration);
   }
+  return el;
 }
 
 function dismiss(el: HTMLElement): void {
@@ -48,9 +56,9 @@ function dismiss(el: HTMLElement): void {
 }
 
 export const toast = {
-  info(message: string, opts?: ToastOptions): void { show('info', message, opts); },
-  success(message: string, opts?: ToastOptions): void { show('success', message, opts); },
-  error(message: string, opts?: ToastOptions): void { show('error', message, opts); },
+  info(message: string, opts?: ToastOptions): HTMLElement { return show('info', message, opts); },
+  success(message: string, opts?: ToastOptions): HTMLElement { return show('success', message, opts); },
+  error(message: string, opts?: ToastOptions): HTMLElement { return show('error', message, opts); },
 };
 
 // ============================================================
@@ -63,7 +71,7 @@ function getOfflineBanner(): HTMLElement {
   if (!offlineBanner) {
     offlineBanner = document.createElement('div');
     offlineBanner.id = 'offline-banner';
-    offlineBanner.textContent = "You're offline — changes will be saved when you reconnect.";
+    offlineBanner.textContent = "You're offline — changes won't be saved until you reconnect.";
     offlineBanner.setAttribute('role', 'status');
     document.body.insertBefore(offlineBanner, document.body.firstChild);
   }

@@ -13,7 +13,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/mail"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -37,6 +39,22 @@ func NewHandler(database *db.DB, cfg *config.Config) *Handler {
 
 // --- helpers ---
 
+// usernameRe restricts usernames to a small, predictable charset.
+var usernameRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// dummyBcryptHash is compared against on every failed login lookup (unknown
+// user or missing password hash) so that response timing doesn't reveal
+// whether a given username/email exists — both paths cost one bcrypt compare.
+var dummyBcryptHash = mustDummyHash()
+
+func mustDummyHash() []byte {
+	h, err := bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing-equalisation"), 12)
+	if err != nil {
+		panic(err)
+	}
+	return h
+}
+
 type claims struct {
 	ID       int    `json:"id"`
 	Username string `json:"username"`
@@ -57,6 +75,21 @@ func (h *Handler) makeToken(id int, username, email string) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString([]byte(h.cfg.JWTSecret))
 }
 
+// cookieSecure reports whether the Secure attribute should be set on
+// cookies we issue. Controlled by COOKIE_SECURE ("auto"|"true"|"false");
+// "auto" (the default) preserves the historical heuristic of TLS being
+// configured directly or a trusted reverse proxy terminating TLS for us.
+func (h *Handler) cookieSecure() bool {
+	switch h.cfg.CookieSecure {
+	case "true":
+		return true
+	case "false":
+		return false
+	default:
+		return h.cfg.TLSCertFile != "" || h.cfg.TrustProxy
+	}
+}
+
 // setSessionCookie writes the cp_token HttpOnly session cookie (7-day TTL).
 func (h *Handler) setSessionCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
@@ -64,7 +97,7 @@ func (h *Handler) setSessionCookie(w http.ResponseWriter, token string) {
 		Value:    token,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   h.cfg.TLSCertFile != "" || h.cfg.TrustProxy,
+		Secure:   h.cookieSecure(),
 		Path:     "/",
 		MaxAge:   7 * 24 * 60 * 60,
 	})
@@ -77,7 +110,7 @@ func (h *Handler) clearSessionCookie(w http.ResponseWriter) {
 		Value:    "",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   h.cfg.TLSCertFile != "" || h.cfg.TrustProxy,
+		Secure:   h.cookieSecure(),
 		Path:     "/",
 		MaxAge:   -1,
 	})
@@ -113,12 +146,32 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
+	body.Username = strings.TrimSpace(body.Username)
+	body.Email = strings.TrimSpace(body.Email)
 	if body.Username == "" || body.Email == "" || body.Password == "" {
 		jsonError(w, http.StatusBadRequest, "username, email and password are required")
 		return
 	}
+	if len(body.Username) < 3 || len(body.Username) > 32 || !usernameRe.MatchString(body.Username) {
+		jsonError(w, http.StatusBadRequest, "Username must be 3-32 characters and contain only letters, numbers, dots, underscores, or hyphens")
+		return
+	}
+	if len(body.Email) > 254 {
+		jsonError(w, http.StatusBadRequest, "Email is too long")
+		return
+	}
+	addr, err := mail.ParseAddress(body.Email)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "Invalid email address")
+		return
+	}
+	body.Email = addr.Address
 	if len(body.Password) < 8 {
 		jsonError(w, http.StatusBadRequest, "Password must be at least 8 characters")
+		return
+	}
+	if len([]byte(body.Password)) > 72 {
+		jsonError(w, http.StatusBadRequest, "Password must be at most 72 bytes")
 		return
 	}
 
@@ -205,7 +258,15 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		strings.ToLower(normalised), normalised,
 	).Scan(&id, &username, &email, &hashPtr)
 
-	if err != nil || hashPtr == nil || bcrypt.CompareHashAndPassword([]byte(*hashPtr), []byte(body.Password)) != nil {
+	if err != nil || hashPtr == nil {
+		// No such user (or SSO-only account with no password hash): still run a
+		// bcrypt comparison against a dummy hash so the response time doesn't
+		// disclose whether the account exists.
+		bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(body.Password))
+		jsonError(w, http.StatusUnauthorized, "Invalid credentials")
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(*hashPtr), []byte(body.Password)) != nil {
 		jsonError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
@@ -273,7 +334,7 @@ func (h *Handler) GitLabAuthorize(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600,
-		Secure:   h.cfg.TLSCertFile != "" || h.cfg.TrustProxy,
+		Secure:   h.cookieSecure(),
 		Path:     "/",
 	})
 
@@ -309,7 +370,7 @@ func (h *Handler) GitLabCallback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	http.SetCookie(w, &http.Cookie{Name: "cp_oauth_state", MaxAge: -1, Path: "/"})
+	http.SetCookie(w, &http.Cookie{Name: "cp_oauth_state", MaxAge: -1, Path: "/", Secure: h.cookieSecure(), HttpOnly: true, SameSite: http.SameSiteLaxMode})
 
 	if code == "" || state == "" || state != storedState {
 		http.Error(w, "Invalid OAuth state. Please try signing in again.", http.StatusBadRequest)
@@ -357,11 +418,34 @@ func (h *Handler) upsertGitLabUser(r *http.Request, u *gitlabProfile) (id int, u
 		u.ID,
 	).Scan(&id, &username, &email)
 	if err == nil {
-		// Known user — update email/username
-		err = h.db.QueryRowContext(ctx,
-			h.db.Rebind(`UPDATE users SET gitlab_username = ?, email = ?, full_name = ? WHERE gitlab_id = ? RETURNING id, username, email`),
-			u.Username, u.Email, u.Name, u.ID,
-		).Scan(&id, &username, &email)
+		// Known user — always keep gitlab_username/full_name in sync. Only touch
+		// email when the GitLab profile's email actually differs from what we
+		// have stored, and never let an email collision fail the login: if
+		// another account already owns that email, log a warning and keep the
+		// existing stored email instead of erroring out (UNIQUE constraint).
+		if u.Email != "" && !strings.EqualFold(u.Email, email) {
+			if _, updErr := h.db.ExecContext(ctx,
+				h.db.Rebind("UPDATE users SET email = ? WHERE gitlab_id = ?"),
+				u.Email, u.ID,
+			); updErr != nil {
+				if isDuplicateError(updErr) {
+					log.Printf("gitlab sso: email %q for gitlab_id=%d collides with an existing account; keeping stored email", u.Email, u.ID)
+				} else {
+					log.Printf("gitlab sso: failed to update email for gitlab_id=%d: %v", u.ID, updErr)
+				}
+			} else {
+				email = u.Email
+			}
+		}
+
+		if _, updErr := h.db.ExecContext(ctx,
+			h.db.Rebind("UPDATE users SET gitlab_username = ?, full_name = ? WHERE gitlab_id = ?"),
+			u.Username, u.Name, u.ID,
+		); updErr != nil {
+			err = updErr
+			return
+		}
+		err = nil
 		return
 	}
 
@@ -473,20 +557,24 @@ func randomHex(n int) (string, error) {
 // The current user is excluded from results unless includeSelf=1 is passed.
 func (h *Handler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	if q == "" {
+	if len(q) < 2 {
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
 
 	currentUserID := middleware.UserFrom(r).ID
-	pattern := "%" + strings.ToLower(q) + "%"
+	lowerQ := strings.ToLower(q)
+	likePattern := "%" + escapeLike(lowerQ) + "%"
 	includeSelf := r.URL.Query().Get("includeSelf") == "1"
 
 	// Build WHERE clause: optionally exclude self.
 	// SQLite uses LIKE (case-insensitive for ASCII by default);
 	// Postgres uses ILIKE. Use LOWER() for portability.
-	where := "(LOWER(username) LIKE ? OR LOWER(email) LIKE ? OR LOWER(COALESCE(full_name,'')) LIKE ?)"
-	args := []any{pattern, pattern, pattern}
+	// Username/full name match by substring; email matches only by exact
+	// case-insensitive equality (a substring match on email lets any
+	// authenticated user enumerate other users' addresses).
+	where := "(LOWER(username) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(full_name,'')) LIKE ? ESCAPE '\\' OR LOWER(email) = ?)"
+	args := []any{likePattern, likePattern, lowerQ}
 	if !includeSelf {
 		where = "id != ? AND " + where
 		args = append([]any{currentUserID}, args...)
@@ -511,8 +599,14 @@ func (h *Handler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 	var results []userResult
 	for rows.Next() {
 		var u userResult
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.FullName); err != nil {
+		var email string
+		if err := rows.Scan(&u.ID, &u.Username, &email, &u.FullName); err != nil {
 			continue
+		}
+		// Only surface the email when it's the exact match the caller searched
+		// for — never as a side effect of a username/full-name substring hit.
+		if strings.EqualFold(email, q) {
+			u.Email = email
 		}
 		results = append(results, u)
 	}
@@ -520,6 +614,14 @@ func (h *Handler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 		results = []userResult{}
 	}
 	writeJSON(w, http.StatusOK, results)
+}
+
+// escapeLike escapes LIKE metacharacters (\, %, _) so user-supplied search
+// text is matched literally rather than as a wildcard pattern. Pair with
+// "ESCAPE '\\'" in the SQL.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
 }
 
 // --- GET /api/auth/registration-status ---
