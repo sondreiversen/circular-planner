@@ -15,10 +15,15 @@ export function displayName(user: { fullName?: string | null; username: string }
  * Returns a D3 time scale that maps dates to angles (radians).
  * Uses d3-shape arc convention: 0 = 12 o'clock, increasing clockwise.
  * Full circle = 2*PI.
+ *
+ * `endDate` is treated as the INCLUSIVE last instant of the window (the viewport
+ * convention used throughout the app — see viewport.ts). The scale domain is
+ * extended one day past it so that the inclusive last day gets a full day's
+ * worth of angular width instead of collapsing to zero width at the boundary.
  */
 export function createAngleScale(startDate: Date, endDate: Date) {
   return scaleTime()
-    .domain([startDate, endDate])
+    .domain([startDate, addDays(endDate, 1)])
     .range([0, 2 * Math.PI]);
 }
 

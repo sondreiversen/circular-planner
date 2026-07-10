@@ -8,6 +8,12 @@ const MONTHS_FULL = [
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const DAYS_SHORT = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
+// Convention: `Viewport.windowEnd` is always the INCLUSIVE last calendar day of the
+// window (at local midnight) for every zoom level — Year (Dec 31), Quarter, Month,
+// and Week (Mon..Sun) alike. Iteration helpers below (`iterateMonths`, `iterateWeeks`,
+// `iterateDays`) and `createAngleScale` (utils.ts) both assume this and treat `end`
+// as inclusive.
+
 /** Abbreviated year suffix, e.g. "'26" */
 function yearSuffix(d: Date): string {
   return `'${String(d.getFullYear()).slice(-2)}`;
@@ -39,16 +45,19 @@ function viewportForLevel(center: Date, level: ZoomLevel, _config: PlannerConfig
       end = new Date(center.getFullYear(), 11, 31);
       break;
     case ZoomLevel.Quarter:
+      // Inclusive last day of the quarter (see module-level convention note above navigate()).
       start = addMonths(getMonthStart(center), -1);
-      end = addMonths(start, 3);
+      end = addDays(addMonths(start, 3), -1);
       break;
     case ZoomLevel.Month:
+      // Inclusive last day of the month.
       start = getMonthStart(center);
-      end = addMonths(start, 1);
+      end = addDays(addMonths(start, 1), -1);
       break;
     case ZoomLevel.Week:
+      // Inclusive Sunday (Mon..Sun).
       start = getMonday(center);
-      end = addDays(start, 7);
+      end = addDays(start, 6);
       break;
   }
 
@@ -275,13 +284,15 @@ export function navigateToToday(zoomLevel: ZoomLevel, config: PlannerConfig): Vi
 // ==================== Iteration helpers ====================
 
 function iterateMonths(start: Date, end: Date, cb: (d: Date) => void): void {
+  // `end` is the inclusive last day of the window (see convention note above), so a
+  // month-start cursor that exceeds `end` is genuinely past the window — no trailing
+  // emit is needed (unlike the old exclusive-end convention this replaced).
   const d = getMonthStart(start);
   const cursor = new Date(d.getTime());
   while (cursor <= end) {
     if (cursor >= start) cb(new Date(cursor.getTime()));
     cursor.setMonth(cursor.getMonth() + 1);
   }
-  if (cursor <= addMonths(end, 1)) cb(new Date(cursor.getTime()));
 }
 
 function iterateWeeks(start: Date, end: Date, cb: (d: Date) => void): void {
@@ -293,16 +304,29 @@ function iterateWeeks(start: Date, end: Date, cb: (d: Date) => void): void {
 }
 
 function iterateDays(start: Date, end: Date, cb: (d: Date) => void): void {
+  // Inclusive of `end` — `end` is the last calendar day of the window, not an
+  // exclusive boundary, so it must be emitted too (e.g. Week's Sunday, Month's
+  // last day-of-month).
   let cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-  while (cursor < end) {
+  while (cursor <= end) {
     cb(new Date(cursor.getTime()));
     cursor = addDays(cursor, 1);
   }
 }
 
-function getWeekNumber(d: Date): number {
-  const jan1 = new Date(d.getFullYear(), 0, 1);
-  const diffMs = d.getTime() - jan1.getTime();
-  const dayOfYear = Math.floor(diffMs / (24 * 60 * 60 * 1000));
-  return Math.ceil((dayOfYear + jan1.getDay() + 1) / 7);
+/** Standard ISO-8601 week number (Thursday-based; week 1 contains the year's first Thursday). */
+export function getWeekNumber(d: Date): number {
+  // Normalize to local midnight and shift to the Thursday of this ISO week.
+  const date = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const isoDay = (date.getDay() + 6) % 7; // Mon=0..Sun=6
+  date.setDate(date.getDate() - isoDay + 3);
+
+  // The Thursday of week 1 is the Thursday in the same ISO year as `date`, computed
+  // from Jan 4 (which is always in week 1 by definition).
+  const jan4 = new Date(date.getFullYear(), 0, 4);
+  const jan4IsoDay = (jan4.getDay() + 6) % 7;
+  const week1Thursday = new Date(jan4.getFullYear(), 0, 4 - jan4IsoDay + 3);
+
+  const weekMs = 7 * 24 * 60 * 60 * 1000;
+  return 1 + Math.round((date.getTime() - week1Thursday.getTime()) / weekMs);
 }

@@ -1,7 +1,7 @@
 import { select, Selection } from 'd3-selection';
 import 'd3-transition'; // extends Selection with .transition()
 import { arc as d3Arc } from 'd3-shape';
-import { createAngleScale, parseDate, formatDate, xyToAngle, FONT_FAMILY, expandOccurrences, ColorBy, colorForString, withAlpha, STATUS_COLORS } from './utils';
+import { createAngleScale, parseDate, formatDate, xyToAngle, FONT_FAMILY, expandOccurrences, ColorBy, colorForString, withAlpha, STATUS_COLORS, addDays } from './utils';
 import { PlannerConfig, PlannerData, Lane, Activity, DiscGeometry, Viewport, ZoomLevel, GridSpec, FilterState } from './types';
 import { getGridSpec, viewportLabel } from './viewport';
 
@@ -703,8 +703,10 @@ export class Renderer {
   ): void {
     if (endDate < this.viewport.windowStart || startDate > this.viewport.windowEnd) return;
 
+    // endDate is the activity's INCLUSIVE last day; advance one day so its arc
+    // spans the full width of that day instead of collapsing to zero at its start.
     let startAngle = this.angleScale(startDate);
-    let endAngle   = this.angleScale(endDate);
+    let endAngle   = this.angleScale(addDays(endDate, 1));
 
     startAngle = Math.max(startAngle, MIN_ANGLE);
     endAngle = Math.min(endAngle, MAX_ANGLE);
@@ -751,8 +753,11 @@ export class Renderer {
 
     // Base fill arc
     const fillColor = this.fillFor(activity, lane ?? { id: '', name: '', color: '', order: 0, activities: [] });
+    // Note: RecurrenceType has no 'none' variant — the absence of recurrence is
+    // represented by `recurrence` being null/undefined, so a plain falsy check
+    // is both correct and avoids a type error comparing RecurrenceType to 'none'.
     const isDraggable = !activity.isMilestone &&
-      !(activity.recurrence && activity.recurrence.type !== 'none') &&
+      !activity.recurrence &&
       this.onDragCommit !== null &&
       this.config.permission !== 'view';
 
@@ -916,7 +921,11 @@ export class Renderer {
 
   private renderTodayIndicator(g: Selection<SVGGElement, unknown, null, undefined>): void {
     const today = new Date();
-    if (today < this.viewport.windowStart || today > this.viewport.windowEnd) return;
+    // windowEnd is local midnight of the INCLUSIVE last day; compare against the
+    // start of the following day so "today" still shows while it IS that last day
+    // (today always carries a nonzero time-of-day, so a plain `<= windowEnd` would
+    // wrongly hide the indicator for the entire last day of the window).
+    if (today < this.viewport.windowStart || today >= addDays(this.viewport.windowEnd, 1)) return;
 
     const todayColor = this.cssVar('--cp-today', '#f44336');
     const angle = this.angleScale(today);
@@ -1091,7 +1100,7 @@ export class Renderer {
       newStart = candidateStart;
       newEnd = candidateEnd;
       newStartAngle = this.angleScale(newStart);
-      newEndAngle = this.angleScale(newEnd);
+      newEndAngle = this.angleScale(addDays(newEnd, 1));
     } else if (mode === 'resize-start') {
       newEnd = originalEnd;
       const candidateStart = this._angleToDate(this.dragState.accumulatedAngle);
@@ -1107,7 +1116,7 @@ export class Renderer {
       const clampedEnd = candidateEnd > plannerEnd ? plannerEnd : candidateEnd;
       newEnd = clampedEnd < minEnd ? minEnd : clampedEnd;
       newStartAngle = arcStartAngle;
-      newEndAngle = this.angleScale(newEnd);
+      newEndAngle = this.angleScale(addDays(newEnd, 1));
     }
 
     this.dragState.currentNewStart = newStart;

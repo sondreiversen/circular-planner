@@ -8,6 +8,7 @@ import {
   getMonthStart,
   xyToAngle,
   randomId,
+  createAngleScale,
 } from '../utils';
 
 describe('escapeHtml', () => {
@@ -57,6 +58,42 @@ describe('xyToAngle', () => {
   });
   test('9 o\'clock ≈ 3π/2', () => {
     expect(xyToAngle(-1, 0)).toBeCloseTo((3 * Math.PI) / 2);
+  });
+});
+
+describe('createAngleScale', () => {
+  // Viewport convention: windowEnd is the INCLUSIVE last day (Dec 31), so the scale
+  // domain must extend one day past it for a full calendar year to map to a full circle.
+  const windowStart = parseDate('2026-01-01');
+  const windowEnd = parseDate('2026-12-31'); // inclusive
+
+  test('windowStart maps to angle 0', () => {
+    const scale = createAngleScale(windowStart, windowEnd);
+    expect(scale(windowStart)).toBeCloseTo(0);
+  });
+
+  test('domain end (windowEnd + 1 day = Jan 1 next year) maps to a full circle (2π)', () => {
+    const scale = createAngleScale(windowStart, windowEnd);
+    expect(scale(addDays(windowEnd, 1))).toBeCloseTo(2 * Math.PI);
+  });
+
+  test('a Dec 31 (windowEnd) single-day activity has positive angular width', () => {
+    const scale = createAngleScale(windowStart, windowEnd);
+    const startAngle = scale(windowEnd);
+    const endAngle = scale(addDays(windowEnd, 1)); // inclusive-end rendering convention
+    expect(endAngle).toBeGreaterThan(startAngle);
+    expect(endAngle).toBeCloseTo(2 * Math.PI);
+  });
+
+  test('a Jan 1 single-day activity has width without relying on MIN_ARC_SPAN', () => {
+    const scale = createAngleScale(windowStart, windowEnd);
+    const startAngle = scale(windowStart);
+    const endAngle = scale(addDays(windowStart, 1));
+    const oneDayWidth = (2 * Math.PI) / 365; // 2026 is not a leap year
+    expect(endAngle - startAngle).toBeCloseTo(oneDayWidth, 5);
+    // renderer.ts's MIN_ARC_SPAN (~0.012 rad) is a fallback for degenerate cases;
+    // a real single day of a 365-day year should comfortably exceed it on its own.
+    expect(endAngle - startAngle).toBeGreaterThan(0.012);
   });
 });
 
