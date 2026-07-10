@@ -498,8 +498,9 @@ function renderGroups(groups: GroupSummary[]): void {
 
 function bindGlobalSearch(): void {
   const input = document.getElementById('global-search-input') as HTMLInputElement | null;
-  const resultsEl = document.getElementById('global-search-results') as HTMLElement | null;
-  if (!input || !resultsEl) return;
+  const resultsElRaw = document.getElementById('global-search-results') as HTMLElement | null;
+  if (!input || !resultsElRaw) return;
+  const resultsEl: HTMLElement = resultsElRaw;
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 

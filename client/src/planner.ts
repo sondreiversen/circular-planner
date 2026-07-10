@@ -674,7 +674,7 @@ export class Planner {
         const rect = laneRow.getBoundingClientRect();
         const above = e.clientY < rect.top + rect.height / 2;
         const rows = lanesContent.querySelectorAll<HTMLElement>('.cp-sidebar-lane-row');
-        const targetIndex = [...rows].indexOf(laneRow);
+        const targetIndex = Array.from(rows).indexOf(laneRow);
         const dropIndex = above ? targetIndex : targetIndex + 1;
         this.handleReorderLane(dragSrcId, dropIndex);
       });
@@ -1781,7 +1781,7 @@ export class Planner {
     const firstLane = this.data.lanes.find(l => !this.filterState.hiddenLaneIds.has(l.id)) ?? this.data.lanes[0];
     if (!firstLane) { this.handleAddLane(); return; }
     const today = new Date();
-    const inViewport = today >= this.viewport.windowStart && today <= this.viewport.windowEnd;
+    const inViewport = today >= this.viewport.windowStart && today < addDays(this.viewport.windowEnd, 1);
     const seedDate = inViewport
       ? today
       : new Date((this.viewport.windowStart.getTime() + this.viewport.windowEnd.getTime()) / 2);
@@ -1792,7 +1792,7 @@ export class Planner {
     this.lastSelectedActivity = activity;
     // Find the base activity (occurrences share the base's id).
     const base = this.data.lanes.flatMap(l => l.activities).find(a => a.id === activity.id) ?? activity;
-    const isRecurring = !!base.recurrence && base.recurrence.type !== 'none';
+    const isRecurring = !!base.recurrence;
     const occurrenceDate = isRecurring ? activity.startDate : undefined;
     showActivityDialog(base.laneId, this.data.lanes, parseDate(base.startDate), base,
       (updated) => this.updateActivity(updated), (id) => this.deleteActivity(id),
