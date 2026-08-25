@@ -100,15 +100,29 @@ export async function exportSVGToPNG(
   filename: string,
   scale = 2,
 ): Promise<void> {
-  // Determine canvas size from the viewBox attribute.
   const vb = svg.viewBox.baseVal;
   const vbWidth  = vb && vb.width  > 0 ? vb.width  : 800;
   const vbHeight = vb && vb.height > 0 ? vb.height : 800;
+  return rasterizeSVGString(serializeSVGWithStyles(svg), vbWidth, vbHeight, filename, scale);
+}
+
+/**
+ * Rasterize an already-serialized SVG string to a PNG download.
+ *
+ * Split out from exportSVGToPNG so the caller can perform serialization inside
+ * a synchronous forced-light-palette window (see Planner.withLightPalette).
+ * The disc's colours are baked into SVG attributes at render time, so the
+ * palette must be correct *before* serialization — it cannot be corrected here.
+ */
+export async function rasterizeSVGString(
+  svgStr: string,
+  vbWidth: number,
+  vbHeight: number,
+  filename: string,
+  scale = 2,
+): Promise<void> {
   const canvasW = vbWidth  * scale;
   const canvasH = vbHeight * scale;
-
-  // 1. Inline computed styles into a clone.
-  const svgStr = serializeSVGWithStyles(svg);
 
   // 2. Build a blob URL from the serialized SVG.
   const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });

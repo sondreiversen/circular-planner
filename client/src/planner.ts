@@ -23,7 +23,7 @@ import { defaultViewport, zoomIn, zoomOut, navigate, canZoomIn, canZoomOut, view
 import { ZoomLevel } from './types';
 import { decode as decodeUrlState, encode as encodeUrlState } from './url-state';
 import { listViews, createView, deleteView, SavedView } from './saved-views';
-import { exportSVGToPNG } from './svg-export';
+import { serializeSVGWithStyles, rasterizeSVGString } from './svg-export';
 import { setClip, getClip, hasClip } from './activity-clipboard';
 import { api } from './api-client';
 
@@ -1194,9 +1194,26 @@ export class Planner {
         const end   = this.config.endDate;
         document.body.setAttribute('data-print-title', `${title} — ${start} to ${end}`);
         document.body.dataset.printView = this.viewMode;
+
+        // Force the light palette for the duration of the print. The @media
+        // print block in circular-planner.css cannot do this on its own — the
+        // disc's colours are baked into SVG attributes at render time, so they
+        // must be re-rendered before the print dialog reads the document.
+        const root = document.documentElement;
+        const previousTheme = root.dataset.theme;
+        const needsRestore = previousTheme === 'dark';
+        if (needsRestore) {
+          root.dataset.theme = 'light';
+          this.renderer.setTheme();
+        }
+
         const cleanup = () => {
           document.body.removeAttribute('data-print-title');
           delete document.body.dataset.printView;
+          if (needsRestore) {
+            root.dataset.theme = previousTheme as string;
+            this.renderer.setTheme();
+          }
           window.removeEventListener('afterprint', cleanup);
         };
         window.addEventListener('afterprint', cleanup);
@@ -1214,7 +1231,14 @@ export class Planner {
           const slug = (s: string) =>
             s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'planner';
           const filename = `${slug(this.config.title)}-${formatDate(new Date())}.png`;
-          exportSVGToPNG(this.renderer.getSVGNode(), filename).catch((err) => {
+          const node = this.renderer.getSVGNode();
+          const vb = node.viewBox.baseVal;
+          const vbW = vb && vb.width  > 0 ? vb.width  : 800;
+          const vbH = vb && vb.height > 0 ? vb.height : 800;
+          // Serialize inside the light-palette window — colours are baked into
+          // SVG attributes at render time and cannot be corrected afterwards.
+          const svgStr = this.withLightPalette(() => serializeSVGWithStyles(node));
+          rasterizeSVGString(svgStr, vbW, vbH, filename).catch((err) => {
             console.error('PNG export failed:', err);
             const msg = err instanceof Error && err.message ? err.message : String(err);
             toast.error(`PNG export failed: ${msg}`);
@@ -2051,6 +2075,37 @@ export class Planner {
   /** Called when the global theme changes — re-renders the SVG with new CSS var values. */
   onThemeChange(): void {
     this.renderer.setTheme();
+  }
+
+  /**
+   * Run `fn` with the disc re-rendered against the light palette, then restore.
+   *
+   * Why this exists: renderDefs() reads the CSS custom properties through
+   * getComputedStyle at render time and bakes the results into `stop-color`
+   * and `fill` *attributes* (18 cssVar reads in renderer.ts). A CSS override —
+   * including the `@media print` block in circular-planner.css — cannot
+   * retroactively change an attribute that was already serialized. So a dark
+   * session produced dark PNGs, dark SVGs and dark printouts, and the print
+   * CSS never had any effect on the disc at all.
+   *
+   * Everything here is synchronous, so the browser never paints the
+   * intermediate light state and the user sees no flash. It deliberately sets
+   * the dataset attribute directly rather than calling applyTheme(), which
+   * would persist the change to localStorage and fire a theme-change event.
+   */
+  withLightPalette<T>(fn: () => T): T {
+    const root = document.documentElement;
+    const previous = root.dataset.theme;
+    if (previous === 'light' || previous === undefined) return fn();
+
+    root.dataset.theme = 'light';
+    this.renderer.setTheme();
+    try {
+      return fn();
+    } finally {
+      root.dataset.theme = previous;
+      this.renderer.setTheme();
+    }
   }
 
   /** Open the activity dialog for the given activity (used by hash-based deep links). */
