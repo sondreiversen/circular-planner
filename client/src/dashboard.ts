@@ -4,6 +4,7 @@ import { PlannerSummary } from './types';
 import { initTheme, applyTheme, currentTheme } from './theme';
 import { applyBranding } from './branding';
 import { installOfflineBanner, installGlobalErrorHandlers } from './toast';
+import { now } from './clock';
 installOfflineBanner();
 installGlobalErrorHandlers();
 
@@ -33,7 +34,7 @@ interface AuthMe {
 
 initTheme();
 
-const today = new Date();
+const today = now();
 const thisYear = today.getFullYear();
 
 // Tracks whether the current user is an admin (populated on DOMContentLoaded)

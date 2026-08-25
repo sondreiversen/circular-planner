@@ -118,7 +118,7 @@ export function installGlobalErrorHandlers(): void {
       line: lineno ?? null,
       col: colno ?? null,
       ua: navigator.userAgent,
-      ts: new Date().toISOString(),
+      ts: new Date().toISOString(), // clock-exempt: real log timestamp
     });
     toast.error('Something went wrong — the error was reported.');
     return false; // don't suppress default handling
@@ -135,7 +135,7 @@ export function installGlobalErrorHandlers(): void {
       line: null,
       col: null,
       ua: navigator.userAgent,
-      ts: new Date().toISOString(),
+      ts: new Date().toISOString(), // clock-exempt: real log timestamp
     });
     toast.error('Something went wrong — the error was reported.');
   });

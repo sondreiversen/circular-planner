@@ -2,6 +2,7 @@ import { PlannerData, Activity, Viewport, FilterState, Lane, PlannerConfig } fro
 import { parseDate, formatDate } from './utils';
 import { getGridSpec } from './viewport';
 import { attachLinearDrag } from './pointer-drag';
+import { now } from './clock';
 
 export type ClickActivityHandler = (activity: Activity) => void;
 export type ClickLaneSlotHandler = (laneId: string, date: Date) => void;
@@ -191,7 +192,7 @@ export class ListRenderer {
       });
 
       // Today marker
-      const today = new Date();
+      const today = now();
       if (today >= this.viewport.windowStart && today <= this.viewport.windowEnd) {
         const t = document.createElement('div');
         t.className = 'cp-list-today';

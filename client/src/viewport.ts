@@ -1,5 +1,6 @@
 import { PlannerConfig, Viewport, ZoomLevel, GridSpec } from './types';
 import { parseDate, addDays, addMonths, getMonday, getMonthStart, formatDate } from './utils';
+import { now } from './clock';
 
 const MONTHS_FULL = [
   'January','February','March','April','May','June',
@@ -269,7 +270,7 @@ export function navigateToRange(start: Date, end: Date, zoomLevel: ZoomLevel): V
 
 /** Jump to a viewport that includes today, preserving the current zoom level */
 export function navigateToToday(zoomLevel: ZoomLevel, config: PlannerConfig): Viewport {
-  return viewportForLevel(new Date(), zoomLevel, config);
+  return viewportForLevel(now(), zoomLevel, config);
 }
 
 // ==================== Iteration helpers ====================

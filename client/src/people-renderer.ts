@@ -3,6 +3,7 @@ import { parseDate, formatDate, expandOccurrences, displayName } from './utils';
 import { getGridSpec } from './viewport';
 import { api } from './api-client';
 import { attachLinearDrag } from './pointer-drag';
+import { now } from './clock';
 
 export type DragCommitHandler = (activity: Activity, newStart: Date, newEnd: Date, newLaneId: string) => void;
 
@@ -339,7 +340,7 @@ export class PeopleRenderer {
       });
 
       // Today marker
-      const today = new Date();
+      const today = now();
       if (today >= this.viewport.windowStart && today <= this.viewport.windowEnd) {
         const t = document.createElement('div');
         t.className = 'cp-list-today';

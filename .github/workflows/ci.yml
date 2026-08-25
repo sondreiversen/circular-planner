@@ -31,5 +31,6 @@ jobs:
           node-version: '20'
           cache: 'npm'
       - run: npm ci
+      - run: ./scripts/check-clock-usage.sh
       - run: npm run build:client
       - run: npm test

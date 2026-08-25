@@ -24,6 +24,7 @@ import { ZoomLevel } from './types';
 import { decode as decodeUrlState, encode as encodeUrlState } from './url-state';
 import { listViews, createView, deleteView, SavedView } from './saved-views';
 import { serializeSVGWithStyles, rasterizeSVGString } from './svg-export';
+import { now } from './clock';
 import { setClip, getClip, hasClip } from './activity-clipboard';
 import { api } from './api-client';
 
@@ -328,7 +329,11 @@ export class Planner {
         }
         e.preventDefault();
         const src = getClip()!;
-        const today = new Date();
+        // Deliberately the WALL CLOCK, not clock.ts now(). Paste is a write,
+        // not a view: it shifts the copied activity to land on the real today.
+        // If this followed a pinned or swept clock, scrubbing the view would
+        // silently change where pasted activities land. See clock.ts.
+        const today = new Date(); // clock-exempt: write anchor, paste lands on real today
         const origStart = parseDate(src.startDate);
         const origEnd = parseDate(src.endDate);
         const offsetDays = Math.round((today.getTime() - origStart.getTime()) / 86400000);
@@ -1230,7 +1235,8 @@ export class Planner {
         pngBtn.addEventListener('click', () => {
           const slug = (s: string) =>
             s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'planner';
-          const filename = `${slug(this.config.title)}-${formatDate(new Date())}.png`;
+          // Wall clock: the filename records when the export actually happened.
+          const filename = `${slug(this.config.title)}-${formatDate(new Date())}.png`; // clock-exempt: real export timestamp
           const node = this.renderer.getSVGNode();
           const vb = node.viewBox.baseVal;
           const vbW = vb && vb.width  > 0 ? vb.width  : 800;
@@ -1799,7 +1805,7 @@ export class Planner {
   private handleAddEvent(): void {
     const firstLane = this.data.lanes.find(l => !this.filterState.hiddenLaneIds.has(l.id)) ?? this.data.lanes[0];
     if (!firstLane) { this.handleAddLane(); return; }
-    const today = new Date();
+    const today = now();
     const inViewport = today >= this.viewport.windowStart && today <= this.viewport.windowEnd;
     const seedDate = inViewport
       ? today

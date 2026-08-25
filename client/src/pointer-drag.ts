@@ -53,12 +53,12 @@ export function attachLinearDrag(opts: LinearDragOpts): () => boolean {
 
   let suppressNextClick = false;
   let startClientX = 0;
-  let origStart = new Date();
-  let origEnd = new Date();
+  let origStart = new Date(); // clock-exempt: placeholder, overwritten on drag start
+  let origEnd = new Date(); // clock-exempt: placeholder, overwritten on drag start
   let ghost: HTMLElement | null = null;
   let movedMeaningfully = false;
-  let currentNewStart = new Date();
-  let currentNewEnd = new Date();
+  let currentNewStart = new Date(); // clock-exempt: placeholder, overwritten on drag start
+  let currentNewEnd = new Date(); // clock-exempt: placeholder, overwritten on drag start
 
   const winSpan = Math.max(1, windowEnd.getTime() - windowStart.getTime());
   const pxPerDay = timelineWidth / (winSpan / DAY_MS);

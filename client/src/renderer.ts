@@ -4,6 +4,7 @@ import { arc as d3Arc } from 'd3-shape';
 import { createAngleScale, parseDate, formatDate, xyToAngle, FONT_FAMILY, expandOccurrences, ColorBy, colorForString, withAlpha, STATUS_COLORS } from './utils';
 import { PlannerConfig, PlannerData, Lane, Activity, DiscGeometry, Viewport, ZoomLevel, GridSpec, FilterState } from './types';
 import { getGridSpec, viewportLabel } from './viewport';
+import { now } from './clock';
 
 const VIEWBOX_SIZE = 800;
 const CX = 400;
@@ -353,9 +354,14 @@ export class Renderer {
 
     // Schedule a re-render at the next local midnight (+1 s slack) so the
     // today indicator advances without requiring a page reload.
-    const now = new Date();
-    const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-    const msUntilMidnight = nextMidnight.getTime() - now.getTime() + 1000;
+    //
+    // Deliberately reads the WALL CLOCK, not clock.ts now(). This is
+    // scheduling, not rendering: a pinned or swept clock in the past would
+    // produce a negative delay, so the timeout would fire immediately,
+    // re-render, re-arm itself, and spin. See the exceptions list in clock.ts.
+    const wallNow = new Date(); // clock-exempt: scheduling, not rendering
+    const nextMidnight = new Date(wallNow.getFullYear(), wallNow.getMonth(), wallNow.getDate() + 1);
+    const msUntilMidnight = nextMidnight.getTime() - wallNow.getTime() + 1000;
     this.midnightTimer = setTimeout(() => this.fullRender(), msUntilMidnight);
   }
 
@@ -915,7 +921,7 @@ export class Renderer {
   }
 
   private renderTodayIndicator(g: Selection<SVGGElement, unknown, null, undefined>): void {
-    const today = new Date();
+    const today = now();
     if (today < this.viewport.windowStart || today > this.viewport.windowEnd) return;
 
     const todayColor = this.cssVar('--cp-today', '#f44336');
