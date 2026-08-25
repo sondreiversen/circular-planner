@@ -55,7 +55,28 @@
       "Bash(pkill -f 'PORT=18767')",
       "Bash(kill 330040)",
       "Bash(git add *)",
-      "Bash(git commit -m 'Track favicon endpoint, in-app guide, and theme-init script *)"
+      "Bash(git commit -m 'Track favicon endpoint, in-app guide, and theme-init script *)",
+      "Bash(git commit -m 'Multi-session polish: disc/list/people, drag, picker, password-login gate, audit fixes *)",
+      "Bash(git merge *)",
+      "Bash(git stash *)",
+      "Bash(git push *)",
+      "Bash(npm -v)",
+      "Bash(npm view *)",
+      "Bash(npm install *)",
+      "Bash(npx jest *)",
+      "Bash(npm ci *)",
+      "Bash(npm ls *)",
+      "Bash(bash -c 'set -euo pipefail; npm ci --ignore-scripts=false 2> >\\(grep -v \"npm warn deprecated\" >&2\\)')",
+      "Bash(npm audit *)",
+      "Bash(python3 -c \"import sys, json; d=json.load\\(sys.stdin\\); m=d.get\\('metadata',{}\\).get\\('vulnerabilities',{}\\); print\\(m\\)\")",
+      "Bash(git commit -m 'Quiet npm warnings in air-gap packager *)",
+      "Bash(command -v gh)",
+      "Bash(gh run *)",
+      "Bash(/home/user/.claude/skills/gstack/browse/dist/browse goto *)",
+      "Bash(/home/user/.claude/skills/gstack/browse/dist/browse text *)",
+      "Bash(python3 -)",
+      "Bash(cp docs/designs/disc-as-clock.md ~/.gstack/projects/sondreiversen-circular-planner/user-main-design-20260825-084046.md)",
+      "Bash(git commit *)"
     ]
   }
 }
