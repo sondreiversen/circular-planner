@@ -76,7 +76,10 @@
       "Bash(/home/user/.claude/skills/gstack/browse/dist/browse text *)",
       "Bash(python3 -)",
       "Bash(cp docs/designs/disc-as-clock.md ~/.gstack/projects/sondreiversen-circular-planner/user-main-design-20260825-084046.md)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(chmod +x scripts/check-clock-usage.sh)",
+      "Bash(./scripts/check-clock-usage.sh)",
+      "Bash(echo \"GUARD_EXIT=$?\")"
     ]
   }
 }

@@ -82,7 +82,7 @@ The risk is that the abstraction has to be right up front, and any stray `new Da
 
 ## Prerequisites
 
-> **Implementation status (2026-08-25):** P1, P2, and the step-5 palette bug are **fixed in the working tree** — see the "Bugs fixed" note at the end of this document. P3, P4, and P5 remain open and still gate the display-mode work.
+> **Implementation status (2026-08-25):** P1, P2 and the step-5 palette bug are **fixed and committed** (see "Bugs fixed" at the end). Steps 1, 2 and 8 — the clock spine, the CI guard and the determinism test — are **built and passing** (see "Spine landed"). P3, P4 and P5 remain open and still gate the display-mode work in step 3.
 
 These are blockers, not nice-to-haves. An adversarial review found each would stop implementation within the first hour.
 
@@ -201,3 +201,58 @@ Three defects found during this session were fixed immediately rather than defer
 **Not verified end to end.** There is no Go toolchain on this machine and assets are strictly embedded (`//go:embed public`), so the app could not be rebuilt and run. The changes typecheck (13 pre-existing `tsc` errors before and after — unchanged), build, and pass the test suite.
 
 **Also noticed:** `npx tsc --noEmit` reports 13 pre-existing type errors and is not run in CI at all, because esbuild does not typecheck. Worth adding as a CI step.
+
+---
+
+## Spine landed (2026-08-25)
+
+Steps 1, 2 and 8 are implemented. `now()` is injectable, the abstraction is
+enforced in CI, and date-dependent rendering is deterministic for the first
+time in this project's life.
+
+**`client/src/clock.ts`** — resolution order is `setNow(d)` → `?now=<ISO>` →
+wall clock. `parseNowOverride(search)` is split out as a pure function so the
+URL rules are testable under `testEnvironment: "node"`, where `window` does not
+exist. `now()` returns a fresh `Date` on every call and `setNow()` copies its
+argument: `Date` is mutable, and sharing an instance would let one caller's
+`setDate()` corrupt the clock for every other reader. `setNow`/`isLive` ship
+now rather than later because they are what makes this a spine — display pins
+the clock, flyover sweeps it, the poster freezes it.
+
+**Six call sites migrated**, not the seven the plan listed: `renderer.ts:918`,
+`planner.ts` (handleAddEvent seed), `viewport.ts:272`, `list-renderer.ts:194`,
+`people-renderer.ts:342`, `dashboard.ts:36`.
+
+**`planner.ts`'s paste anchor was carved out instead of migrated.** The plan
+flagged it as needing a decision and left it open; the decision is wall clock.
+Paste is a write, not a view, and its meaning must not change because someone
+moved a slider. Recorded here so step 7 revisits it deliberately rather than by
+accident — if the scrubber should make paste land on the scrubbed date, that is
+a real design choice, not a missed migration.
+
+**`scripts/check-clock-usage.sh`** fails CI on any `new Date()` in
+`client/src/` that is neither inside `clock.ts` nor carrying a same-line
+`// clock-exempt: <reason>` marker. Enforcement is by call site, as the review
+required — a file-level allowlist would fail immediately, since `planner.ts`
+holds both a migrated site and two exempt ones. The marker is deliberately
+inline so the justification sits where the next reader will see it. Nine
+exemptions exist today: the midnight scheduler, the paste anchor, the export
+filename, two log timestamps, four drag placeholders, and one test assertion.
+
+The guard was verified by making it fail: a probe `new Date()` added to
+`viewport.ts` was caught and reported with file and line, and the check went
+green again once removed. That run also caught a real omission — the new test
+file's deliberate wall-clock comparison, which had gone unmarked.
+
+**`client/src/__tests__/clock.test.ts`** — 17 tests. Beyond the parsing and
+pinning rules, it proves the actual point: `navigateToToday()` reads `now()` and
+is otherwise pure, so pinning the clock pins the render. Same pin twice gives an
+identical viewport; 2026 and 1998 give different ones; Week zoom on a pinned
+Saturday lands on that week's Monday. Suite is 41 tests across 3 files, all
+passing. `tsc --noEmit` holds at its pre-existing 13 errors, none in the new
+files.
+
+**Still not verified end to end.** No Go toolchain on this machine and assets
+are embedded via `//go:embed`, so the app has not been rebuilt and run. What is
+verified: the guard fails and passes correctly, the suite passes, the client
+bundle builds.
