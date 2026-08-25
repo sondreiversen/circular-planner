@@ -6,13 +6,25 @@ export interface PlannerConfig {
   isOwner: boolean;
   permission: 'owner' | 'edit' | 'view';
   isPublic: boolean;
+  /**
+   * ISO 8601 row timestamp, e.g. "2026-04-20T12:34:56.789Z".
+   *
+   * Returned *inside* `config` by both GET /api/planners/:id and
+   * GET /api/public/planners/:token. It is deliberately declared here rather
+   * than at the response top level — the server has always nested it, and
+   * reading it top-level silently yields `undefined`, which disables the
+   * concurrent-edit check in DataManager.
+   */
+  updated_at?: string;
 }
 
 /**
- * Top-level field returned by GET /api/planners/:id alongside `config` and `data`.
- * Stored by the client and sent back as `client_updated_at` in the PUT body so the
- * server can detect concurrent edits (409 if the row was modified by another session).
- * The PUT response also returns `updated_at` so the client can refresh its copy.
+ * Returned at the TOP LEVEL of the PUT /api/planners/:id response only.
+ * DataManager stores it and sends it back as `client_updated_at` on the next
+ * PUT so the server can detect concurrent edits (409 if the row moved).
+ *
+ * Note the asymmetry: GET nests the timestamp in `config`, PUT returns it at
+ * the top level. See PlannerConfig.updated_at.
  */
 export interface PlannerTimestamp {
   updated_at: string; // ISO 8601 string, e.g. "2026-04-20T12:34:56.789Z"

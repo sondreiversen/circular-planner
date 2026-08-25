@@ -11,7 +11,8 @@ import { applyBranding } from './branding';
 interface PublicPlannerResponse {
   config: PlannerConfig;
   data: PlannerData;
-  updated_at?: string;
+  // No top-level updated_at: the server nests it inside `config`.
+  // See PlannerConfig.updated_at in types.ts.
 }
 
 initTheme();
@@ -53,7 +54,7 @@ async function init(): Promise<void> {
       return;
     }
 
-    const { config, data, updated_at } = await res.json() as PublicPlannerResponse;
+    const { config, data } = await res.json() as PublicPlannerResponse;
 
     // Enforce read-only regardless of server response (defence-in-depth).
     config.permission = 'view';

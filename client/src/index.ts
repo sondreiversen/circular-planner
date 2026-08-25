@@ -30,7 +30,6 @@ initTheme();
 interface PlannerResponse {
   config: PlannerConfig;
   data: PlannerData;
-  updated_at?: string;
 }
 
 async function init(): Promise<void> {
@@ -50,7 +49,11 @@ async function init(): Promise<void> {
   const containerEl = document.getElementById('planner-container');
 
   try {
-    const { config, data, updated_at } = await api.get<PlannerResponse>(`/api/planners/${plannerId}`);
+    const { config, data } = await api.get<PlannerResponse>(`/api/planners/${plannerId}`);
+    // The server nests updated_at inside `config`, not at the top level.
+    // Reading it top-level yields undefined, which leaves DataManager without a
+    // baseline and silently disables the 409 concurrent-edit check on first save.
+    const updated_at = config.updated_at;
 
     document.title = `${config.title} — Circular Planner`;
     const titleHeader = document.getElementById('planner-title-header');
