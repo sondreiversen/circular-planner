@@ -99,8 +99,31 @@ export function decode(search: string): UrlState {
 }
 
 /**
- * Build a full query string preserving the `id` param and encoding the current state.
- * Omits params that match their defaults to keep URLs short.
+ * Query params that encode() carries through untouched.
+ *
+ * encode() rebuilds the query string from scratch, so anything not listed here
+ * and not derived from the state it was handed is silently dropped. syncUrl()
+ * runs on every zoom, navigation and filter change, so a missing entry here
+ * means the param survives page load and then vanishes on the viewer's first
+ * interaction — with the breakage only showing up on a later refresh.
+ *
+ * `token` is the live example: a public share link that lost it left the viewer
+ * with "No public link token provided" after any filter change plus a reload.
+ *
+ * `display`, `now` and `flyover` are the disc-as-clock rendering modes. They are
+ * listed even though the modes are not built yet, because the failure is silent
+ * and the fix is one line.
+ *
+ * These are all inputs the page is opened WITH, never state the planner owns.
+ * State-owned params (z, from, to, q, hl, lb, tu, sp, vm, cb) are re-derived on
+ * every call and must not be passed through, or a cleared filter would resurrect
+ * itself from the old URL.
+ */
+const PASSTHROUGH_PARAMS = ['id', 'token', 'display', 'now', 'flyover'] as const;
+
+/**
+ * Build a full query string, carrying through PASSTHROUGH_PARAMS and encoding
+ * the current state. Omits params that match their defaults to keep URLs short.
  */
 export function encode(
   currentSearch: string,
@@ -118,10 +141,12 @@ export function encode(
 ): string {
   const params = new URLSearchParams();
 
-  // Always preserve the planner id
+  // Carry through the params the page was opened with, before encoding state.
   const existing = new URLSearchParams(currentSearch);
-  const id = existing.get('id');
-  if (id) params.set('id', id);
+  for (const key of PASSTHROUGH_PARAMS) {
+    const value = existing.get(key);
+    if (value !== null) params.set(key, value);
+  }
 
   const { filterState, viewport, viewMode, colorBy, defaults } = state;
 
