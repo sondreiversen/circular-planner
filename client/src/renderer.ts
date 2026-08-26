@@ -72,6 +72,9 @@ export class Renderer {
   // Timer to re-render at local midnight so the today indicator advances automatically.
   private midnightTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Document-level Escape handler, kept so destroy() can remove it.
+  private _escHandler: ((e: KeyboardEvent) => void) | null = null;
+
   // Milestones collected during renderLanes() and drawn last so they paint above all arcs.
   private pendingMilestones: Array<{
     activity: Activity;
@@ -95,12 +98,15 @@ export class Renderer {
       .attr('role', 'img')
       .attr('aria-label', 'Circular planner');
 
-    // Cancel drag on Escape
-    document.addEventListener('keydown', (e: KeyboardEvent) => {
+    // Cancel drag on Escape. Held in a field so destroy() can unregister it —
+    // an anonymous handler here would outlive the Renderer and keep the whole
+    // instance (and its data) reachable from `document`.
+    this._escHandler = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && this.dragState) {
         this._cancelDrag();
       }
-    });
+    };
+    document.addEventListener('keydown', this._escHandler);
 
     // Shared SVG-level drag move/up/cancel — wired once, dispatch via dragState
     const svgEl = this.svg.node() as SVGSVGElement;
@@ -127,6 +133,28 @@ export class Renderer {
   /** Returns the underlying SVGSVGElement. Used by export. */
   public getSVGNode(): SVGSVGElement {
     return this.svg.node() as SVGSVGElement;
+  }
+
+  /**
+   * Release everything that outlives the DOM node.
+   *
+   * Removing the container's markup is not enough: the midnight timer and the
+   * document-level Escape handler both keep this Renderer reachable, so a
+   * re-created disc would leave the old one alive and still re-rendering. The
+   * SVG-level listeners need no cleanup — they die with the element.
+   *
+   * Safe to call more than once.
+   */
+  destroy(): void {
+    if (this.midnightTimer !== null) {
+      clearTimeout(this.midnightTimer);
+      this.midnightTimer = null;
+    }
+    if (this._escHandler) {
+      document.removeEventListener('keydown', this._escHandler);
+      this._escHandler = null;
+    }
+    this.svg.remove();
   }
 
   /**

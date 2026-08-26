@@ -35,6 +35,24 @@ export class DataManager {
     this.saveTimer = setTimeout(() => this.save(data), 800);
   }
 
+  /**
+   * Drop the pending debounce and all subscribers.
+   *
+   * Deliberately does NOT flush: a pending save belongs to a Planner that is
+   * being torn down, and firing it would race the replacement instance's own
+   * save and could clobber newer data under last-write-wins. Call save()
+   * explicitly first if the pending edit must survive.
+   *
+   * Safe to call more than once.
+   */
+  destroy(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    this.listeners.clear();
+  }
+
   /** Serialise PlannerData for the wire: strip client-only fields, convert taggedUsers → taggedUserIds + taggedUsernames */
   private serialiseLanes(data: PlannerData): unknown {
     return data.lanes.map((lane: Lane) => ({

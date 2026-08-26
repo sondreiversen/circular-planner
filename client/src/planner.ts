@@ -77,6 +77,26 @@ export class Planner {
   private saveBadgeEl!: HTMLSpanElement;
   private saveFadeTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /**
+   * Document-level listeners owned by this instance.
+   *
+   * Split by lifetime, because they leak in two different ways:
+   *
+   *   instance  registered once in mount(), removed in destroy(). Anonymous
+   *             handlers here keep the Planner reachable from `document`
+   *             forever, so a re-created planner never frees the old one.
+   *
+   *   toolbar   re-registered on every buildToolbar(), which runs again on
+   *             every saved-view load via applyViewState(). These accumulate
+   *             during normal use — load twenty saved views and twenty stale
+   *             click handlers pile up on `document`, each closing over a
+   *             dropdown that no longer exists. buildToolbar() clears this
+   *             list before rebuilding.
+   */
+  private instanceDocListeners: Array<{ type: string; handler: EventListener }> = [];
+  private toolbarDocListeners: Array<{ type: string; handler: EventListener }> = [];
+  private destroyed = false;
+
   constructor(container: HTMLElement, config: PlannerConfig, initialData: PlannerData, updatedAt?: string) {
     this.container = container;
     this.config = config;
@@ -430,7 +450,7 @@ export class Planner {
     };
 
     this._globalKeyHandler = handler;
-    document.addEventListener('keydown', handler);
+    this.addDocListener('keydown', handler as EventListener, 'instance');
   }
 
   private applyViewMode(): void {
@@ -1062,6 +1082,9 @@ export class Planner {
   }
 
   private buildToolbar(): void {
+    // Rebuilding replaces every toolbar element, so its document-level
+    // listeners must go too or they accumulate on each saved-view load.
+    this.clearToolbarDocListeners();
     this.toolbar.innerHTML = '';
     this.toolbar.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 8px;background:var(--cp-surface);border-bottom:1px solid var(--cp-border);';
 
@@ -1455,10 +1478,12 @@ export class Planner {
       else openDropdown();
     });
 
-    // Close on outside click
-    document.addEventListener('click', (e) => {
+    // Close on outside click. Toolbar-scoped: buildToolbar() runs again on every
+    // saved-view load, and an untracked handler here stacked up one stale
+    // listener per load.
+    this.addDocListener('click', ((e: Event) => {
       if (isOpen && !wrap.contains(e.target as Node)) closeDropdown();
-    });
+    }) as EventListener, 'toolbar');
 
     return wrap;
   }
@@ -2076,6 +2101,78 @@ export class Planner {
       this.saveBadgeEl.textContent = 'Save failed \u2014 retry';
       this.saveBadgeEl.onclick = () => this.dataManager.save(this.data);
     }
+  }
+
+  /**
+   * Register a document-level listener this instance is responsible for.
+   * `scope: 'toolbar'` marks it as discarded on the next buildToolbar().
+   */
+  private addDocListener(
+    type: string,
+    handler: EventListener,
+    scope: 'instance' | 'toolbar',
+  ): void {
+    document.addEventListener(type, handler);
+    const bucket = scope === 'toolbar' ? this.toolbarDocListeners : this.instanceDocListeners;
+    bucket.push({ type, handler });
+  }
+
+  /** Unregister every document listener owned by the last toolbar build. */
+  private clearToolbarDocListeners(): void {
+    for (const { type, handler } of this.toolbarDocListeners) {
+      document.removeEventListener(type, handler);
+    }
+    this.toolbarDocListeners = [];
+  }
+
+  /**
+   * Swap in new planner data and re-render.
+   *
+   * Exists so a polling view — the display mode in the disc-as-clock design —
+   * can refresh without tearing the Planner down and rebuilding it. Rebuilding
+   * on a 60s poll would leak a timer and a handler on every tick.
+   *
+   * `updatedAt` refreshes DataManager's concurrency baseline. Pass undefined on
+   * a read-only view so it never attempts a PUT.
+   */
+  setData(data: PlannerData, updatedAt?: string): void {
+    if (this.destroyed) return;
+    this.data = data;
+    if (updatedAt) this.dataManager.setUpdatedAt(updatedAt);
+    this.renderer.update(this.data, this.filterState);
+    this.listRenderer?.update(this.data, this.filterState);
+    this.peopleRenderer?.update(this.data, this.filterState);
+    const sidebarBody = document.querySelector('#cp-sidebar .cp-sidebar-body') as HTMLElement | null;
+    if (sidebarBody) this.buildSidebar(sidebarBody);
+  }
+
+  /**
+   * Tear down everything that outlives the container element.
+   *
+   * Emptying the container is not sufficient — document-level listeners and
+   * pending timers keep this instance, its data and its renderers reachable.
+   *
+   * Deliberately does not flush a pending save; see DataManager.destroy().
+   * Safe to call more than once.
+   */
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+
+    this.clearToolbarDocListeners();
+    for (const { type, handler } of this.instanceDocListeners) {
+      document.removeEventListener(type, handler);
+    }
+    this.instanceDocListeners = [];
+    this._globalKeyHandler = null;
+
+    if (this.saveFadeTimer) { clearTimeout(this.saveFadeTimer); this.saveFadeTimer = null; }
+    if (this.searchDebounce) { clearTimeout(this.searchDebounce); this.searchDebounce = null; }
+
+    this.renderer.destroy();
+    this.dataManager.destroy();
+
+    this.container.innerHTML = '';
   }
 
   /** Called when the global theme changes — re-renders the SVG with new CSS var values. */
