@@ -82,7 +82,7 @@ The risk is that the abstraction has to be right up front, and any stray `new Da
 
 ## Prerequisites
 
-> **Implementation status (2026-08-25):** P1, P2 and the step-5 palette bug are **fixed and committed** (see "Bugs fixed" at the end). Steps 1, 2 and 8 — the clock spine, the CI guard and the determinism test — are **built and passing** (see "Spine landed"). P3, P4 and P5 remain open and still gate the display-mode work in step 3.
+> **Implementation status (2026-08-26):** All five prerequisites are now closed, and steps 1, 2 and 8 are built. P1, P2 and the step-5 palette bug are committed ("Bugs fixed"); the clock spine, CI guard and determinism test are committed ("Spine landed"); P3, P4 and P5 are done ("Prerequisites closed"). **Step 3, display mode, is unblocked.**
 
 These are blockers, not nice-to-haves. An adversarial review found each would stop implementation within the first hour.
 
@@ -256,3 +256,70 @@ files.
 are embedded via `//go:embed`, so the app has not been rebuilt and run. What is
 verified: the guard fails and passes correctly, the suite passes, the client
 bundle builds.
+
+---
+
+## Prerequisites closed (2026-08-26)
+
+**P3 — `encode()` now carries params through, and this was a live bug.** The
+plan framed it as a blocker for future mode params. It was already breaking
+share links: `syncUrl()` runs on every zoom, navigation and filter change, and
+`encode()` rebuilt the query string preserving only `id`. A public share-link
+viewer who applied any filter lost `?token=` from their URL and hit "No public
+link token provided" on their next refresh — with the reload, not the filter,
+looking like the cause.
+
+`PASSTHROUGH_PARAMS` now carries `id`, `token`, `display`, `now` and `flyover`.
+State-owned params (`z`, `from`, `to`, `q`, `hl`, `lb`, `tu`, `sp`, `vm`, `cb`)
+are deliberately excluded: they are re-derived every call, and passing them
+through would let a cleared filter resurrect itself from the old URL. Eleven
+tests cover it, and the regression tests were verified by reverting the fix —
+three fail without it.
+
+**P4 — `Planner` has a lifecycle, and the teardown surface was worse than
+scoped.** The review found five leaking handles; there were more, and one leaks
+during normal use rather than at teardown. `buildViewsControl()` registers a
+document-level `click` listener, `buildToolbar()` calls it, and
+`applyViewState()` calls `buildToolbar()` on **every saved-view load**. Loading
+twenty saved views left twenty stale listeners on `document`, each holding a
+dropdown that no longer existed. A half-finished `_globalKeyHandler` field was
+already there, stored and never used by anything.
+
+Document listeners are now tracked in two buckets by lifetime: `instance` ones
+are removed by `destroy()`, `toolbar` ones are cleared at the top of every
+`buildToolbar()`. `Renderer.destroy()` clears the midnight timer and its Escape
+handler; `DataManager.destroy()` clears the debounce and subscribers, and
+deliberately does **not** flush — a pending save belongs to an instance being
+torn down, and firing it would race the replacement under last-write-wins.
+`Planner.setData(data, updatedAt)` lets the display refresh on its 60s poll
+without a teardown-and-rebuild cycle that would leak on every tick.
+
+**P5 — resolved as: the display gets its own labelled token.** The plan costed
+this as "migration plus handler plus share-UI change". It is cheaper than that:
+the schema already supports many tokens per planner, since `token` is the
+primary key, `planner_id` is only a foreign key, and `revoked_at` is per-row.
+`ListShareTokens` already returned all of them. The single blocker was
+`CreateShareToken` deliberately returning any existing active token instead of
+minting a new one.
+
+Migration `018-share-token-label.sql` adds a nullable `label` column — needed
+not for multiplicity but for telling tokens apart, since the list previously
+returned only opaque random strings. `CreateShareToken` is now idempotent **per
+label**: an unlabelled request behaves exactly as before, so the existing public
+link is untouched; a labelled request only ever matches its own label. The share
+panel filters to the unlabelled token, without which creating a display token
+would have swapped the URL shown there and made "revoke the public link" kill
+the wall display instead.
+
+**Verification status.** Frontend: guard passes, bundle builds, 52 tests across
+4 suites pass, `tsc --noEmit` holds at its pre-existing 13 errors with none in
+touched files. **Backend: unverified.** There is no Go toolchain on this
+machine — no compiler and no `gofmt` — so the `internal/share/handler.go`
+changes and migration 018 have been proofread by eye only. No Go test
+references `share_tokens` and nothing does `SELECT *` on it, so the column add
+should be safe, but the handler changes need a real build. The CI job enabled
+in the earlier fix is what will actually check them.
+
+**Deferred to step 3:** a UI for creating and managing labelled tokens. The
+backend supports it and the existing panel is protected from it; the display
+token gets created when display mode is built.
