@@ -14,6 +14,7 @@ import (
 	"planner/internal/groups"
 	"planner/internal/middleware"
 	"planner/internal/planners"
+	"planner/internal/publicread"
 	"planner/internal/share"
 )
 
@@ -58,6 +59,15 @@ func NewServer(t *testing.T) (*httptest.Server, *config.Config, *db.DB) {
 	mux.HandleFunc("GET /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, database, shareH.List))
 	mux.HandleFunc("POST /api/planners/{plannerID}/shares", middleware.RequireAuth(cfg, database, shareH.Create))
 	mux.HandleFunc("DELETE /api/planners/{plannerID}/shares/{userID}", middleware.RequireAuth(cfg, database, shareH.Delete))
+
+	// Share tokens + the unauthenticated public read they unlock. Mirrors main.go
+	// without the rate limiters, which are middleware concerns tested elsewhere.
+	mux.HandleFunc("POST /api/planners/{plannerID}/share-tokens", middleware.RequireAuth(cfg, database, shareH.CreateShareToken))
+	mux.HandleFunc("GET /api/planners/{plannerID}/share-tokens", middleware.RequireAuth(cfg, database, shareH.ListShareTokens))
+	mux.HandleFunc("POST /api/planners/{plannerID}/share-tokens/{token}/revoke", middleware.RequireAuth(cfg, database, shareH.RevokeShareToken))
+
+	publicH := publicread.NewHandler(database)
+	mux.HandleFunc("GET /api/public/planners/{token}", publicH.GetPublic)
 
 	groupH := groups.NewHandler(database, cfg)
 	groupH.Register(mux, cfg, database)
