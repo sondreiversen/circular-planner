@@ -863,3 +863,92 @@
 .cp-guide-prompt-visible { opacity: 1; transform: translateY(0); }
 .cp-guide-prompt-msg { margin: 0 0 12px; font-size: 13px; line-height: 1.45; }
 .cp-guide-prompt-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ============================================================
+   DISPLAY MODE  —  body.display-mode, set by ?display=1
+   ============================================================
+
+   The unattended wall-screen view: strip every control and let the disc
+   have the whole viewport. Nobody is going to click anything here.
+
+   Deliberately last in the file and deliberately !important-heavy:
+
+   - .cp-color-by-legend carries `display:flex` as an INLINE style from
+     planner.ts mount(), and inline styles beat any selector without
+     !important.
+   - .cp-toolbar picks up padding/gap/overflow overrides from the
+     max-width 720px and 400px media queries. Those touch different
+     properties than `display`, but the toolbar is the one element most
+     likely to grow new responsive rules later, so it is pinned too.
+
+   Theme is deliberately NOT forced. A screen in a dark room should be
+   able to show the dark palette; that stays the viewer's choice.        */
+
+body.display-mode .app-header,
+body.display-mode .public-view-banner,
+body.display-mode .cp-toolbar,
+body.display-mode .cp-color-by-legend,
+body.display-mode .cp-sidebar {
+  display: none !important;
+}
+
+/* The disc area is the only child left, so drop the seams between it and
+   the viewport edge. */
+body.display-mode .planner-main,
+body.display-mode #planner-container,
+body.display-mode .cp-page-body,
+body.display-mode .cp-disc-area {
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+}
+
+body.display-mode .cp-disc-area,
+body.display-mode .cp-svg-container {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100% !important;
+}
+
+/* No pointer affordances on a screen nobody touches: a focus ring that
+   shows up because the container is tabIndex=0 reads as a rendering bug
+   from across the room. */
+body.display-mode .cp-svg-container,
+body.display-mode .cp-svg-container:focus {
+  outline: none !important;
+  cursor: default !important;
+}
+
+/* ---- Stale indicator ----
+   Only rendered after STALE_AFTER_FAILURES consecutive poll failures.
+   A silently frozen wall display is worse than an obviously frozen one:
+   the whole point of the screen is that people trust it at a glance.
+   Small, cornered and unobtrusive, because the disc stays readable and
+   correct-as-of-a-time even while this is showing.                      */
+.cp-display-stale {
+  position: fixed;
+  right: 14px;
+  bottom: 12px;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 11px;
+  border-radius: 999px;
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+  color: var(--cp-text-muted, var(--cp-text));
+  font-size: 12px;
+  line-height: 1;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.16);
+  opacity: 0.92;
+}
+
+.cp-display-stale::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #d9822b;
+  flex: 0 0 auto;
+}
