@@ -17,6 +17,11 @@ import (
 	"planner/internal/middleware"
 )
 
+// shareTokenLabelMaxLen caps a share-token label. Counted in runes, not bytes,
+// so a label of emoji or CJK is not rejected for being "too long" at a length
+// the user never sees.
+const shareTokenLabelMaxLen = 64
+
 // Handler handles share routes.
 type Handler struct {
 	db  *db.DB
@@ -476,16 +481,40 @@ func (h *Handler) CreateShareToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check for existing active token (idempotent)
+	// Optional label. A missing or malformed body is treated as "no label",
+	// preserving the original bodyless behaviour of this endpoint.
+	var body struct {
+		Label string `json:"label"`
+	}
+	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body)
+	label := strings.TrimSpace(body.Label)
+	if len([]rune(label)) > shareTokenLabelMaxLen {
+		jsonError(w, http.StatusBadRequest, "Label too long")
+		return
+	}
+
+	// Idempotent per label, not per planner. Requesting the unlabelled token
+	// twice still returns the same one — that is the existing public link and
+	// its behaviour must not change. A labelled request only ever matches a
+	// token carrying the same label, so the wall display gets its own token
+	// that can be revoked independently.
 	var existingToken string
-	err := h.db.QueryRowContext(r.Context(),
-		h.db.Rebind("SELECT token FROM share_tokens WHERE planner_id = ? AND revoked_at IS NULL LIMIT 1"),
-		plannerID,
-	).Scan(&existingToken)
+	var err error
+	if label == "" {
+		err = h.db.QueryRowContext(r.Context(),
+			h.db.Rebind("SELECT token FROM share_tokens WHERE planner_id = ? AND revoked_at IS NULL AND (label IS NULL OR label = '') LIMIT 1"),
+			plannerID,
+		).Scan(&existingToken)
+	} else {
+		err = h.db.QueryRowContext(r.Context(),
+			h.db.Rebind("SELECT token FROM share_tokens WHERE planner_id = ? AND revoked_at IS NULL AND label = ? LIMIT 1"),
+			plannerID, label,
+		).Scan(&existingToken)
+	}
 	if err == nil {
 		// Return existing token
 		url := schemeHost(r) + "/planner-public.html?token=" + existingToken
-		writeJSON(w, http.StatusOK, map[string]string{"token": existingToken, "url": url})
+		writeJSON(w, http.StatusOK, map[string]string{"token": existingToken, "url": url, "label": label})
 		return
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -500,9 +529,16 @@ func (h *Handler) CreateShareToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Store an empty label as NULL so unlabelled rows stay uniform whether they
+	// predate this migration or not.
+	var labelArg any
+	if label != "" {
+		labelArg = label
+	}
+
 	_, err = h.db.ExecContext(r.Context(),
-		h.db.Rebind("INSERT INTO share_tokens(token, planner_id, created_by) VALUES (?, ?, ?)"),
-		token, plannerID, userID,
+		h.db.Rebind("INSERT INTO share_tokens(token, planner_id, created_by, label) VALUES (?, ?, ?, ?)"),
+		token, plannerID, userID, labelArg,
 	)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "Internal server error")
@@ -510,7 +546,7 @@ func (h *Handler) CreateShareToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	url := schemeHost(r) + "/planner-public.html?token=" + token
-	writeJSON(w, http.StatusCreated, map[string]string{"token": token, "url": url})
+	writeJSON(w, http.StatusCreated, map[string]string{"token": token, "url": url, "label": label})
 }
 
 // GET /api/planners/{plannerID}/share-tokens
@@ -528,7 +564,7 @@ func (h *Handler) ListShareTokens(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.QueryContext(r.Context(),
-		h.db.Rebind("SELECT token, created_at, revoked_at FROM share_tokens WHERE planner_id = ? ORDER BY created_at DESC"),
+		h.db.Rebind("SELECT token, created_at, revoked_at, label FROM share_tokens WHERE planner_id = ? ORDER BY created_at DESC"),
 		plannerID,
 	)
 	if err != nil {
@@ -541,16 +577,21 @@ func (h *Handler) ListShareTokens(w http.ResponseWriter, r *http.Request) {
 		Token     string  `json:"token"`
 		CreatedAt string  `json:"created_at"`
 		RevokedAt *string `json:"revoked_at"`
+		Label     *string `json:"label"`
 	}
 	var result []tokenEntry
 	for rows.Next() {
 		var entry tokenEntry
 		var revokedAt sql.NullString
-		if err := rows.Scan(&entry.Token, &entry.CreatedAt, &revokedAt); err != nil {
+		var label sql.NullString
+		if err := rows.Scan(&entry.Token, &entry.CreatedAt, &revokedAt, &label); err != nil {
 			continue
 		}
 		if revokedAt.Valid {
 			entry.RevokedAt = &revokedAt.String
+		}
+		if label.Valid && label.String != "" {
+			entry.Label = &label.String
 		}
 		result = append(result, entry)
 	}

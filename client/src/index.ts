@@ -405,6 +405,12 @@ interface ShareToken {
   token: string;
   created_at: string;
   revoked_at: string | null;
+  /**
+   * Optional purpose label. null for the anonymous public link that this panel
+   * manages; set for purpose-built tokens such as the wall display, which are
+   * revoked independently and are not shown here.
+   */
+  label: string | null;
 }
 
 function buildPublicUrl(plannerId: number, token: string): string {
@@ -439,7 +445,11 @@ async function refreshTokenPanel(plannerId: number): Promise<void> {
   if (errEl) errEl.classList.add('hidden');
   try {
     const tokens = await api.get<ShareToken[]>(`/api/planners/${plannerId}/share-tokens`);
-    const active = tokens.find(t => !t.revoked_at);
+    // Only the unlabelled token — this panel manages the anonymous public link.
+    // Without the label check it would show whichever active token happened to
+    // sort first, so creating a wall-display token would swap the URL shown
+    // here and revoking "the public link" would kill the display instead.
+    const active = tokens.find(t => !t.revoked_at && !t.label);
     if (active) {
       const url = buildPublicUrl(plannerId, active.token);
       setTokenPanelActive(active.token, url);
