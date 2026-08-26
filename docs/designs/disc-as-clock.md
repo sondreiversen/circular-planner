@@ -82,7 +82,7 @@ The risk is that the abstraction has to be right up front, and any stray `new Da
 
 ## Prerequisites
 
-> **Implementation status (2026-08-26):** All five prerequisites are now closed, and steps 1, 2 and 8 are built. P1, P2 and the step-5 palette bug are committed ("Bugs fixed"); the clock spine, CI guard and determinism test are committed ("Spine landed"); P3, P4 and P5 are done ("Prerequisites closed"). **Step 3, display mode, is unblocked.**
+> **Implementation status (2026-08-26):** Steps 1, 2, 3 and 8 are built and all five prerequisites are closed. See "Bugs fixed", "Spine landed", "Prerequisites closed" and "Display mode landed". Everything has now been verified against a running server in a real browser. Remaining: step 4 (SVG download), step 5 (print palette — already fixed), step 6 (flyover), step 7 (scrubber, stretch).
 
 These are blockers, not nice-to-haves. An adversarial review found each would stop implementation within the first hour.
 
@@ -323,3 +323,82 @@ in the earlier fix is what will actually check them.
 **Deferred to step 3:** a UI for creating and managing labelled tokens. The
 backend supports it and the existing panel is protected from it; the display
 token gets created when display mode is built.
+
+---
+
+## Display mode landed (2026-08-26)
+
+Step 3 is built, and for the first time in this project's session history it was
+verified by running the actual application rather than by reasoning about it. A
+Go toolchain, a seeded database, and a headless browser turned every earlier
+"unverified" note into a real result.
+
+**`?display=1` on the public page** hides the header, the public-view banner,
+the toolbar, the colour legend and the sidebar, and gives the disc the whole
+viewport. All five were confirmed computing to `display: none` in a live
+browser. The colour legend needed `!important` specifically: `planner.ts`
+mount() sets `display:flex` on it as an inline style, which no selector beats
+without it.
+
+**The doc's warning about `.cp-toolbar` specificity was half right.** The live
+responsive rules at 176/426/671/711 set padding, gap and overflow — not
+`display` — so the only competing `display` rule was the print one. The hide
+rule is still written to win outright, because the toolbar is the element most
+likely to grow new responsive rules later.
+
+**Polling** re-checks every 60s, compares `config.updated_at`, and calls
+`Planner.setData()` only on a real change. Verified live: a server-side edit
+appeared on the display at the next poll, with exactly one document navigation
+in the network log — an in-place re-render, not a reload. Chrome stayed hidden
+through the re-render, which matters because `setData()` rebuilds the sidebar.
+
+**Failure behaviour was the part worth testing most**, and it was tested by
+killing the server. Over a six-minute outage the disc stayed rendered — a failed
+poll never replaces the display with an error, because this screen may be the
+only thing on a wall for weeks and one 502 during a deploy must not wipe it.
+After five consecutive failures a small cornered badge appears reading "Not
+updating — last change <time>", with the timestamp matching the last real edit
+to the second. A silently frozen wall display is worse than an obviously frozen
+one.
+
+**Theme is deliberately not forced.** A screen in a dark room should be able to
+show the dark palette.
+
+### The bug this uncovered: public share links were completely broken
+
+Rendering the page for real immediately redirected to the login screen. Cause:
+`Planner.mount()` calls `loadMembers()` unconditionally, `/api/planners/:id/members`
+is `RequireAuth`, and `api-client.ts:26` turns any 401 into a full-page redirect
+to `/index.html`. The `.catch()` on `loadMembers` cannot help — the redirect
+happens inside api-client before the promise rejects.
+
+This is pre-existing and predates this work: `loadMembers` arrived in `02b4b36`,
+`index-public.ts` in `ef6fd70`, and nothing in this session touched either
+`loadMembers` or `api-client.ts`. **Every public share link has been bouncing
+viewers to a login page since `02b4b36`** — which is exactly the feature display
+mode is built on, so step 3 could not work until it was fixed.
+
+Fixed with an explicit `PlannerOptions.publicView` flag rather than inferring
+from `config.permission`: an authenticated user with view-only share access has
+the same permission value, and for them the member list works and is useful.
+The flag suppresses `loadMembers`, is passed through to `PeopleRenderer`
+(which makes the same call), and hides the saved-views control, whose dropdown
+hits an authenticated endpoint.
+
+### Verified live
+
+Public link renders 4 lanes and 12 activities with no 401s; display mode hides
+all chrome and fills the viewport; a server-side edit propagates in-place at the
+next poll; a six-minute outage leaves the disc intact; the stale badge appears
+on schedule with an accurate timestamp; labelled and unlabelled tokens are
+distinct and the list reports `null` versus `"wall display"`; `config.updated_at`
+is present while top-level `updated_at` is absent, confirming the P2 diagnosis
+against a live response.
+
+Client: 71 tests across 5 suites, clock guard clean, `tsc` steady at its
+pre-existing 13. Backend: build, vet and the full `-race` suite green on Go
+1.24.13.
+
+**Deferred:** a UI for creating and managing labelled tokens. The backend
+supports it and the existing share panel is protected from it, but a display
+token still has to be minted via the API today.
