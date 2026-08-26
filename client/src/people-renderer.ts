@@ -44,7 +44,8 @@ export class PeopleRenderer {
     viewport: Viewport,
     filterState: FilterState,
     plannerId: number,
-    config: PlannerConfig
+    config: PlannerConfig,
+    publicView = false,
   ) {
     this.container = container;
     this.data = data;
@@ -53,7 +54,9 @@ export class PeopleRenderer {
     this.config = config;
     this.plannerId = plannerId;
     this.mount();
-    this.loadMembers();
+    // /members is authenticated. On the public view it 401s, and api-client
+    // turns a 401 into a full-page redirect to login. See Planner.publicView.
+    if (!publicView) this.loadMembers();
   }
 
   setHandlers(onClickActivity: (a: Activity) => void): void {

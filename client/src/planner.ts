@@ -39,6 +39,15 @@ interface Member {
  * Main controller for a single circular planner instance.
  * Manages state, coordinates renderer and data-manager.
  */
+/** Construction-time options for Planner. */
+export interface PlannerOptions {
+  /**
+   * Mount for the unauthenticated public/share view: suppress every call to an
+   * authenticated endpoint. Without this the viewer is redirected to login.
+   */
+  publicView?: boolean;
+}
+
 export class Planner {
   private config: PlannerConfig;
   private data: PlannerData;
@@ -93,11 +102,28 @@ export class Planner {
    *             dropdown that no longer exists. buildToolbar() clears this
    *             list before rebuilding.
    */
+  /**
+   * True on the unauthenticated public/share view.
+   *
+   * The public page has no session cookie, so every authenticated request 404s
+   * into a 401 — and api-client redirects the whole page to /index.html on 401.
+   * That means a single stray authenticated call does not degrade gracefully,
+   * it throws the viewer out to a login screen. Anything that talks to an
+   * authenticated endpoint must be gated on this.
+   */
+  private readonly publicView: boolean;
   private instanceDocListeners: Array<{ type: string; handler: EventListener }> = [];
   private toolbarDocListeners: Array<{ type: string; handler: EventListener }> = [];
   private destroyed = false;
 
-  constructor(container: HTMLElement, config: PlannerConfig, initialData: PlannerData, updatedAt?: string) {
+  constructor(
+    container: HTMLElement,
+    config: PlannerConfig,
+    initialData: PlannerData,
+    updatedAt?: string,
+    options?: PlannerOptions,
+  ) {
+    this.publicView = options?.publicView ?? false;
     this.container = container;
     this.config = config;
     this.data = initialData;
@@ -270,6 +296,10 @@ export class Planner {
   }
 
   private loadMembers(): void {
+    // /members is RequireAuth. On the public view this 401s, and api-client
+    // turns a 401 into a full-page redirect to the login screen — so this one
+    // call would bounce every public-link viewer out of the planner.
+    if (this.publicView) return;
     api.get<Member[]>(`/api/planners/${this.config.plannerId}/members`).then(members => {
       this.members = members;
       // Re-render sidebar so the "Visible people" section shows member names immediately.
@@ -485,7 +515,8 @@ export class Planner {
           this.viewport,
           this.filterState,
           this.config.plannerId,
-          this.config
+          this.config,
+          this.publicView,
         );
         this.peopleRenderer.setHandlers(
           (activity) => this.handleClickActivity(activity)
@@ -1183,7 +1214,9 @@ export class Planner {
     this.toolbar.appendChild(colorByWrap);
 
     // Views dropdown
-    this.toolbar.appendChild(this.buildViewsControl());
+    // Saved views are per-user and the endpoint is authenticated; the control
+    // is inert at best and a redirect-to-login at worst on the public view.
+    if (!this.publicView) this.toolbar.appendChild(this.buildViewsControl());
 
     // Add-event + Import buttons (edit/owner only)
     if (this.config.permission !== 'view') {
