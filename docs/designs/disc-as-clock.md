@@ -82,7 +82,7 @@ The risk is that the abstraction has to be right up front, and any stray `new Da
 
 ## Prerequisites
 
-> **Implementation status (2026-08-27):** Steps 1, 2, 3, 4, 5 and 8 are built, all five prerequisites are closed, and the deferred display-token UI is done. Everything has been verified against a running server in a real browser. **Remaining: step 6 (flyover — format still unresolved) and step 7 (scrubber, stretch).**
+> **Implementation status (2026-08-27):** Steps 1-6 and 8 are built, all five prerequisites are closed, and the deferred display-token UI is done. Everything has been verified against a running server in a real browser. **Remaining: step 7 (scrubber) only, and it was always an explicit stretch goal.**
 
 These are blockers, not nice-to-haves. An adversarial review found each would stop implementation within the first hour.
 
@@ -459,3 +459,67 @@ should be made before any code.
 
 Step 7, the scrubber, remains an explicit stretch goal — it produces no artifact
 and travels nowhere, so it serves craft rather than the stated problem.
+
+---
+
+## Flyover landed (2026-08-27)
+
+Step 6 is built. The open question was never the code, it was the format: every
+option reachable without a new dependency failed to reach somewhere the flyover
+was meant to travel. The user resolved it by removing both constraints — a new
+npm dependency was acceptable, and animated SVG not embedding in a slide deck
+was acceptable.
+
+**It needed neither concession.** SMIL got there with zero dependencies, so the
+air-gapped tarball is untouched and the "no new npm dependency" constraint in
+this document still holds.
+
+The output is one self-contained animated SVG, ~135 KB: the today-hand sweeps a
+full turn in twenty seconds while a readout under the hub counts through the
+months.
+
+**Why declarative animation rather than frame capture.** `MediaRecorder` cannot
+capture an SVG — there is no `SVGSVGElement.captureStream()` — so a video route
+means rasterizing every frame through `serializeSVGWithStyles`, which spends
+hundreds of milliseconds per frame walking `getComputedStyle` over every
+descendant. Rotating a `<line>` costs nothing and cannot drop a frame.
+
+**Two existing properties made it nearly free.** The hand is a center-origin
+`<line>` plus tip `<circle>` inside `g.cp-main`, which is translated to the disc
+centre, so a plain rotate about (0,0) reproduces the sweep exactly — this was
+predicted in the original cross-model review and held up. And `angleScale` maps
+windowStart..windowEnd onto the full circle, so one turn always traverses
+exactly the visible window. The only renderer change was a `cp-today-hand` class
+so the exporter can find those two elements after serialization.
+
+**The readout uses real month boundaries**, not twelve equal twelfths, so the
+label changes when the hand actually crosses into the month. Verified: Aug
+switches at 0.5823 and Sep at 0.6675, which are day 212 and day 243 of a
+364-day window. Below ninety days the readout is omitted — at Week or Month
+zoom a month name is constant or changes once, which reads as a glitch. The hand
+still sweeps.
+
+**Known limit**, carried from the plan and now documented in the module: the
+viewport is fixed for the whole sweep. A moving window would have to move every
+gridline and arc with it, which SMIL cannot express. That needs frame capture.
+
+If today falls outside the planner's range there is no hand to animate, so the
+export declines with a toast rather than emitting a still file calling itself a
+flyover.
+
+**Verified live**: 134,939 bytes, parses clean, rotate -235.7 to 124.3 degrees
+over 20s with `repeatCount="indefinite"` and both hand elements inside the
+spinner group. Motion sampled in a live browser at 36 degrees per 2 seconds —
+exactly 360/20s. Two screenshots five seconds apart show the hand at Sep and
+then at Dec, with the readout reading Sep and then Dec.
+
+### What is left
+
+Step 7, the scrubber, and nothing else. It was always an explicit stretch: it
+produces no artifact and travels nowhere, so it serves craft rather than the
+problem statement. The `setNow()` seam it would need already exists.
+
+The contested premise from the original session — whether "alive" is the right
+axis for an ambient display at all — remains untested. Answering it needs the
+display on a wall for two weeks and five coworkers asked what lands next
+fortnight, which is the assignment the design doc closed on.
