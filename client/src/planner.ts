@@ -18,7 +18,8 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 import { DataManager } from './data-manager';
 import { showActivityDialog, showLaneDialog, showOutlookImportDialog } from './dialogs';
-import { randomId, laneColor, parseDate, formatDate, addDays, ColorBy, STATUS_COLORS, colorForString } from './utils';
+import { randomId, laneColor, parseDate, formatDate, addDays, addMonths, getMonthStart, ColorBy, STATUS_COLORS, colorForString } from './utils';
+import { buildFlyoverSVG, FlyoverLabel } from './flyover';
 import { defaultViewport, zoomIn, zoomOut, navigate, canZoomIn, canZoomOut, viewportLabel, navigateToYear, navigateToRange, navigateToToday } from './viewport';
 import { ZoomLevel } from './types';
 import { decode as decodeUrlState, encode as encodeUrlState } from './url-state';
@@ -77,6 +78,7 @@ export class Planner {
   private searchInputEl: HTMLInputElement | null = null;
   private pngBtn: HTMLButtonElement | null = null;
   private svgBtn: HTMLButtonElement | null = null;
+  private flyoverBtn: HTMLButtonElement | null = null;
   private members: Member[] = [];
 
   // Refs to toolbar elements that change on viewport updates
@@ -555,6 +557,39 @@ export class Planner {
   }
 
   /**
+   * Month readout steps for a flyover of the current window.
+   *
+   * One 360-degree sweep always traverses exactly the visible window, so the
+   * labels are month starts expressed as a fraction of it. A month boundary
+   * before windowStart clamps to 0, which covers a window that opens mid-month.
+   *
+   * Returns nothing for a window under roughly three months: at Week or Month
+   * zoom a month name is either constant or changes once, which reads as a
+   * glitch rather than a readout. The hand still sweeps; there is just no text.
+   */
+  private flyoverLabels(): FlyoverLabel[] {
+    const start = this.viewport.windowStart.getTime();
+    const span = this.viewport.windowEnd.getTime() - start;
+    const NINETY_DAYS = 90 * 86400000;
+    if (span < NINETY_DAYS) return [];
+
+    const labels: FlyoverLabel[] = [];
+    let cursor = getMonthStart(this.viewport.windowStart);
+    while (cursor.getTime() <= this.viewport.windowEnd.getTime()) {
+      const frac = Math.max(0, (cursor.getTime() - start) / span);
+      const text = cursor.toLocaleDateString(undefined, { month: 'short' });
+      // A window opening mid-month yields two entries at 0; keep the later one.
+      if (labels.length > 0 && labels[labels.length - 1].startFrac === frac) {
+        labels[labels.length - 1] = { text, startFrac: frac };
+      } else {
+        labels.push({ text, startFrac: frac });
+      }
+      cursor = addMonths(cursor, 1);
+    }
+    return labels;
+  }
+
+  /**
    * Enable/disable the export buttons for the current view.
    *
    * Both render the disc SVG, so both are disc-only — list and people views
@@ -580,6 +615,13 @@ export class Planner {
       this.svgBtn.disabled = !isDisc;
       this.svgBtn.title = isDisc
         ? 'Download disc as vector SVG — prints at any size'
+        : notDiscMsg;
+    }
+
+    if (this.flyoverBtn) {
+      this.flyoverBtn.disabled = !isDisc;
+      this.flyoverBtn.title = isDisc
+        ? 'Download an animated SVG — the hand sweeps the whole window in 20s'
         : notDiscMsg;
     }
   }
@@ -1357,6 +1399,34 @@ export class Planner {
       });
       this.svgBtn = svgBtn;
       exportGroup.appendChild(svgBtn);
+
+      // Flyover: the same serialized SVG with a rotating hand bolted on. Also
+      // outside the canvas branch — declarative SMIL, no rasterizing.
+      const flyoverBtn = document.createElement('button');
+      flyoverBtn.textContent = 'Flyover';
+      flyoverBtn.className = 'cp-btn';
+      flyoverBtn.addEventListener('click', () => {
+        const node = this.renderer.getSVGNode();
+        try {
+          const svgStr = this.withLightPalette(() => serializeSVGWithStyles(node));
+          const animated = buildFlyoverSVG(svgStr, {
+            labels: this.flyoverLabels(),
+            labelColor: getComputedStyle(document.documentElement)
+              .getPropertyValue('--cp-today').trim() || '#f44336',
+          });
+          if (animated === svgStr) {
+            toast.error('Flyover needs the today marker on the disc — navigate to a window that includes today.');
+            return;
+          }
+          downloadSVGString(animated, this.exportFilename('flyover.svg'));
+        } catch (err) {
+          console.error('Flyover export failed:', err);
+          const msg = err instanceof Error && err.message ? err.message : String(err);
+          toast.error(`Flyover export failed: ${msg}`);
+        }
+      });
+      this.flyoverBtn = flyoverBtn;
+      exportGroup.appendChild(flyoverBtn);
 
       this.toolbar.appendChild(exportGroup);
     }

@@ -954,7 +954,13 @@ export class Renderer {
 
     const todayColor = this.cssVar('--cp-today', '#f44336');
     const angle = this.angleScale(today);
+
+    // The cp-today-hand class makes these addressable after serialization, so
+    // the flyover export can lift them into a rotating group. They are drawn
+    // center-origin inside g.cp-main (translated to the disc centre), which is
+    // what lets a plain SVG rotate transform reproduce the sweep exactly.
     g.append('line')
+      .attr('class', 'cp-today-hand')
       .attr('x1', 0).attr('y1', 0)
       .attr('x2', Math.sin(angle) * OUTER_RADIUS)
       .attr('y2', -Math.cos(angle) * OUTER_RADIUS)
@@ -964,6 +970,7 @@ export class Renderer {
       .attr('opacity', 0.75);
 
     g.append('circle')
+      .attr('class', 'cp-today-hand')
       .attr('cx', Math.sin(angle) * OUTER_RADIUS)
       .attr('cy', -Math.cos(angle) * OUTER_RADIUS)
       .attr('r', 4)
