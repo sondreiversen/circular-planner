@@ -117,6 +117,25 @@
           </div>
           <div id="share-token-error" class="form-error hidden"></div>
         </div>
+
+        <div class="share-token-section">
+          <h4>Wall display link</h4>
+          <p class="share-public-hint">A chrome-free, self-refreshing view for a screen in the room. Separate from the public link above, so revoking one never affects the other.</p>
+          <div id="display-token-no-token">
+            <button id="display-token-enable-btn" class="btn btn-primary" type="button">Create display link</button>
+          </div>
+          <div id="display-token-active" class="hidden">
+            <div class="share-token-url-row">
+              <input type="text" id="display-token-url-input" readonly>
+              <button id="display-token-copy-btn" class="btn btn-ghost" type="button">Copy</button>
+            </div>
+            <div class="share-token-actions">
+              <button id="display-token-revoke-btn" class="btn-danger-sm" type="button">Revoke display link</button>
+            </div>
+            <p class="share-token-warning">Open this in a kiosk browser on the display. Anyone with this link can view this planner without logging in.</p>
+          </div>
+          <div id="display-token-error" class="form-error hidden"></div>
+        </div>
       </div>
 
       <div class="dialog-actions">

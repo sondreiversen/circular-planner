@@ -215,7 +215,7 @@ async function openShareDialog(plannerId: number, config: PlannerConfig): Promis
     });
     tabPublic?.addEventListener('click', async () => {
       showTab('public');
-      await refreshTokenPanel(plannerId);
+      await refreshTokenPanels(plannerId);
     });
 
     const form    = document.getElementById('share-form') as HTMLFormElement;
@@ -413,73 +413,104 @@ interface ShareToken {
   label: string | null;
 }
 
-function buildPublicUrl(plannerId: number, token: string): string {
-  // Use the API response URL if available; otherwise build from current origin.
-  return window.location.origin + '/planner-public.html?token=' + encodeURIComponent(token);
+/**
+ * A share-token panel: one block of markup managing one token.
+ *
+ * The public link and the wall-display link are the same panel with different
+ * ids and a different label, so they are driven by one implementation rather
+ * than two near-identical copies. The label is what keeps them apart on the
+ * server — CreateShareToken is idempotent per label, so each panel only ever
+ * sees, creates and revokes its own token.
+ */
+interface TokenPanelSpec {
+  /** id prefix shared by this panel's elements, e.g. "share-token". */
+  prefix: string;
+  /** null for the anonymous public link; a label for a purpose-built token. */
+  label: string | null;
+  /** Append to the viewer URL, e.g. "&display=1" for the wall display. */
+  urlSuffix?: string;
+  /** Only the public link offers an iframe snippet. */
+  embed?: boolean;
 }
 
-function setTokenPanelActive(token: string, url: string): void {
-  const noToken = document.getElementById('share-token-no-token');
-  const active  = document.getElementById('share-token-active');
-  if (noToken) noToken.classList.add('hidden');
-  if (active)  active.classList.remove('hidden');
+const PUBLIC_PANEL: TokenPanelSpec = { prefix: 'share-token', label: null, embed: true };
+const DISPLAY_PANEL: TokenPanelSpec = { prefix: 'display-token', label: 'wall display', urlSuffix: '&display=1' };
 
-  const urlInput = document.getElementById('share-token-url-input') as HTMLInputElement | null;
+function buildPublicUrl(plannerId: number, token: string, suffix = ''): string {
+  return window.location.origin + '/planner-public.html?token=' + encodeURIComponent(token) + suffix;
+}
+
+function el(prefix: string, part: string): HTMLElement | null {
+  return document.getElementById(`${prefix}-${part}`);
+}
+
+function setPanelActive(spec: TokenPanelSpec, url: string): void {
+  el(spec.prefix, 'no-token')?.classList.add('hidden');
+  el(spec.prefix, 'active')?.classList.remove('hidden');
+
+  const urlInput = el(spec.prefix, 'url-input') as HTMLInputElement | null;
   if (urlInput) urlInput.value = url;
 
-  const embedCode = document.getElementById('share-token-embed-code') as HTMLTextAreaElement | null;
-  if (embedCode) {
-    embedCode.value = `<iframe src="${url}" width="800" height="800" style="border:0"></iframe>`;
+  if (spec.embed) {
+    const embedCode = el(spec.prefix, 'embed-code') as HTMLTextAreaElement | null;
+    if (embedCode) {
+      embedCode.value = `<iframe src="${url}" width="800" height="800" style="border:0"></iframe>`;
+    }
   }
 }
 
-function setTokenPanelNone(): void {
-  const noToken = document.getElementById('share-token-no-token');
-  const active  = document.getElementById('share-token-active');
-  if (noToken) noToken.classList.remove('hidden');
-  if (active)  active.classList.add('hidden');
+function setPanelNone(spec: TokenPanelSpec): void {
+  el(spec.prefix, 'no-token')?.classList.remove('hidden');
+  el(spec.prefix, 'active')?.classList.add('hidden');
 }
 
-async function refreshTokenPanel(plannerId: number): Promise<void> {
-  const errEl = document.getElementById('share-token-error');
-  if (errEl) errEl.classList.add('hidden');
+function showPanelError(spec: TokenPanelSpec, msg: string): void {
+  const errEl = el(spec.prefix, 'error');
+  if (errEl) { errEl.textContent = msg; errEl.classList.remove('hidden'); }
+}
+
+async function refreshTokenPanel(plannerId: number, spec: TokenPanelSpec = PUBLIC_PANEL): Promise<void> {
+  el(spec.prefix, 'error')?.classList.add('hidden');
+
   try {
     const tokens = await api.get<ShareToken[]>(`/api/planners/${plannerId}/share-tokens`);
-    // Only the unlabelled token — this panel manages the anonymous public link.
-    // Without the label check it would show whichever active token happened to
-    // sort first, so creating a wall-display token would swap the URL shown
-    // here and revoking "the public link" would kill the display instead.
-    const active = tokens.find(t => !t.revoked_at && !t.label);
+    // Match this panel's own token only. Without the label check, a panel would
+    // show whichever active token sorted first — so creating the display link
+    // would swap the URL shown under "Public link", and revoking there would
+    // kill the wall display instead.
+    const active = tokens.find(t => !t.revoked_at && (t.label ?? null) === spec.label);
     if (active) {
-      const url = buildPublicUrl(plannerId, active.token);
-      setTokenPanelActive(active.token, url);
+      setPanelActive(spec, buildPublicUrl(plannerId, active.token, spec.urlSuffix ?? ''));
     } else {
-      setTokenPanelNone();
+      setPanelNone(spec);
     }
   } catch {
-    setTokenPanelNone();
+    setPanelNone(spec);
   }
 
-  // Wire buttons once
-  const enableBtn = document.getElementById('share-token-enable-btn');
+  // Handlers are bound once per element; refresh may run repeatedly.
+  const enableBtn = el(spec.prefix, 'enable-btn');
   if (enableBtn && !enableBtn.dataset.bound) {
     enableBtn.dataset.bound = '1';
     enableBtn.addEventListener('click', async () => {
-      const errEl2 = document.getElementById('share-token-error');
       try {
-        const { token, url } = await api.post<{ token: string; url: string }>(`/api/planners/${plannerId}/share-tokens`, {});
-        setTokenPanelActive(token, url);
+        const body = spec.label ? { label: spec.label } : {};
+        const { token } = await api.post<{ token: string; url: string }>(
+          `/api/planners/${plannerId}/share-tokens`, body);
+        // Build the URL locally rather than using the server's: only the client
+        // knows this panel wants ?display=1 appended.
+        setPanelActive(spec, buildPublicUrl(plannerId, token, spec.urlSuffix ?? ''));
       } catch (err) {
-        if (errEl2) { errEl2.textContent = (err as Error).message; errEl2.classList.remove('hidden'); }
+        showPanelError(spec, (err as Error).message);
       }
     });
   }
 
-  const copyBtn = document.getElementById('share-token-copy-btn');
+  const copyBtn = el(spec.prefix, 'copy-btn');
   if (copyBtn && !copyBtn.dataset.bound) {
     copyBtn.dataset.bound = '1';
     copyBtn.addEventListener('click', () => {
-      const urlInput = document.getElementById('share-token-url-input') as HTMLInputElement | null;
+      const urlInput = el(spec.prefix, 'url-input') as HTMLInputElement | null;
       if (!urlInput) return;
       navigator.clipboard?.writeText(urlInput.value).then(() => {
         copyBtn.textContent = 'Copied!';
@@ -491,24 +522,28 @@ async function refreshTokenPanel(plannerId: number): Promise<void> {
     });
   }
 
-  const revokeBtn = document.getElementById('share-token-revoke-btn');
+  const revokeBtn = el(spec.prefix, 'revoke-btn');
   if (revokeBtn && !revokeBtn.dataset.bound) {
     revokeBtn.dataset.bound = '1';
     revokeBtn.addEventListener('click', async () => {
-      const urlInput = document.getElementById('share-token-url-input') as HTMLInputElement | null;
-      const currentUrl = urlInput?.value ?? '';
-      const tokenMatch = currentUrl.match(/[?&]token=([^&]+)/);
+      const urlInput = el(spec.prefix, 'url-input') as HTMLInputElement | null;
+      const tokenMatch = (urlInput?.value ?? '').match(/[?&]token=([^&]+)/);
       if (!tokenMatch) return;
-      const tokenVal = decodeURIComponent(tokenMatch[1]);
-      const errEl3 = document.getElementById('share-token-error');
       try {
-        await api.post(`/api/planners/${plannerId}/share-tokens/${encodeURIComponent(tokenVal)}/revoke`, {});
-        setTokenPanelNone();
+        await api.post(
+          `/api/planners/${plannerId}/share-tokens/${encodeURIComponent(decodeURIComponent(tokenMatch[1]))}/revoke`, {});
+        setPanelNone(spec);
       } catch (err) {
-        if (errEl3) { errEl3.textContent = (err as Error).message; errEl3.classList.remove('hidden'); }
+        showPanelError(spec, (err as Error).message);
       }
     });
   }
+}
+
+/** Refresh both share-token panels. */
+async function refreshTokenPanels(plannerId: number): Promise<void> {
+  await refreshTokenPanel(plannerId, PUBLIC_PANEL);
+  await refreshTokenPanel(plannerId, DISPLAY_PANEL);
 }
 
 document.addEventListener('DOMContentLoaded', init);
