@@ -1,7 +1,19 @@
 /**
- * svg-export.ts — PNG export helpers for the circular planner.
+ * svg-export.ts — export helpers for the circular planner disc.
  *
- * All functions are framework-agnostic pure DOM/Canvas APIs.
+ * Two outputs from one serializer:
+ *
+ *   serializeSVGWithStyles(node)  ->  standalone SVG string
+ *          |                          (CSS custom properties resolved to
+ *          |                           literal colours, namespaces added)
+ *          |
+ *          ├──> rasterizeSVGString()  ->  .png   fixed pixel size
+ *          └──> downloadSVGString()   ->  .svg   vector, prints at any size
+ *
+ * Colours are baked into attributes at serialization time, so callers must
+ * serialize inside a forced-light-palette window — see Planner.withLightPalette.
+ *
+ * All functions are framework-agnostic DOM/Canvas APIs.
  *
  * Note: on Safari, SVG embedded fonts may render differently than in
  * Chrome/Firefox because Safari's canvas drawImage treats cross-origin
@@ -89,24 +101,6 @@ export function serializeSVGWithStyles(svg: SVGSVGElement): string {
 }
 
 /**
- * Download the current disc as a PNG file.
- *
- * @param svg      The SVGSVGElement to export (from Renderer.getSVGNode()).
- * @param filename Suggested download filename, e.g. "my-planner-2026-05-12.png".
- * @param scale    Canvas multiplier for retina quality (default 2 → 1600×1600 for an 800×800 viewBox).
- */
-export async function exportSVGToPNG(
-  svg: SVGSVGElement,
-  filename: string,
-  scale = 2,
-): Promise<void> {
-  const vb = svg.viewBox.baseVal;
-  const vbWidth  = vb && vb.width  > 0 ? vb.width  : 800;
-  const vbHeight = vb && vb.height > 0 ? vb.height : 800;
-  return rasterizeSVGString(serializeSVGWithStyles(svg), vbWidth, vbHeight, filename, scale);
-}
-
-/**
  * Rasterize an already-serialized SVG string to a PNG download.
  *
  * Split out from exportSVGToPNG so the caller can perform serialization inside
@@ -161,5 +155,41 @@ export async function rasterizeSVGString(
     });
   } finally {
     URL.revokeObjectURL(blobUrl);
+  }
+}
+
+/**
+ * Download an already-serialized SVG string as a .svg file.
+ *
+ * This is the vector counterpart to rasterizeSVGString, and the reason the
+ * serializer was split out: serializeSVGWithStyles already produces a
+ * standalone, print-ready SVG with every CSS custom property resolved to a
+ * literal colour. Until now that string was built, rasterized to a fixed-size
+ * PNG, and thrown away — so a 2x export of an 800x800 viewBox capped out at
+ * 1600x1600, about a five-inch square at 300 DPI. The vector version has no
+ * such ceiling and prints at any size.
+ *
+ * Caveat worth knowing before treating the output as a print master: no
+ * @font-face is embedded, because the disc uses system fonts only (see the
+ * note at the top of this file). Text will re-flow on a machine that lacks the
+ * same fonts. Fine for internal use and for handing to a plotter; not a
+ * portable artifact.
+ *
+ * As with PNG, the caller must serialize inside a forced-light-palette window
+ * — the colours are baked into attributes at render time.
+ */
+export function downloadSVGString(svgStr: string, filename: string): void {
+  const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } finally {
+    // Defer revoke so the browser has time to start the download.
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 }

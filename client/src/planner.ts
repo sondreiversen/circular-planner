@@ -23,7 +23,7 @@ import { defaultViewport, zoomIn, zoomOut, navigate, canZoomIn, canZoomOut, view
 import { ZoomLevel } from './types';
 import { decode as decodeUrlState, encode as encodeUrlState } from './url-state';
 import { listViews, createView, deleteView, SavedView } from './saved-views';
-import { serializeSVGWithStyles, rasterizeSVGString } from './svg-export';
+import { serializeSVGWithStyles, rasterizeSVGString, downloadSVGString } from './svg-export';
 import { now } from './clock';
 import { setClip, getClip, hasClip } from './activity-clipboard';
 import { api } from './api-client';
@@ -76,6 +76,7 @@ export class Planner {
   private viewPeopleBtn!: HTMLButtonElement;
   private searchInputEl: HTMLInputElement | null = null;
   private pngBtn: HTMLButtonElement | null = null;
+  private svgBtn: HTMLButtonElement | null = null;
   private members: Member[] = [];
 
   // Refs to toolbar elements that change on viewport updates
@@ -539,18 +540,47 @@ export class Planner {
       this.viewPeopleBtn.classList.toggle('cp-btn-active', isPeople);
     }
 
-    this.updatePngBtnState();
+    this.updateExportBtnStates();
   }
 
-  private updatePngBtnState(): void {
-    if (!this.pngBtn) return;
-    const canvasSupported = typeof document.createElement('canvas').toDataURL === 'function';
-    if (this.viewMode === 'disc' && canvasSupported) {
-      this.pngBtn.disabled = false;
-      this.pngBtn.title = 'Download disc as PNG';
-    } else {
-      this.pngBtn.disabled = true;
-      this.pngBtn.title = 'PNG export is only available for the disc view. Use Print to save list/people as PDF.';
+  /**
+   * Filename for an export, e.g. "team-year-2026-2026-08-27.svg".
+   * Shared by every export button so they cannot drift apart.
+   */
+  private exportFilename(ext: string): string {
+    const slug = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'planner';
+    // Wall clock: the filename records when the export actually happened.
+    return `${slug(this.config.title)}-${formatDate(new Date())}.${ext}`; // clock-exempt: real export timestamp
+  }
+
+  /**
+   * Enable/disable the export buttons for the current view.
+   *
+   * Both render the disc SVG, so both are disc-only — list and people views
+   * have no SVG to serialize and Print is the route to PDF there. They differ
+   * in one way: PNG needs a canvas to rasterize into, SVG does not, so a
+   * browser without canvas support still gets vector export.
+   */
+  private updateExportBtnStates(): void {
+    const isDisc = this.viewMode === 'disc';
+    const notDiscMsg = 'Only available for the disc view. Use Print to save list/people as PDF.';
+
+    if (this.pngBtn) {
+      const canvasSupported = typeof document.createElement('canvas').toDataURL === 'function';
+      this.pngBtn.disabled = !(isDisc && canvasSupported);
+      this.pngBtn.title = !isDisc
+        ? notDiscMsg
+        : canvasSupported
+          ? 'Download disc as PNG'
+          : 'PNG export needs canvas support, which this browser lacks. Try SVG.';
+    }
+
+    if (this.svgBtn) {
+      this.svgBtn.disabled = !isDisc;
+      this.svgBtn.title = isDisc
+        ? 'Download disc as vector SVG — prints at any size'
+        : notDiscMsg;
     }
   }
 
@@ -1289,10 +1319,6 @@ export class Planner {
       pngBtn.className = 'cp-btn';
       if (canvasSupported) {
         pngBtn.addEventListener('click', () => {
-          const slug = (s: string) =>
-            s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'planner';
-          // Wall clock: the filename records when the export actually happened.
-          const filename = `${slug(this.config.title)}-${formatDate(new Date())}.png`; // clock-exempt: real export timestamp
           const node = this.renderer.getSVGNode();
           const vb = node.viewBox.baseVal;
           const vbW = vb && vb.width  > 0 ? vb.width  : 800;
@@ -1300,7 +1326,7 @@ export class Planner {
           // Serialize inside the light-palette window — colours are baked into
           // SVG attributes at render time and cannot be corrected afterwards.
           const svgStr = this.withLightPalette(() => serializeSVGWithStyles(node));
-          rasterizeSVGString(svgStr, vbW, vbH, filename).catch((err) => {
+          rasterizeSVGString(svgStr, vbW, vbH, this.exportFilename('png')).catch((err) => {
             console.error('PNG export failed:', err);
             const msg = err instanceof Error && err.message ? err.message : String(err);
             toast.error(`PNG export failed: ${msg}`);
@@ -1308,8 +1334,29 @@ export class Planner {
         });
       }
       this.pngBtn = pngBtn;
-      this.updatePngBtnState();
+      this.updateExportBtnStates();
       exportGroup.appendChild(pngBtn);
+
+      // SVG button. Deliberately outside the canvasSupported branch: vector
+      // export needs no canvas, and this is the only output that prints at
+      // poster size — the PNG is capped at 2x an 800x800 viewBox, roughly a
+      // five-inch square at 300 DPI.
+      const svgBtn = document.createElement('button');
+      svgBtn.textContent = 'SVG';
+      svgBtn.className = 'cp-btn';
+      svgBtn.addEventListener('click', () => {
+        const node = this.renderer.getSVGNode();
+        try {
+          const svgStr = this.withLightPalette(() => serializeSVGWithStyles(node));
+          downloadSVGString(svgStr, this.exportFilename('svg'));
+        } catch (err) {
+          console.error('SVG export failed:', err);
+          const msg = err instanceof Error && err.message ? err.message : String(err);
+          toast.error(`SVG export failed: ${msg}`);
+        }
+      });
+      this.svgBtn = svgBtn;
+      exportGroup.appendChild(svgBtn);
 
       this.toolbar.appendChild(exportGroup);
     }
