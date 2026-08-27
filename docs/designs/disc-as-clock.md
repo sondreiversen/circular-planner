@@ -82,7 +82,7 @@ The risk is that the abstraction has to be right up front, and any stray `new Da
 
 ## Prerequisites
 
-> **Implementation status (2026-08-27):** Steps 1-6 and 8 are built, all five prerequisites are closed, and the deferred display-token UI is done. Everything has been verified against a running server in a real browser. **Remaining: step 7 (scrubber) only, and it was always an explicit stretch goal.**
+> **Implementation status (2026-08-27): COMPLETE.** Every step (1-8) is built, all five prerequisites are closed, and the deferred display-token UI is done. Everything has been verified against a running server in a real browser. What remains is not code: the contested premise this design was built on is still untested, and answering it needs the display on a wall for two weeks.
 
 These are blockers, not nice-to-haves. An adversarial review found each would stop implementation within the first hour.
 
@@ -523,3 +523,61 @@ The contested premise from the original session — whether "alive" is the right
 axis for an ambient display at all — remains untested. Answering it needs the
 display on a wall for two weeks and five coworkers asked what lands next
 fortnight, which is the assignment the design doc closed on.
+
+---
+
+## Scrubber landed — the design is complete (2026-08-27)
+
+Step 7, the last item, and the one this document twice marked as droppable. A
+slider in the toolbar moves the clock across the visible window; the disc
+follows; Live returns it to the real date.
+
+It is better understood as the payoff of step 1 than as a feature of its own.
+Everything the disc draws that depends on the date already reads `now()`, so
+moving the clock *is* the implementation — no preview mode, no parallel render
+path, no special casing. The plan claimed the clock injection was "one refactor,
+four features"; the scrubber is the fourth, and it cost an afternoon rather than
+a rewrite.
+
+`Renderer.refreshNow()` redraws only the today indicator rather than the whole
+disc, because a full re-render rebuilds geometry, every arc and every text path,
+and doing that per pointer-move would make dragging feel like waiting. It finds
+the hand through the same `cp-today-hand` class the flyover exporter uses, so
+the two features share one seam.
+
+`dateAtFraction`/`fractionOfDate` are pure and tested: both clamp, because a
+pointer can leave the control mid-drag and some platforms report range values
+outside the declared bounds, and a zero-span window cannot divide by zero.
+
+The readout is blank while live — Live is the normal state and does not need
+narrating, and a permanent date beside a slider reads as an input the user is
+meant to fill in. Scrubbing is deliberately ephemeral and not synced to the URL;
+`?now=` stays what it was built for, reproducible screenshots and bug reports.
+
+Verified: the handle seats at 655/1000 on load, today being day 238 of 364, and
+the hand's 235.7-degree angle agrees. Quarter positions map exactly — 0 to
+Jan 1 at twelve o'clock, 250 to Apr 2 at three, 500 to Jul 2 at six, 750 to
+Oct 1 at nine, 1000 to Dec 31 back at the top.
+
+## Closing the design
+
+Everything in this plan is built and verified against a running application.
+Along the way it also fixed five bugs that were nothing to do with the plan:
+CI that had never passed on main, optimistic concurrency that never engaged,
+a print palette that was dead code, share links that redirected every viewer to
+a login page, and a listener leak that accumulated on every saved-view load.
+
+Two things are deliberately left open.
+
+**The contested premise.** Whether "alive" is the right axis for an ambient
+display was recorded as unresolved at the start and is unresolved still. The
+landscape research says relevance kills these screens, not staleness, and a
+year-view disc is the lowest-relevance daily glance you could build. The
+independent reviewer predicted the team would find the clock charming for about
+four days. Nothing built here answers that. The test is the one the design doc
+closed on: put it on a wall, wait two weeks, ask five coworkers to name one
+thing landing in the next fortnight.
+
+**Toolbar density.** The disc toolbar now carries view switches, colour-by,
+four export buttons and a scrubber. Each was justified on its own; together
+they are a lot. Worth a look in any future UI work.
