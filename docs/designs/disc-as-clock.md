@@ -82,7 +82,7 @@ The risk is that the abstraction has to be right up front, and any stray `new Da
 
 ## Prerequisites
 
-> **Implementation status (2026-08-26):** Steps 1, 2, 3 and 8 are built and all five prerequisites are closed. See "Bugs fixed", "Spine landed", "Prerequisites closed" and "Display mode landed". Everything has now been verified against a running server in a real browser. Remaining: step 4 (SVG download), step 5 (print palette — already fixed), step 6 (flyover), step 7 (scrubber, stretch).
+> **Implementation status (2026-08-27):** Steps 1, 2, 3, 4, 5 and 8 are built, all five prerequisites are closed, and the deferred display-token UI is done. Everything has been verified against a running server in a real browser. **Remaining: step 6 (flyover — format still unresolved) and step 7 (scrubber, stretch).**
 
 These are blockers, not nice-to-haves. An adversarial review found each would stop implementation within the first hour.
 
@@ -402,3 +402,60 @@ pre-existing 13. Backend: build, vet and the full `-race` suite green on Go
 **Deferred:** a UI for creating and managing labelled tokens. The backend
 supports it and the existing share panel is protected from it, but a display
 token still has to be minted via the API today.
+
+---
+
+## Poster export and the display link (2026-08-27)
+
+**Step 4 — vector SVG download.** The cheapest item in the plan, and it landed
+as predicted: `serializeSVGWithStyles` already produced a standalone print-ready
+SVG, and that string was being rasterized and discarded. The PNG has a ceiling
+the vector output does not — 2x an 800x800 viewBox is 1600x1600, roughly a
+five-inch square at 300 DPI. A coaster, not a poster.
+
+The SVG button sits deliberately outside the `canvasSupported` branch: vector
+export needs no canvas, so a browser lacking canvas still gets the better of the
+two formats. `updatePngBtnState` became `updateExportBtnStates` covering both,
+`exportFilename()` hoists the slug/date logic, and `exportSVGToPNG` was deleted
+as dead code — nothing had called it since serialization moved inside the
+light-palette window.
+
+Verified from a **dark** session, the case that used to produce dark exports:
+131,497 bytes, parses with no error, `<svg viewBox="0 0 800 800">` with correct
+namespace, 59 paths, 98 text nodes, 2 gradients. Baked stops came out `#ffffff`
+and `#f4f5f7` — the light values. Afterwards `data-theme` was back to `dark` and
+`localStorage` was untouched, confirming the deliberate bypass of `applyTheme`.
+
+Documented limit: no `@font-face` is embedded, so text re-flows on a machine
+without the same system fonts. Fine internally and for a plotter; not a portable
+master.
+
+**The display-token UI** closes what step 3 deferred. Display mode worked, but
+minting its token required a curl call, so only someone willing to hit the API
+by hand could use it. The share dialog now carries a "Wall display link" section
+beside the public link, producing a URL with `&display=1` already appended.
+
+Built by generalising the existing panel rather than copying it: both panels are
+the same markup and behaviour with different ids and a different label, so one
+`TokenPanelSpec`-parameterised implementation drives both. Each panel matches
+only its own token by label — without that, creating the display link would swap
+the URL shown under "Public link" and revoking there would kill the wall
+display.
+
+Verified through the real interface: creating both yields two distinct tokens;
+revoking the public link leaves the display panel active and its URL intact,
+with the revoked token returning 404 while the display token returns 200;
+recreating the public link mints a fresh token rather than resurrecting the
+revoked one. **That revoke case is the entire justification for P5, and this is
+the first time it has been exercised through the UI a person actually uses.**
+
+### What is left
+
+Step 6, the flyover, still has the unresolved problem the plan recorded: every
+format reachable without a new npm dependency fails to reach somewhere it was
+meant to travel. Animated SVG is the recommendation and it will not go in a
+slide deck, which was the original justification for building it. That decision
+should be made before any code.
+
+Step 7, the scrubber, remains an explicit stretch goal — it produces no artifact
+and travels nowhere, so it serves craft rather than the stated problem.
