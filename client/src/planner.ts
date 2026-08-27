@@ -20,12 +20,12 @@ import { DataManager } from './data-manager';
 import { showActivityDialog, showLaneDialog, showOutlookImportDialog } from './dialogs';
 import { randomId, laneColor, parseDate, formatDate, addDays, addMonths, getMonthStart, ColorBy, STATUS_COLORS, colorForString } from './utils';
 import { buildFlyoverSVG, FlyoverLabel } from './flyover';
-import { defaultViewport, zoomIn, zoomOut, navigate, canZoomIn, canZoomOut, viewportLabel, navigateToYear, navigateToRange, navigateToToday } from './viewport';
+import { defaultViewport, zoomIn, zoomOut, navigate, canZoomIn, canZoomOut, viewportLabel, navigateToYear, navigateToRange, navigateToToday, dateAtFraction, fractionOfDate } from './viewport';
 import { ZoomLevel } from './types';
 import { decode as decodeUrlState, encode as encodeUrlState } from './url-state';
 import { listViews, createView, deleteView, SavedView } from './saved-views';
 import { serializeSVGWithStyles, rasterizeSVGString, downloadSVGString } from './svg-export';
-import { now } from './clock';
+import { now, setNow, isLive } from './clock';
 import { setClip, getClip, hasClip } from './activity-clipboard';
 import { api } from './api-client';
 
@@ -79,6 +79,9 @@ export class Planner {
   private pngBtn: HTMLButtonElement | null = null;
   private svgBtn: HTMLButtonElement | null = null;
   private flyoverBtn: HTMLButtonElement | null = null;
+  private scrubEl: HTMLInputElement | null = null;
+  private scrubReadoutEl: HTMLElement | null = null;
+  private scrubGroupEl: HTMLElement | null = null;
   private members: Member[] = [];
 
   // Refs to toolbar elements that change on viewport updates
@@ -554,6 +557,87 @@ export class Planner {
       s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'planner';
     // Wall clock: the filename records when the export actually happened.
     return `${slug(this.config.title)}-${formatDate(new Date())}.${ext}`; // clock-exempt: real export timestamp
+  }
+
+  /**
+   * The scrubber: drag time across the visible window and watch the disc follow.
+   *
+   * Everything the disc draws that depends on the date reads clock.ts now(), so
+   * moving the clock is enough — no special "preview" mode, no second code
+   * path. That is the payoff of the injectable-clock refactor.
+   *
+   * Only the hand is redrawn per move (Renderer.refreshNow), not the whole
+   * disc: a full re-render rebuilds every arc and text path and would make
+   * dragging feel like waiting.
+   */
+  private buildScrubControl(): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'cp-zoom-controls cp-scrub-group';
+    wrap.style.marginLeft = '8px';
+
+    const label = document.createElement('span');
+    label.className = 'cp-toolbar-label';
+    label.textContent = 'Scrub';
+    wrap.appendChild(label);
+
+    const range = document.createElement('input');
+    range.type = 'range';
+    range.min = '0';
+    range.max = '1000';
+    range.step = '1';
+    range.className = 'cp-scrub-range';
+    range.title = 'Drag to move the disc through time. Release nothing — click Live to go back to now.';
+    range.value = String(Math.round(fractionOfDate(this.viewport, now()) * 1000));
+    range.addEventListener('input', () => {
+      setNow(dateAtFraction(this.viewport, Number(range.value) / 1000));
+      this.renderer.refreshNow();
+      this.updateScrubState();
+    });
+    wrap.appendChild(range);
+
+    const readout = document.createElement('span');
+    readout.className = 'cp-scrub-readout';
+    wrap.appendChild(readout);
+
+    const liveBtn = document.createElement('button');
+    liveBtn.textContent = 'Live';
+    liveBtn.className = 'cp-btn';
+    liveBtn.title = 'Return the disc to the real current date';
+    liveBtn.addEventListener('click', () => {
+      setNow(null);
+      this.renderer.refreshNow();
+      // Reseat the handle on today so grabbing it again does not jump.
+      if (this.scrubEl) this.scrubEl.value = String(Math.round(fractionOfDate(this.viewport, now()) * 1000));
+      this.updateScrubState();
+    });
+    wrap.appendChild(liveBtn);
+
+    this.scrubEl = range;
+    this.scrubReadoutEl = readout;
+    this.scrubGroupEl = wrap;
+    this.updateScrubState();
+    return wrap;
+  }
+
+  /**
+   * Sync the scrub readout and the Live button's emphasis.
+   *
+   * The readout shows the scrubbed date only while pinned. Live is the default
+   * state and does not need narrating; a permanent date next to a slider reads
+   * as an input the user is supposed to fill in.
+   */
+  private updateScrubState(): void {
+    const live = isLive();
+    if (this.scrubReadoutEl) {
+      this.scrubReadoutEl.textContent = live ? '' : formatDate(now());
+    }
+    if (this.scrubGroupEl) {
+      this.scrubGroupEl.classList.toggle('cp-scrub-pinned', !live);
+    }
+    // A scrubbed disc is not the disc anyone else is looking at, so make the
+    // way back obvious rather than leaving it as one grey button among many.
+    const liveBtn = this.scrubGroupEl?.querySelector('button');
+    if (liveBtn) liveBtn.classList.toggle('cp-btn-active', !live);
   }
 
   /**
@@ -1430,6 +1514,9 @@ export class Planner {
 
       this.toolbar.appendChild(exportGroup);
     }
+
+    // Scrub group
+    this.toolbar.appendChild(this.buildScrubControl());
 
     // Spacer
     const spacer = document.createElement('span');

@@ -1,6 +1,7 @@
 import { now, setNow, isLive, resetClock, parseNowOverride } from '../clock';
-import { navigateToToday } from '../viewport';
+import { navigateToToday, dateAtFraction, fractionOfDate } from '../viewport';
 import { PlannerConfig, ZoomLevel } from '../types';
+import { parseDate } from '../utils';
 
 // These run under testEnvironment: "node", so there is no `window`. That is
 // deliberate: clock.ts falls back to the wall clock when window is absent, and
@@ -142,5 +143,48 @@ describe('render determinism under a pinned clock', () => {
     expect(vp.windowStart.getFullYear()).toBe(2026);
     expect(vp.windowStart.getMonth()).toBe(2);
     expect(vp.windowStart.getDate()).toBe(9);
+  });
+});
+
+describe('scrubber mapping', () => {
+  const vp = {
+    windowStart: parseDate('2026-01-01'),
+    windowEnd: parseDate('2026-12-31'),
+    zoomLevel: ZoomLevel.Year,
+  };
+
+  test('0 is the window start and 1 is the window end', () => {
+    expect(dateAtFraction(vp, 0).getTime()).toBe(vp.windowStart.getTime());
+    expect(dateAtFraction(vp, 1).getTime()).toBe(vp.windowEnd.getTime());
+  });
+
+  test('0.5 lands mid-window', () => {
+    const mid = dateAtFraction(vp, 0.5).getTime();
+    expect(mid).toBe((vp.windowStart.getTime() + vp.windowEnd.getTime()) / 2);
+  });
+
+  // A pointer can leave the control mid-drag, and some platforms report range
+  // values outside the declared bounds.
+  test('clamps out-of-range fractions', () => {
+    expect(dateAtFraction(vp, -5).getTime()).toBe(vp.windowStart.getTime());
+    expect(dateAtFraction(vp, 99).getTime()).toBe(vp.windowEnd.getTime());
+    expect(dateAtFraction(vp, NaN).getTime()).toBe(vp.windowStart.getTime());
+  });
+
+  test('fractionOfDate inverts dateAtFraction', () => {
+    for (const f of [0, 0.125, 0.5, 0.77, 1]) {
+      expect(fractionOfDate(vp, dateAtFraction(vp, f))).toBeCloseTo(f, 9);
+    }
+  });
+
+  test('fractionOfDate clamps dates outside the window', () => {
+    expect(fractionOfDate(vp, parseDate('2020-01-01'))).toBe(0);
+    expect(fractionOfDate(vp, parseDate('2030-01-01'))).toBe(1);
+  });
+
+  test('a zero-span window does not divide by zero', () => {
+    const flat = { windowStart: parseDate('2026-05-05'), windowEnd: parseDate('2026-05-05'), zoomLevel: ZoomLevel.Year };
+    expect(fractionOfDate(flat, parseDate('2026-05-05'))).toBe(0);
+    expect(Number.isNaN(dateAtFraction(flat, 0.5).getTime())).toBe(false);
   });
 });

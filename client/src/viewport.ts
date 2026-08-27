@@ -273,6 +273,35 @@ export function navigateToToday(zoomLevel: ZoomLevel, config: PlannerConfig): Vi
   return viewportForLevel(now(), zoomLevel, config);
 }
 
+/**
+ * Date at a position through the current window, 0..1.
+ *
+ * The scrubber's whole model: the visible window maps onto the full circle, so
+ * a fraction of the window is a fraction of the disc. Clamped, because a
+ * pointer can leave the control while dragging and a range input can report
+ * values outside its own bounds on some platforms.
+ */
+export function dateAtFraction(viewport: Viewport, frac: number): Date {
+  const start = viewport.windowStart.getTime();
+  const span = viewport.windowEnd.getTime() - start;
+  const f = Number.isFinite(frac) ? Math.min(1, Math.max(0, frac)) : 0;
+  return new Date(start + span * f);
+}
+
+/**
+ * Where a date sits in the current window, 0..1.
+ *
+ * Inverse of dateAtFraction. Used to seat the scrubber at today when it first
+ * appears, so grabbing it does not jump the disc.
+ */
+export function fractionOfDate(viewport: Viewport, date: Date): number {
+  const start = viewport.windowStart.getTime();
+  const span = viewport.windowEnd.getTime() - start;
+  if (span <= 0) return 0;
+  const f = (date.getTime() - start) / span;
+  return Number.isFinite(f) ? Math.min(1, Math.max(0, f)) : 0;
+}
+
 // ==================== Iteration helpers ====================
 
 function iterateMonths(start: Date, end: Date, cb: (d: Date) => void): void {

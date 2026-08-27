@@ -130,6 +130,23 @@ export class Renderer {
     this.onDragCommit = fn;
   }
 
+  /**
+   * Redraw only the today indicator.
+   *
+   * Scrubbing moves the clock on every pointer move, and a full re-render
+   * rebuilds geometry and every arc, gridline and text path on the disc. Only
+   * the hand depends on now(), so only the hand is redrawn — which is what
+   * makes dragging feel like dragging rather than like waiting.
+   *
+   * Relies on the cp-today-hand class that the flyover exporter also uses.
+   */
+  refreshNow(): void {
+    const g = this.svg.select<SVGGElement>('g.cp-main');
+    if (g.empty()) return;
+    g.selectAll('.cp-today-hand').remove();
+    this.renderTodayIndicator(g);
+  }
+
   /** Returns the underlying SVGSVGElement. Used by export. */
   public getSVGNode(): SVGSVGElement {
     return this.svg.node() as SVGSVGElement;
@@ -986,6 +1003,7 @@ export class Renderer {
       // Anchor left when dot is on the right half, right when on the left half.
       const anchor = lx >= 0 ? 'start' : 'end';
       g.append('text')
+        .attr('class', 'cp-today-hand')
         .attr('x', lx)
         .attr('y', ly)
         .attr('text-anchor', anchor)

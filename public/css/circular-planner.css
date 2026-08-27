@@ -952,3 +952,38 @@ body.display-mode .cp-svg-container:focus {
   background: #d9822b;
   flex: 0 0 auto;
 }
+
+/* ---- Scrubber ----
+   Drag time across the visible window. Pinned state is signalled on the group
+   so the readout and the Live button can both respond, and so a scrubbed disc
+   never looks like a live one at a glance. */
+.cp-scrub-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cp-scrub-range {
+  width: 130px;
+  accent-color: var(--cp-today, #f44336);
+  cursor: grab;
+}
+
+.cp-scrub-range:active {
+  cursor: grabbing;
+}
+
+.cp-scrub-readout {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--cp-today, #f44336);
+  min-width: 74px;
+}
+
+/* Tint the whole group while pinned: the disc is showing a date nobody else is
+   looking at, and that should be visible without reading the readout. */
+.cp-scrub-group.cp-scrub-pinned .cp-scrub-readout {
+  font-weight: 600;
+}
+
+/* Display mode hides the toolbar wholesale, so the scrubber goes with it. */
