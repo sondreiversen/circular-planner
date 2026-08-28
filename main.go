@@ -77,6 +77,103 @@ func backupMaxAge() time.Duration {
 	return time.Duration(days) * 24 * time.Hour
 }
 
+// backupDirFor resolves where backups live: BACKUP_DIR if set, else a
+// "backups" directory beside the database.
+func backupDirFor(cfg *config.Config) string {
+	if d := os.Getenv("BACKUP_DIR"); d != "" {
+		return d
+	}
+	return filepath.Join(filepath.Dir(strings.TrimPrefix(cfg.DatabaseURL, "sqlite:")), "backups")
+}
+
+// backupBeforeMigrate takes and verifies a backup immediately before applying
+// migrations.
+//
+// It TAKES the backup rather than checking that a recent one exists. An earlier
+// design gated on "a verified backup newer than the database's mtime", which is
+// unsound: in WAL mode commits land in the -wal file and the main database's
+// mtime does not advance until checkpoint, so a stale backup passes. It also
+// fails the other way, because stopping the service checkpoints and bumps mtime
+// past a backup taken moments earlier. Taking the backup makes freshness
+// structural instead of inferred.
+//
+// Free space is checked first so the common failure is diagnosable in seconds
+// rather than being a wall on a machine nobody can SSH into.
+func backupBeforeMigrate(cfg *config.Config, pendingCount int) error {
+	if !strings.HasPrefix(cfg.DatabaseURL, "sqlite:") {
+		return fmt.Errorf("automatic backup covers SQLite only; for Postgres run scripts/backup.sh first, then re-run with --no-backup")
+	}
+	src := strings.TrimPrefix(cfg.DatabaseURL, "sqlite:")
+	dir := backupDirFor(cfg)
+
+	if err := checkSpaceFor(src, dir); err != nil {
+		return err
+	}
+
+	log.Printf("Backing up before applying %d migration(s)...", pendingCount)
+	res, err := db.BackupSQLite(src, dir, true)
+	if err != nil {
+		return err
+	}
+	log.Printf("Backup verified: %s (%d bytes, %d rows in planners)", res.Path, res.Bytes, res.RowCounts["planners"])
+	if removed, err := db.PruneBackups(dir, backupKeepN(), backupMaxAge()); err == nil && len(removed) > 0 {
+		log.Printf("Pruned %d old backup(s)", len(removed))
+	}
+	return nil
+}
+
+// checkSpaceFor fails early when the dump plainly will not fit.
+//
+// The dump is roughly the size of the database. Requiring 2x leaves room for
+// the copy plus WAL activity, and turns "disk full halfway through a vacuum"
+// into a refusal that names the number.
+func checkSpaceFor(srcPath, backupDir string) error {
+	fi, err := os.Stat(srcPath)
+	if err != nil {
+		return fmt.Errorf("stat database: %w", err)
+	}
+	target := backupDir
+	if _, err := os.Stat(target); os.IsNotExist(err) {
+		target = filepath.Dir(target)
+	}
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(target, &st); err != nil {
+		return nil // cannot tell; let the backup try
+	}
+	free := int64(st.Bavail) * int64(st.Bsize)
+	need := fi.Size() * 2
+	if free < need {
+		return fmt.Errorf("not enough free space in %s: %d MB free, need about %d MB (database is %d MB)",
+			target, free/(1<<20), need/(1<<20), fi.Size()/(1<<20))
+	}
+	return nil
+}
+
+// recordBypass leaves a durable trace that --no-backup was used, so doctor.sh
+// can surface it. A bypass nobody can see becomes the standard procedure.
+func recordBypass(cfg *config.Config) error {
+	dir := backupDirFor(cfg)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	line := fmt.Sprintf("%s --no-backup used\n", time.Now().UTC().Format(time.RFC3339))
+	f, err := os.OpenFile(filepath.Join(dir, "no-backup.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(line)
+	return err
+}
+
+func mustCwd() string {
+	d, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return d
+}
+
 func main() {
 	loadDotEnv()
 
@@ -150,6 +247,13 @@ func main() {
 		if len(os.Args) >= 3 {
 			sub = os.Args[2]
 		}
+		noBackup := false
+		for _, a := range os.Args[3:] {
+			if a == "--no-backup" {
+				noBackup = true
+			}
+		}
+
 		switch sub {
 		case "status", "dry-run", "apply":
 			// Need DB + config — proceed with normal init.
@@ -215,9 +319,36 @@ func main() {
 			return
 
 		case "apply":
+			pending, err := db.ListPending(database)
+			if err != nil {
+				log.Fatalf("list pending: %v", err)
+			}
+			// Nothing to do means nothing to protect. Without this, apply would
+			// take a full-size backup every time it was run on an up-to-date
+			// install, which on a small fixed disk is how a safety feature
+			// becomes an outage.
+			if len(pending) == 0 {
+				fmt.Println("No pending migrations. Nothing to do.")
+				return
+			}
+
+			if noBackup {
+				// Loud on purpose. This is the bypass that becomes a ritual if
+				// nobody can see it being used, so doctor.sh reports it.
+				log.Printf("WARNING: --no-backup given; applying %d migration(s) with NO backup", len(pending))
+				if err := recordBypass(cfg); err != nil {
+					log.Printf("warning: could not record --no-backup use: %v", err)
+				}
+			} else {
+				if err := backupBeforeMigrate(cfg, len(pending)); err != nil {
+					log.Fatalf("refusing to migrate: %v\n\nFix the backup, or re-run with --no-backup to proceed without one.", err)
+				}
+			}
+
 			if err := db.Migrate(database); err != nil {
 				log.Fatalf("migration: %v", err)
 			}
+			fmt.Printf("Applied %d migration(s).\n", len(pending))
 			return
 		}
 	}
@@ -236,8 +367,21 @@ func main() {
 	}
 	defer database.Close()
 
-	if err := db.Migrate(database); err != nil {
-		log.Fatalf("migration: %v", err)
+	if cfg.MigrateOnStartup {
+		if err := db.Migrate(database); err != nil {
+			log.Fatalf("migration: %v", err)
+		}
+	} else if pending, err := db.ListPending(database); err == nil && len(pending) > 0 {
+		// Refuse to start rather than migrating behind the operator's back.
+		// Exiting non-zero is deliberate: under systemd a silent start with a
+		// half-expected schema is worse than a failed one, and the message has
+		// to carry the exact command because the box may have no shell access.
+		log.Printf("%d pending migration(s) and MIGRATE_ON_STARTUP=false:", len(pending))
+		for _, m := range pending {
+			log.Printf("  %s", m.Filename)
+		}
+		log.Fatalf("refusing to start. Apply them first:\n\n    cd %s && ./planner migrate apply\n",
+			mustCwd())
 	}
 
 	// Seed allow_registration from env on first run; thereafter the DB value wins.

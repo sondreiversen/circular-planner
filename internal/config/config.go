@@ -7,30 +7,37 @@ import (
 )
 
 type GitLab struct {
-	Enabled     bool
-	InstanceURL string
-	ClientID    string
+	Enabled      bool
+	InstanceURL  string
+	ClientID     string
 	ClientSecret string
-	RedirectURI string
-	Scopes      string
+	RedirectURI  string
+	Scopes       string
 }
 
 type Config struct {
-	Port          int
-	HTTPSPort     int
-	TLSCertFile   string
-	TLSKeyFile    string
+	Port              int
+	HTTPSPort         int
+	TLSCertFile       string
+	TLSKeyFile        string
 	ForceHTTPS        bool
 	TrustProxy        bool
 	AllowRegistration bool
-	DatabaseURL       string
-	JWTSecret     string
-	NodeEnv       string
-	DataDir       string
-	AllowedOrigin string
-	AppName       string
-	AppLogoURL    string
-	GitLab        GitLab
+	// MigrateOnStartup controls whether the server applies pending migrations
+	// when it boots. Default true so no existing install changes behaviour by
+	// upgrading. The air-gapped installer sets it false, which makes
+	// `planner migrate apply` the real path instead of a decorative one — with
+	// it true, an operator who reviews a dry-run and declines to apply still
+	// gets the migration on the next restart.
+	MigrateOnStartup bool
+	DatabaseURL      string
+	JWTSecret        string
+	NodeEnv          string
+	DataDir          string
+	AllowedOrigin    string
+	AppName          string
+	AppLogoURL       string
+	GitLab           GitLab
 }
 
 func Load() *Config {
@@ -52,15 +59,16 @@ func Load() *Config {
 	}
 	trustProxy := os.Getenv("TRUST_PROXY") == "true"
 	allowRegistration := os.Getenv("ALLOW_REGISTRATION") != "false"
+	migrateOnStartup := os.Getenv("MIGRATE_ON_STARTUP") != "false"
 
 	// GitLab SSO validation: when enabled all four vars are required.
 	gitlabEnabled := os.Getenv("GITLAB_SSO_ENABLED") == "true"
 	if gitlabEnabled {
 		required := map[string]string{
-			"GITLAB_INSTANCE_URL":   os.Getenv("GITLAB_INSTANCE_URL"),
-			"GITLAB_CLIENT_ID":      os.Getenv("GITLAB_CLIENT_ID"),
-			"GITLAB_CLIENT_SECRET":  os.Getenv("GITLAB_CLIENT_SECRET"),
-			"GITLAB_REDIRECT_URI":   os.Getenv("GITLAB_REDIRECT_URI"),
+			"GITLAB_INSTANCE_URL":  os.Getenv("GITLAB_INSTANCE_URL"),
+			"GITLAB_CLIENT_ID":     os.Getenv("GITLAB_CLIENT_ID"),
+			"GITLAB_CLIENT_SECRET": os.Getenv("GITLAB_CLIENT_SECRET"),
+			"GITLAB_REDIRECT_URI":  os.Getenv("GITLAB_REDIRECT_URI"),
 		}
 		for k, v := range required {
 			if v == "" {
@@ -70,20 +78,21 @@ func Load() *Config {
 	}
 
 	return &Config{
-		Port:          envInt("PORT", 3000),
-		HTTPSPort:     envInt("HTTPS_PORT", 3443),
-		TLSCertFile:   env("TLS_CERT_FILE", ""),
-		TLSKeyFile:    env("TLS_KEY_FILE", ""),
+		Port:              envInt("PORT", 3000),
+		HTTPSPort:         envInt("HTTPS_PORT", 3443),
+		TLSCertFile:       env("TLS_CERT_FILE", ""),
+		TLSKeyFile:        env("TLS_KEY_FILE", ""),
 		ForceHTTPS:        forceHTTPS,
 		TrustProxy:        trustProxy,
 		AllowRegistration: allowRegistration,
+		MigrateOnStartup:  migrateOnStartup,
 		DatabaseURL:       dbURL,
-		JWTSecret:     jwtSecret,
-		NodeEnv:       env("NODE_ENV", "development"),
-		DataDir:       dataDir,
-		AllowedOrigin: allowedOrigin,
-		AppName:       env("APP_NAME", "Circular Planner"),
-		AppLogoURL:    env("APP_LOGO_URL", ""),
+		JWTSecret:         jwtSecret,
+		NodeEnv:           env("NODE_ENV", "development"),
+		DataDir:           dataDir,
+		AllowedOrigin:     allowedOrigin,
+		AppName:           env("APP_NAME", "Circular Planner"),
+		AppLogoURL:        env("APP_LOGO_URL", ""),
 		GitLab: GitLab{
 			Enabled:      gitlabEnabled,
 			InstanceURL:  env("GITLAB_INSTANCE_URL", ""),
