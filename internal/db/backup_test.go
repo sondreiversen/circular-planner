@@ -224,3 +224,129 @@ func TestPruneBackups_MissingDirIsNotAnError(t *testing.T) {
 		t.Errorf("missing dir should be a no-op, got %v", err)
 	}
 }
+
+// Two backups inside the same second must not overwrite each other. restore.sh
+// takes a safety dump moments before restoring, and a collision there means the
+// safety dump clobbers the dump being restored — turning the restore into a
+// silent no-op.
+func TestBackup_SameSecondDoesNotOverwrite(t *testing.T) {
+	src, _ := seed(t, 4)
+	dir := t.TempDir()
+
+	first, err := db.BackupSQLite(src, dir, false)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	second, err := db.BackupSQLite(src, dir, false)
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if first.Path == second.Path {
+		t.Fatalf("both backups wrote to %s", first.Path)
+	}
+	for _, p := range []string{first.Path, second.Path} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s missing after the pair: %v", p, err)
+		}
+	}
+}
+
+// The guard restore.sh depends on before it overwrites a live database.
+func TestVerifyDatabase(t *testing.T) {
+	src, _ := seed(t, 2)
+	if err := db.VerifyDatabase(src); err != nil {
+		t.Errorf("valid database rejected: %v", err)
+	}
+
+	garbage := filepath.Join(t.TempDir(), "garbage.sqlite")
+	os.WriteFile(garbage, []byte("this is not a database"), 0o644)
+	if err := db.VerifyDatabase(garbage); err == nil {
+		t.Error("garbage accepted as a planner database")
+	}
+
+	// An empty file SQLite will happily open, but which would wipe the planner.
+	empty := filepath.Join(t.TempDir(), "empty.sqlite")
+	os.WriteFile(empty, []byte{}, 0o644)
+	if err := db.VerifyDatabase(empty); err == nil {
+		t.Error("empty file accepted as a planner database")
+	}
+
+	if err := db.VerifyDatabase(filepath.Join(t.TempDir(), "nope.sqlite")); err == nil {
+		t.Error("missing file accepted")
+	}
+}
+
+// The round-trip the design calls non-optional: an untested restore is not a
+// restore. Backup, mutate the source, restore the dump over it, and assert the
+// data actually went back.
+//
+// This is the one test that would have caught the filename-collision bug, where
+// a safety dump silently overwrote the dump being restored and the restore
+// became a no-op that reported success.
+func TestBackupRestore_RoundTrip(t *testing.T) {
+	src, h := seed(t, 20)
+	dir := t.TempDir()
+
+	res, err := db.BackupSQLite(src, dir, true)
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	if res.RowCounts["users"] != 20 {
+		t.Fatalf("backup captured %d users, want 20", res.RowCounts["users"])
+	}
+
+	// Mutate after the backup: add rows and delete some existing ones.
+	for i := 0; i < 7; i++ {
+		if _, err := h.Exec(`INSERT INTO users(username) VALUES (?)`, fmt.Sprintf("after%d", i)); err != nil {
+			t.Fatalf("mutate: %v", err)
+		}
+	}
+	if _, err := h.Exec(`DELETE FROM planners WHERE id <= 5`); err != nil {
+		t.Fatalf("mutate: %v", err)
+	}
+	var mutatedUsers, mutatedPlanners int
+	h.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&mutatedUsers)
+	h.QueryRow(`SELECT COUNT(*) FROM planners`).Scan(&mutatedPlanners)
+	if mutatedUsers != 27 || mutatedPlanners != 15 {
+		t.Fatalf("setup wrong: users=%d planners=%d, want 27/15", mutatedUsers, mutatedPlanners)
+	}
+
+	// The dump must still verify before we would ever overwrite with it.
+	if err := db.VerifyDatabase(res.Path); err != nil {
+		t.Fatalf("dump failed verification: %v", err)
+	}
+
+	// Restore, the way scripts/restore.sh does: close, copy over, drop stale
+	// WAL and shared-memory sidecars so SQLite starts clean.
+	h.Close()
+	data, err := os.ReadFile(res.Path)
+	if err != nil {
+		t.Fatalf("read dump: %v", err)
+	}
+	if err := os.WriteFile(src, data, 0o644); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	os.Remove(src + "-wal")
+	os.Remove(src + "-shm")
+
+	restored, err := sql.Open("sqlite", src)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer restored.Close()
+
+	var users, planners, activities int
+	restored.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&users)
+	restored.QueryRow(`SELECT COUNT(*) FROM planners`).Scan(&planners)
+	restored.QueryRow(`SELECT COUNT(*) FROM activities`).Scan(&activities)
+
+	if users != 20 || planners != 20 || activities != 20 {
+		t.Errorf("after restore users=%d planners=%d activities=%d, want 20/20/20", users, planners, activities)
+	}
+	// The mutations must be gone, not merely outnumbered.
+	var leaked int
+	restored.QueryRow(`SELECT COUNT(*) FROM users WHERE username LIKE 'after%'`).Scan(&leaked)
+	if leaked != 0 {
+		t.Errorf("%d post-backup rows survived the restore", leaked)
+	}
+}

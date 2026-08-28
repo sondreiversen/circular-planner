@@ -82,8 +82,23 @@ func BackupSQLite(srcPath, dir string, verify bool) (*BackupResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve backup dir: %w", err)
 	}
+	// Second-granularity timestamps collide when backups happen in quick
+	// succession — restore.sh takes a safety dump moments before restoring, and
+	// a retry loop can fire several in a row. os.Rename would silently
+	// overwrite, so the safety dump could clobber the very dump being restored
+	// and turn the restore into a no-op. Found exactly that way; hence the
+	// uniqueness loop.
 	stamp := time.Now().UTC().Format("20060102-150405")
 	final := filepath.Join(absDir, fmt.Sprintf("planner-%s.sqlite", stamp))
+	for i := 2; ; i++ {
+		if _, err := os.Stat(final); os.IsNotExist(err) {
+			break
+		}
+		final = filepath.Join(absDir, fmt.Sprintf("planner-%s-%d.sqlite", stamp, i))
+		if i > 100 {
+			return nil, fmt.Errorf("cannot find a free backup filename in %s", absDir)
+		}
+	}
 	partial := final + ".partial"
 
 	// VACUUM INTO refuses an existing destination, so a leftover from a killed
@@ -285,4 +300,48 @@ func PruneBackups(dir string, keepN int, maxAge time.Duration) (removed []string
 		removed = append(removed, d.path)
 	}
 	return removed, nil
+}
+
+// VerifyDatabase checks that path is a readable, structurally sound planner
+// database. It is the guard restore.sh needs before overwriting a live one.
+//
+// `planner migrate status` is NOT a substitute: it reports "0 applied, N
+// pending" for a file that is not a database at all and exits zero, because an
+// un-migrated database and an unreadable one look the same to it. Restoring on
+// the strength of that check would overwrite a working database with garbage —
+// which is exactly what it did when tried.
+func VerifyDatabase(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	if fi.IsDir() {
+		return fmt.Errorf("%s is a directory", path)
+	}
+
+	h, err := openPlain(path)
+	if err != nil {
+		return fmt.Errorf("%s is not a readable database: %w", path, err)
+	}
+	defer h.Close()
+
+	var integrity string
+	if err := h.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil {
+		return fmt.Errorf("%s is not a readable database: %w", path, err)
+	}
+	if integrity != "ok" {
+		return fmt.Errorf("%s failed integrity_check: %s", path, integrity)
+	}
+
+	// A planner database has an applied migration history. An empty file that
+	// SQLite happily opens does not, and restoring one would silently wipe the
+	// planner while looking like success.
+	var applied int
+	if err := h.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&applied); err != nil {
+		return fmt.Errorf("%s has no schema_migrations table — not a planner database", path)
+	}
+	if applied == 0 {
+		return fmt.Errorf("%s has an empty schema_migrations table — not a usable planner database", path)
+	}
+	return nil
 }

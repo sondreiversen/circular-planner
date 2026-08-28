@@ -187,6 +187,26 @@ EOF
       ./planner --create-admin --username "$ADMIN_USER" --email "$ADMIN_EMAIL" --password "$ADMIN_PASS"
   fi
 
+# ensure_env_var KEY VALUE FILE
+#
+# Adds KEY=VALUE to FILE if the key is absent; leaves an existing value alone so
+# repeat upgrades never duplicate a line or clobber an operator's edit.
+#
+# This exists because .env is written ONLY on fresh install (see the heredoc in
+# the else-branch below). The upgrade branch copies the binary and scripts and
+# nothing else, so without this any setting introduced by a new release would
+# never reach an already-installed machine — which is the only machine that
+# matters here.
+ensure_env_var() {
+  _k="$1"; _v="$2"; _f="$3"
+  [ -f "$_f" ] || return 0
+  if grep -qE "^[[:space:]]*${_k}=" "$_f"; then
+    return 0
+  fi
+  printf '%s=%s\n' "$_k" "$_v" >> "$_f"
+  info "Added ${_k} to .env"
+}
+
 # ─── Bare-metal path ──────────────────────────────────────────────────────────
 else
   if [ "$UPGRADE" = true ]; then
@@ -213,7 +233,14 @@ else
       info "Updated scripts/"
     fi
 
-    info "Migrations will run automatically when you restart the service."
+    # Bring new settings to an already-installed box. Without these two the
+    # release's safety features exist in the binary but are never switched on.
+    ensure_env_var "MIGRATE_ON_STARTUP" "false" "$INSTALL_DIR/.env"
+    ensure_env_var "BACKUP_DIR" "./data/backups" "$INSTALL_DIR/.env"
+
+    info "Migrations do NOT run automatically. Apply them explicitly after restart:"
+    info "  cd ${INSTALL_DIR} && ./planner migrate dry-run   # review"
+    info "  cd ${INSTALL_DIR} && ./planner migrate apply     # backs up, then applies"
   else
     info "Installing to ${INSTALL_DIR}..."
     mkdir -p "$INSTALL_DIR/data"
@@ -232,10 +259,18 @@ else
 PORT=${PORT}
 JWT_SECRET=${JWT_SECRET}
 DATABASE_URL=sqlite:./data/planner.db
+BACKUP_DIR=./data/backups
+MIGRATE_ON_STARTUP=false
 EOF
     info "Wrote .env"
 
-    info "Running migrations and seeding admin..."
+    # Apply explicitly: .env sets MIGRATE_ON_STARTUP=false, so the server would
+    # otherwise refuse to start with migrations pending and --create-admin would
+    # never run.
+    info "Applying migrations..."
+    (cd "$INSTALL_DIR" && ./planner migrate apply)
+
+    info "Seeding admin..."
     (cd "$INSTALL_DIR" && ./planner --create-admin \
       --username "$ADMIN_USER" --email "$ADMIN_EMAIL" --password "$ADMIN_PASS")
   fi

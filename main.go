@@ -177,6 +177,22 @@ func mustCwd() string {
 func main() {
 	loadDotEnv()
 
+	// ---- verify subcommand ------------------------------------------------
+	// Usage: ./planner verify <path>
+	// Used by scripts/restore.sh before it overwrites a live database.
+	if len(os.Args) >= 2 && os.Args[1] == "verify" {
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "Usage: planner verify <path-to-sqlite-file>")
+			os.Exit(1)
+		}
+		if err := db.VerifyDatabase(os.Args[2]); err != nil {
+			fmt.Fprintf(os.Stderr, "verify failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s is a valid planner database.\n", os.Args[2])
+		return
+	}
+
 	// ---- backup subcommand ------------------------------------------------
 	// Usage: ./planner backup [--verify] [--prune]
 	//

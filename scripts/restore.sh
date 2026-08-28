@@ -56,17 +56,45 @@ case "$DATABASE_URL" in
   sqlite:*)
     SQLITE_PATH="${DATABASE_URL#sqlite:}"
 
-    # Safety dump before overwriting
+    # ── Verify the dump BEFORE touching the live database ───────────────────
+    # Restoring an unreadable dump over a working database turns a recoverable
+    # situation into an unrecoverable one. Check first.
+    PLANNER_BIN="$(cd "$SCRIPT_DIR/.." && pwd)/planner"
+    if [ -x "$PLANNER_BIN" ]; then
+      echo "Verifying dump before restoring..."
+      # Deliberately NOT `migrate status`: that reports "0 applied, N pending"
+      # for a file which is not a database at all, and exits zero.
+      if ! "$PLANNER_BIN" verify "$DUMP_PATH"; then
+        echo "ERROR: refusing to restore ${DUMP_PATH} over a live database." >&2
+        exit 1
+      fi
+      echo "  dump is readable"
+    else
+      echo "WARN: planner binary not found beside scripts/; skipping dump verification." >&2
+    fi
+
+    # Safety dump before overwriting.
     SAFETY_DUMP="$BACKUP_DIR/pre-restore-${TIMESTAMP}.sqlite"
     if [ -f "$SQLITE_PATH" ]; then
       echo "Creating safety dump at: $SAFETY_DUMP"
-      if command -v sqlite3 >/dev/null 2>&1; then
+      # Prefer the binary: it uses VACUUM INTO through the embedded driver and
+      # needs no external tool. The sqlite3 CLI is not installed by either
+      # installer, so the old cp fallback — a raw copy of a live WAL database —
+      # was the path this actually took on a real box.
+      if [ -x "$PLANNER_BIN" ]; then
+        if ! DATABASE_URL="sqlite:${SQLITE_PATH}" BACKUP_DIR="$BACKUP_DIR" \
+             "$PLANNER_BIN" backup --no-prune >/dev/null 2>&1; then
+          echo "ERROR: safety dump failed. Refusing to restore." >&2
+          exit 1
+        fi
+        SAFETY_DUMP="$(ls -t "$BACKUP_DIR"/planner-*.sqlite 2>/dev/null | head -1)"
+        echo "  safety dump: ${SAFETY_DUMP}"
+      elif command -v sqlite3 >/dev/null 2>&1; then
         sqlite3 "$SQLITE_PATH" ".backup '${SAFETY_DUMP}'"
       else
-        cp "$SQLITE_PATH" "$SAFETY_DUMP"
-        [ -f "${SQLITE_PATH}-wal" ] && cp "${SQLITE_PATH}-wal" "${SAFETY_DUMP}-wal" || true
-        [ -f "${SQLITE_PATH}-shm" ] && cp "${SQLITE_PATH}-shm" "${SAFETY_DUMP}-shm" || true
-        echo "WARN: sqlite3 CLI not found; safety dump used cp fallback." >&2
+        echo "ERROR: neither the planner binary nor sqlite3 is available; cannot take a" >&2
+        echo "       consistent safety dump. Refusing to restore." >&2
+        exit 1
       fi
     else
       echo "No existing database found at ${SQLITE_PATH}; skipping safety dump."

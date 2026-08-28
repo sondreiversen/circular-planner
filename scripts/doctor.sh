@@ -128,6 +128,33 @@ else
   else
     warn "Disk (BACKUP_DIR)" "Cannot access ${BACKUP_DIR}"
   fi
+
+  # ─── Check 6b: age of the newest verified backup ───────────────────────────
+  # A backup directory that exists but is empty, or whose newest dump is months
+  # old, is the shape of "we thought we had backups". Surface it.
+  NEWEST=$(ls -t "$BACKUP_DIR"/planner-*.sqlite 2>/dev/null | head -1)
+  if [ -z "$NEWEST" ]; then
+    warn "Backup freshness" "No backups in ${BACKUP_DIR}. Run: ./planner backup"
+  else
+    AGE_DAYS=$(( ( $(date +%s) - $(stat -c %Y "$NEWEST" 2>/dev/null || echo 0) ) / 86400 ))
+    if [ ! -f "${NEWEST%.sqlite}.manifest.json" ]; then
+      warn "Backup freshness" "Newest backup has no manifest — it was not verified: $(basename "$NEWEST")"
+    elif [ "$AGE_DAYS" -gt 30 ] 2>/dev/null; then
+      warn "Backup freshness" "Newest verified backup is ${AGE_DAYS} days old"
+    else
+      pass "Backup freshness" "Newest verified backup is ${AGE_DAYS} day(s) old"
+    fi
+  fi
+
+  # ─── Check 6c: has the backup gate been bypassed? ──────────────────────────
+  # --no-backup is legitimate under pressure and becomes routine if invisible.
+  if [ -f "$BACKUP_DIR/no-backup.log" ]; then
+    BYPASS_N=$(wc -l < "$BACKUP_DIR/no-backup.log" 2>/dev/null || echo 0)
+    BYPASS_LAST=$(tail -1 "$BACKUP_DIR/no-backup.log" 2>/dev/null | awk '{print $1}')
+    warn "Backup bypass" "--no-backup used ${BYPASS_N} time(s), most recently ${BYPASS_LAST}"
+  else
+    pass "Backup bypass" "--no-backup never used"
+  fi
 fi
 
 # ─── Check 7: Postgres connection usage ──────────────────────────────────────
