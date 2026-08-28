@@ -191,6 +191,18 @@ EOF
 else
   if [ "$UPGRADE" = true ]; then
     info "Upgrading installation in ${INSTALL_DIR}..."
+
+    # Keep the outgoing binary so a bad build can be undone on the spot.
+    # This machine is air-gapped: without a local copy, recovering from a
+    # broken release means building a new tarball on a connected machine and
+    # physically carrying it back, which can take days. Renaming is safe while
+    # the service is running — the kernel keeps the open inode alive until the
+    # process restarts.
+    if [ -f "$INSTALL_DIR/planner" ]; then
+      mv -f "$INSTALL_DIR/planner" "$INSTALL_DIR/planner.prev"
+      info "Kept previous binary as planner.prev"
+    fi
+
     cp "$SCRIPT_DIR/bare-metal/planner" "$INSTALL_DIR/"
     chmod +x "$INSTALL_DIR/planner"
     info "Replaced planner binary"
@@ -267,6 +279,16 @@ if [ "$MODE" = "2" ]; then
     echo "  If running manually, stop the existing process and start it again:"
     echo "    cd ${INSTALL_DIR} && ./planner"
     echo ""
+    if [ -f "$INSTALL_DIR/planner.prev" ]; then
+      echo "  If this release misbehaves, roll back to the previous binary:"
+      echo "    cd ${INSTALL_DIR} && mv -f planner.prev planner"
+      echo "    sudo systemctl restart circular-planner"
+      echo ""
+      warn "Rollback restores the BINARY only. Any migrations applied by this"
+      warn "release stay applied — they are forward-only. Take a backup before"
+      warn "restarting if that matters: cd ${INSTALL_DIR} && ./scripts/backup.sh"
+      echo ""
+    fi
   else
     # Generate a systemd service file with the actual install path baked in
     WHO=$(whoami)
