@@ -2,10 +2,12 @@
 //
 // Build: go build -o planner .        (embeds public/ into the binary)
 // Run:   ./planner                     (SQLite at ./data/planner.db by default)
-//        DATABASE_URL=postgres://...  ./planner  (use Postgres instead)
+//
+//	DATABASE_URL=postgres://...  ./planner  (use Postgres instead)
 //
 // The static frontend must be built before go build:
-//   npm run build:client
+//
+//	npm run build:client
 package main
 
 import (
@@ -18,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -52,8 +55,90 @@ var Version = "dev"
 //go:embed public
 var publicFS embed.FS
 
+// backupKeepN is the number of newest backups always retained. Count-based
+// retention is what bounds a retry burst; backup.sh's age-only rule does not.
+func backupKeepN() int {
+	if v := os.Getenv("BACKUP_KEEP"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 10
+}
+
+// backupMaxAge mirrors BACKUP_RETENTION_DAYS from scripts/backup.sh.
+func backupMaxAge() time.Duration {
+	days := 14
+	if v := os.Getenv("BACKUP_RETENTION_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			days = n
+		}
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
+
 func main() {
 	loadDotEnv()
+
+	// ---- backup subcommand ------------------------------------------------
+	// Usage: ./planner backup [--verify] [--prune]
+	//
+	// Backup lives in the binary because the binary is the only artifact
+	// guaranteed to exist on an air-gapped host. scripts/backup.sh prefers the
+	// sqlite3 CLI, which neither install-airgap.sh nor package-airgap.sh ships,
+	// so on a real machine it silently falls back to a raw cp of a live WAL
+	// database.
+	if len(os.Args) >= 2 && os.Args[1] == "backup" {
+		verify := true
+		prune := true
+		for _, a := range os.Args[2:] {
+			switch a {
+			case "--verify":
+				verify = true
+			case "--no-verify":
+				verify = false
+			case "--no-prune":
+				prune = false
+			default:
+				fmt.Fprintf(os.Stderr, "Unknown backup flag %q\n\nUsage: planner backup [--no-verify] [--no-prune]\n", a)
+				os.Exit(1)
+			}
+		}
+
+		cfg := config.Load()
+		if !strings.HasPrefix(cfg.DatabaseURL, "sqlite:") {
+			// Postgres backup stays with pg_dump in scripts/backup.sh, which
+			// hard-fails when the tool is missing rather than degrading.
+			fmt.Fprintln(os.Stderr, "planner backup handles SQLite only. For Postgres use scripts/backup.sh (requires pg_dump).")
+			os.Exit(1)
+		}
+		srcPath := strings.TrimPrefix(cfg.DatabaseURL, "sqlite:")
+		backupDir := os.Getenv("BACKUP_DIR")
+		if backupDir == "" {
+			backupDir = filepath.Join(filepath.Dir(srcPath), "backups")
+		}
+
+		res, err := db.BackupSQLite(srcPath, backupDir, verify)
+		if err != nil {
+			log.Fatalf("backup: %v", err)
+		}
+		fmt.Printf("Backup written: %s\n", res.Path)
+		fmt.Printf("  source        %s\n", res.SourcePath)
+		fmt.Printf("  bytes         %d\n", res.Bytes)
+		fmt.Printf("  verified      %v\n", res.Verified)
+		if res.Verified {
+			fmt.Printf("  rows          users=%d planners=%d activities=%d\n",
+				res.RowCounts["users"], res.RowCounts["planners"], res.RowCounts["activities"])
+			fmt.Printf("  schema        %d applied, latest %s\n", res.Migrations, res.LatestMigra)
+		}
+		if prune {
+			removed, err := db.PruneBackups(backupDir, backupKeepN(), backupMaxAge())
+			if err == nil && len(removed) > 0 {
+				fmt.Printf("  pruned        %d old backup(s)\n", len(removed))
+			}
+		}
+		return
+	}
 
 	// ---- migrate subcommand -----------------------------------------------
 	// Usage: ./planner migrate [status|dry-run|apply]
