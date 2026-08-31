@@ -20,6 +20,21 @@ const LABEL_MIN_SIZE = 7;
 const LABEL_MAX_SIZE = 13;
 const MIN_BAND_FOR_LABEL = LABEL_MIN_SIZE + 3;
 
+/**
+ * Legend geometry, for arcs too narrow to hold any text.
+ *
+ * The legend lives INSIDE the disc SVG so it reaches every export surface:
+ * buildFlyoverSVG wraps the serialized disc string, and the PNG, SVG and print
+ * paths all serialize this same element. A legend rendered as sibling HTML
+ * would show on screen and vanish from all four of them — which is exactly the
+ * failure this design exists to fix.
+ */
+const LEGEND_ROW_H = 19;
+const LEGEND_FONT = 13;
+const LEGEND_COL_W = 250;
+const LEGEND_PAD = 14;
+const LEGEND_SWATCH = 10;
+
 
 const VIEWBOX_SIZE = 800;
 const CX = 400;
@@ -385,6 +400,9 @@ export class Renderer {
       .attr('stroke-width', 2);
   }
 
+  /** Arcs too narrow for text, numbered and carried into the legend. */
+  private unlabelled: Array<{ n: number; title: string; fill: string }> = [];
+
   private render(): void {
     // Clear any previous midnight timer before setting a new one below.
     if (this.midnightTimer !== null) {
@@ -393,6 +411,7 @@ export class Renderer {
     }
     this.textPathSeq = 0;
     this.pendingMilestones = [];
+    this.unlabelled = [];
     const visibleLanes = this.data.lanes.filter(l => !this.filterState.hiddenLaneIds.has(l.id));
     const activityCount = visibleLanes.reduce((sum, l) => sum + l.activities.length, 0);
     this.svg.attr('aria-label',
@@ -411,6 +430,7 @@ export class Renderer {
     this.renderSeamShadow(g);
     this.renderTodayIndicator(g);
     this.renderCenterLabel(g);
+    this.renderLegend();
 
     // Schedule a re-render at the next local midnight (+1 s slack) so the
     // today indicator advances without requiring a page reload.
@@ -583,10 +603,7 @@ export class Renderer {
         .attr('fill', lane.color || 'rgba(200,200,200,0.1)')
         .style('cursor', 'pointer')
         .on('click', (event: MouseEvent) => {
-          const rect = (event.target as Element).closest('svg')?.getBoundingClientRect();
-          if (!rect) return;
-          const svgX = (event.clientX - rect.left) / rect.width * VIEWBOX_SIZE;
-          const svgY = (event.clientY - rect.top) / rect.height * VIEWBOX_SIZE;
+          const { x: svgX, y: svgY } = this._clientToSvg(event.clientX, event.clientY);
           const angle = xyToAngle(svgX - CX, svgY - CY);
           const clickedDate = (this.angleScale as any).invert(angle) as Date;
           this.onClickLane(lane.id, clickedDate);
@@ -745,6 +762,143 @@ export class Renderer {
           activity.status && activity.status !== 'planned' ? `Status: ${activity.status}` : '',
         ].filter(Boolean).join('\n'));
     }
+  }
+
+  /**
+   * Draw a legend number on an arc too narrow for text.
+   *
+   * Only drawn if the digits actually fit the arc; a badge that overflows its
+   * own arc would sit on the neighbouring activity and point at the wrong row.
+   * When it does not fit, no legend entry is created either — a row nobody can
+   * match to an arc is worse than no row.
+   */
+  private renderBadge(
+    actGroup: Selection<SVGGElement, unknown, null, undefined>,
+    activity: Activity,
+    fillColor: string,
+    lane: Lane | undefined,
+    isCancelled: boolean,
+    midAngle: number,
+    textR: number,
+    fontSize: number,
+    arcLen: number,
+  ): void {
+    const n = this.unlabelled.length + 1;
+    const text = String(n);
+
+    const probe = actGroup.append('text')
+      .attr('font-size', fontSize)
+      .attr('font-family', FONT_FAMILY)
+      .attr('font-weight', '700')
+      .style('visibility', 'hidden')
+      .text(text);
+    const w = (probe.node() as SVGTextElement).getComputedTextLength();
+    probe.remove();
+
+    if (w > arcLen) return;
+
+    const badge = actGroup.append('text')
+      .attr('x', Math.sin(midAngle) * textR)
+      .attr('y', -Math.cos(midAngle) * textR)
+      .attr('font-size', fontSize)
+      .attr('font-family', FONT_FAMILY)
+      .attr('font-weight', '700')
+      .attr('text-anchor', 'middle')
+      .attr('dominant-baseline', 'central')
+      .style('pointer-events', 'none')
+      .text(text);
+
+    this.applyInk(badge, this.inkFor(
+      fillColor, isCancelled ? 0.35 : 0.88, lane?.color ?? null,
+    ));
+    badge.attr('stroke-width', Math.max(1.5, fontSize * 0.22));
+
+    this.unlabelled.push({ n, title: activity.title, fill: fillColor });
+  }
+
+  /**
+   * Render the numbered legend beneath the disc, growing the viewBox to fit.
+   *
+   * The viewBox is square (800x800) whenever there is nothing to list, so the
+   * disc is unchanged in the common case and only gives up room when arcs
+   * genuinely could not be labelled.
+   */
+  private renderLegend(): void {
+    if (this.unlabelled.length === 0) {
+      this.svg.attr('viewBox', `0 0 ${VIEWBOX_SIZE} ${VIEWBOX_SIZE}`);
+      return;
+    }
+
+    const cols = Math.max(1, Math.min(3, Math.floor(VIEWBOX_SIZE / LEGEND_COL_W)));
+    const rows = Math.ceil(this.unlabelled.length / cols);
+    const legendH = LEGEND_PAD * 2 + rows * LEGEND_ROW_H;
+
+    this.svg.attr('viewBox', `0 0 ${VIEWBOX_SIZE} ${VIEWBOX_SIZE + legendH}`);
+
+    const textColor = this.cssVar('--cp-text', '#1a2332');
+    const mutedColor = this.cssVar('--cp-text-muted', '#5f6b7a');
+
+    const legend = this.svg.append('g')
+      .attr('class', 'cp-legend')
+      .attr('transform', `translate(0,${VIEWBOX_SIZE})`);
+
+    legend.append('text')
+      .attr('x', LEGEND_PAD)
+      .attr('y', LEGEND_PAD)
+      .attr('font-size', LEGEND_FONT - 2)
+      .attr('font-family', FONT_FAMILY)
+      .attr('font-weight', '600')
+      .attr('fill', mutedColor)
+      .attr('dominant-baseline', 'hanging')
+      .text('Arcs too small to label');
+
+    const gridTop = LEGEND_PAD + LEGEND_ROW_H;
+    const colW = VIEWBOX_SIZE / cols;
+
+    this.unlabelled.forEach((entry, i) => {
+      const col = Math.floor(i / rows);
+      const row = i % rows;
+      const x = LEGEND_PAD + col * colW;
+      const y = gridTop + row * LEGEND_ROW_H;
+
+      legend.append('rect')
+        .attr('x', x)
+        .attr('y', y - LEGEND_SWATCH / 2)
+        .attr('width', LEGEND_SWATCH)
+        .attr('height', LEGEND_SWATCH)
+        .attr('rx', 2)
+        .attr('fill', entry.fill)
+        .attr('fill-opacity', 0.88);
+
+      legend.append('text')
+        .attr('x', x + LEGEND_SWATCH + 6)
+        .attr('y', y)
+        .attr('font-size', LEGEND_FONT)
+        .attr('font-family', FONT_FAMILY)
+        .attr('font-weight', '700')
+        .attr('fill', textColor)
+        .attr('dominant-baseline', 'central')
+        .text(`${entry.n}`);
+
+      const label = legend.append('text')
+        .attr('x', x + LEGEND_SWATCH + 26)
+        .attr('y', y)
+        .attr('font-size', LEGEND_FONT)
+        .attr('font-family', FONT_FAMILY)
+        .attr('fill', textColor)
+        .attr('dominant-baseline', 'central')
+        .text(entry.title);
+
+      // Keep a long title inside its column.
+      const budget = colW - LEGEND_SWATCH - 26 - LEGEND_PAD * 2;
+      const node = label.node() as SVGTextElement;
+      const full = node.getComputedTextLength();
+      const fitted = fitLabel(entry.title, full, budget, (str) => {
+        node.textContent = str;
+        return node.getComputedTextLength();
+      });
+      node.textContent = fitted ?? entry.title;
+    });
   }
 
   /**
@@ -970,6 +1124,14 @@ export class Renderer {
       // there is no tooltip to recover it from.
       const shown = this.fitToArc(actGroup, activity.title, textLen, arcLen, fontSize);
 
+      if (shown === null) {
+        // Too narrow for any text, but the band still has vertical room — every
+        // such arc measured this way failed on WIDTH, not height. So it gets a
+        // number, and the legend below the disc says what the number means.
+        this.renderBadge(actGroup, activity, fillColor, lane, isCancelled,
+                         midAngle, textR, fontSize, arcLen);
+      }
+
       if (shown !== null) {
         const pathId = `cp-act-text-${this.textPathSeq++}`;
         actGroup.append('path')
@@ -1170,14 +1332,32 @@ export class Renderer {
   }
 
   // Convert a client-space pointer event to SVG-space coordinates.
+  /**
+   * Convert client (screen) coordinates to SVG user units.
+   *
+   * Uses the element's own screen CTM rather than dividing the bounding box by
+   * a viewBox constant. The old arithmetic assumed the viewBox was square AND
+   * that it exactly filled the box, so it was already wrong whenever
+   * preserveAspectRatio='xMidYMid meet' letterboxed a non-square container —
+   * and the legend, which makes the viewBox taller than it is wide, would have
+   * made that error permanent. getScreenCTM accounts for viewBox, aspect ratio
+   * and letterboxing together.
+   */
   private _clientToSvg(clientX: number, clientY: number): { x: number; y: number } {
     const svgEl = this.svg.node() as SVGSVGElement;
+    const ctm = svgEl.getScreenCTM();
+    if (ctm) {
+      const pt = svgEl.createSVGPoint();
+      pt.x = clientX;
+      pt.y = clientY;
+      const local = pt.matrixTransform(ctm.inverse());
+      return { x: local.x, y: local.y };
+    }
+    // getScreenCTM returns null for a detached or display:none SVG.
     const rect = svgEl.getBoundingClientRect();
-    const scaleX = VIEWBOX_SIZE / rect.width;
-    const scaleY = VIEWBOX_SIZE / rect.height;
     return {
-      x: (clientX - rect.left) * scaleX,
-      y: (clientY - rect.top) * scaleY,
+      x: (clientX - rect.left) / rect.width * VIEWBOX_SIZE,
+      y: (clientY - rect.top) / rect.height * VIEWBOX_SIZE,
     };
   }
 

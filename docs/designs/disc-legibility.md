@@ -256,7 +256,34 @@ anticipates.
    print, PNG, SVG, flyover and wall display are all mouseless. Either the arc gets a
    drawn identifier that survives export (a numbered badge with a legend), or the design
    states plainly that sub-three-character arcs are unlabelled in export and accepts it.
-   **This is the one open design decision left in the approach.**
+
+   **RESOLVED: numbered badge with a legend.** Two measurements settled the shape:
+
+   - Of the arcs still unlabelled after truncation, **all of them failed on WIDTH, not
+     height** (8 of 8, instrumented in the running app). The band has vertical room, so a
+     one- or two-digit badge fits where a word does not. Had they failed on height, no
+     drawn identifier would have fitted either and the answer would have had to be the
+     second option.
+   - The legend must live **inside the disc SVG**. `buildFlyoverSVG` wraps the serialized
+     disc string, and the PNG, SVG and print paths all serialize that same element, so a
+     legend rendered as sibling HTML would show on screen and vanish from all four — the
+     exact failure this item exists to prevent.
+
+   A badge is drawn only if the digits fit the arc, and a legend row is created only when
+   a badge was drawn: a row nobody can match to an arc is worse than no row.
+
+   Two consequences worth recording, both found by printing the result rather than
+   reasoning about it:
+
+   - The legend makes the viewBox taller than it is wide. Two pointer-to-SVG conversions
+     assumed a square viewBox; one also assumed the viewBox exactly filled its box, so it
+     was *already* wrong whenever `xMidYMid meet` letterboxed a non-square container. Both
+     now use `getScreenCTM()`, which accounts for viewBox, aspect and letterboxing at once.
+   - Print sized the SVG with `height: auto`, which derives height from the viewBox ratio
+     — about 10in on a 7.5in printable area. The disc had always been cropped there; it
+     merely did not matter until the legend, which sits below the disc, became the part
+     that got cut off. Print now constrains height and lets `preserveAspectRatio` scale
+     the whole viewBox, legend included.
 
 **Cut after review, as out-of-wedge:** the TYPE scale (this work needs two numbers, both
 already TS constants at `:557` and `:846`; mirroring 11 CSS sizes touches auth, dashboard
@@ -299,7 +326,9 @@ and dialogs, none of which is the disc), and `DESIGN.md` (one true sentence belo
   the fallback is mutation-tested: removing it fails 28 assertions.
 - No arc whose geometry admits three characters renders without a label, and raising type
   size does not reduce the number of labels drawn — measured before and after against the
-  same planner.
+  same planner. **Met.** On a 32-activity planner: labelled arcs 14 -> 24, none lost. The
+  remaining 8 are badged and appear in the legend, so all 32 are identifiable. Separately,
+  swept over band heights 1..59: zero labels lost, larger type on 43 of them.
 - Every arc is identifiable in print, PNG, SVG, the flyover and on a wall display, or the
   design states explicitly which arcs are not and why.
 - Activity labels, lane labels and the done-checkmark all obtain their colour from one

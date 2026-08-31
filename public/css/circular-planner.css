@@ -754,7 +754,15 @@
   /* --- Disc view print: hide list/people containers, size SVG --- */
   body[data-print-view="disc"] .cp-list-container { display: none !important; }
   body[data-print-view="disc"] .cp-svg-container { width: 100% !important; max-width: 100% !important; height: auto !important; }
-  body[data-print-view="disc"] svg.circular-planner-svg { width: 100% !important; height: auto !important; max-width: 9in; max-height: 9in; display: block; margin: 0 auto; }
+  /* Constrain by HEIGHT, not width.
+     `height: auto` derives the height from the viewBox ratio, so on a landscape
+     page the disc rendered about 10in tall in a 7.5in printable area and was
+     cut off at the bottom. That was survivable while the disc was all there
+     was; it is not, now that the numbered legend sits BELOW the disc — the
+     legend is exactly what got cropped, defeating the identifier it exists to
+     provide. The SVG already carries preserveAspectRatio="xMidYMid meet", so a
+     fixed height scales and centres the whole viewBox, legend included. */
+  body[data-print-view="disc"] svg.circular-planner-svg { width: 100% !important; height: 6.6in !important; max-width: 100% !important; display: block; margin: 0 auto; }
 
   /* --- List view print: hide disc + people, size list container --- */
   body[data-print-view="list"] .cp-svg-container { display: none !important; }
