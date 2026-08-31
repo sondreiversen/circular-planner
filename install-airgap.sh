@@ -18,6 +18,33 @@ require() {
   command -v "$1" >/dev/null 2>&1 || { err "ERROR: required command '$1' not found."; exit 1; }
 }
 
+# ensure_env_var KEY VALUE FILE
+#
+# Adds KEY=VALUE to FILE if the key is absent; leaves an existing value alone so
+# repeat upgrades never duplicate a line or clobber an operator's edit.
+#
+# This exists because .env is written ONLY on fresh install (see the heredoc in
+# the else-branch below). The upgrade branch copies the binary and scripts and
+# nothing else, so without this any setting introduced by a new release would
+# never reach an already-installed machine — which is the only machine that
+# matters here.
+#
+# Defined HERE, at top level, beside the other helpers. It previously sat inside
+# the Docker branch of the Docker/bare-metal if-else while being called from the
+# bare-metal branch, so on every bare-metal machine it was never defined. Under
+# `set -euo pipefail` that is not a warning: the call exits 127 and aborts the
+# script — after the new binary has already been copied in — leaving a
+# half-finished upgrade with an un-updated .env.
+ensure_env_var() {
+  _k="$1"; _v="$2"; _f="$3"
+  [ -f "$_f" ] || return 0
+  if grep -qE "^[[:space:]]*${_k}=" "$_f"; then
+    return 0
+  fi
+  printf '%s=%s\n' "$_k" "$_v" >> "$_f"
+  info "Added ${_k} to .env"
+}
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 if [ ! -f "$SCRIPT_DIR/bare-metal/planner" ]; then
@@ -187,25 +214,6 @@ EOF
       ./planner --create-admin --username "$ADMIN_USER" --email "$ADMIN_EMAIL" --password "$ADMIN_PASS"
   fi
 
-# ensure_env_var KEY VALUE FILE
-#
-# Adds KEY=VALUE to FILE if the key is absent; leaves an existing value alone so
-# repeat upgrades never duplicate a line or clobber an operator's edit.
-#
-# This exists because .env is written ONLY on fresh install (see the heredoc in
-# the else-branch below). The upgrade branch copies the binary and scripts and
-# nothing else, so without this any setting introduced by a new release would
-# never reach an already-installed machine — which is the only machine that
-# matters here.
-ensure_env_var() {
-  _k="$1"; _v="$2"; _f="$3"
-  [ -f "$_f" ] || return 0
-  if grep -qE "^[[:space:]]*${_k}=" "$_f"; then
-    return 0
-  fi
-  printf '%s=%s\n' "$_k" "$_v" >> "$_f"
-  info "Added ${_k} to .env"
-}
 
 # ─── Bare-metal path ──────────────────────────────────────────────────────────
 else
