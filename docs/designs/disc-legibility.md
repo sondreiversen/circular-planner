@@ -187,11 +187,29 @@ anticipates.
    0.25, the arc fill, and `fill-opacity` (0.88, or 0.35 cancelled), then pick against the
    result.
 
-   **It must derive a colour, not choose between two constants.** In dark mode a
-   two-valued picker fails AA on 3 of 8 shipped lane colours even with perfect choice, so
-   the helper darkens or lightens until it clears 4.5:1. Two constants cannot satisfy the
-   success criteria and shipping against them would be shipping against something
-   unreachable.
+   **CORRECTED AFTER IMPLEMENTATION.** This paragraph previously said the helper must
+   *derive* a colour by darkening or lightening, because two constants supposedly could
+   not clear AA. That is false, and so was the opposite claim made later in the same
+   session (that some colours are unrescuable by any ink). Both were wrong. The measured
+   truth:
+
+   > For any colour in sRGB, the better of pure black and pure white reaches at least
+   > **4.583:1**. The extremes cross at L = sqrt(0.0525) - 0.05 = 0.1791, giving 4.5826.
+
+   Verified three independent ways in `label-contrast.test.ts`: a sweep of the whole sRGB
+   cube, the 504 real composites this project can produce, and the closed form. So AA is
+   *always* reachable by choosing polarity, and no derived-colour search is needed.
+
+   What the measurement did justify is a two-tier ink. The soft ink `#16202e`, chosen so
+   labels do not read as holes punched in the disc, fails AA on **83 of those 504**
+   composites; pure black/white fails on **none**. The helper therefore prefers the soft
+   ink and drops to the pure extreme exactly where soft misses — keeping the look in the
+   common case and the guarantee in every case.
+
+   This also means the halo is not what rescues contrast. It earns its place for what a
+   single ratio cannot express: curved labels can cross onto a neighbouring arc of a
+   different colour, the disc sits under a radial gradient rather than a flat fill, and
+   thin glyphs lose strokes to antialiasing.
 
 2. **One shared label helper** across `renderOccurrence` (`renderer.ts:846-895`), the lane
    border labels (`:557`, `:600-633`) and the done-checkmark (`:908`, a *second*
@@ -273,9 +291,12 @@ and dialogs, none of which is the disc), and `DESIGN.md` (one true sentence belo
   on** — disc background, lane band, arc fill and `fill-opacity` — for every colour in
   `COLOR_PALETTE`, `STATUS_COLORS` and `LANE_COLORS`, **in both themes**. Verified by a
   test that computes the ratio and ships the compositing model, not by eye.
-- The four palette colours where neither white nor dark clears 4.5:1, and the three lane
-  colours that fail in dark mode, are the acceptance cases. If the helper cannot pass
-  those, it is not done.
+- **CORRECTED.** This bullet named "the four palette colours where neither white nor dark
+  clears 4.5:1" as the acceptance cases. Measurement shows no such colours exist: the
+  better polarity always reaches >= 4.583:1 (see item 1). The real acceptance cases are the
+  **83 of 504 composites where the soft ink `#16202e` alone misses AA** and the helper must
+  fall back to a pure extreme. `label-contrast.test.ts` covers all 504 in both themes, and
+  the fallback is mutation-tested: removing it fails 28 assertions.
 - No arc whose geometry admits three characters renders without a label, and raising type
   size does not reduce the number of labels drawn — measured before and after against the
   same planner.
