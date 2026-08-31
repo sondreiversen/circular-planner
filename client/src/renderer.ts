@@ -6,6 +6,20 @@ import { PlannerConfig, PlannerData, Lane, Activity, DiscGeometry, Viewport, Zoo
 import { getGridSpec, viewportLabel } from './viewport';
 import { now } from './clock';
 import { labelStyle, LabelStyle } from './label-contrast';
+import { fitLabel } from './label-fit';
+
+/**
+ * Activity label type scale, in SVG user units on an 800-unit viewBox.
+ *
+ * LABEL_MIN_SIZE is the historical floor and is deliberately unchanged: it is
+ * what keeps thin lanes labelled. MIN_BAND_FOR_LABEL is the band height below
+ * which no label is drawn, held as a fixed constant so it can never drift with
+ * the type scale again (see the note at the gate).
+ */
+const LABEL_MIN_SIZE = 7;
+const LABEL_MAX_SIZE = 13;
+const MIN_BAND_FOR_LABEL = LABEL_MIN_SIZE + 3;
+
 
 const VIEWBOX_SIZE = 800;
 const CX = 400;
@@ -734,6 +748,31 @@ export class Renderer {
   }
 
   /**
+   * Fit a title to its arc, truncating rather than dropping the label.
+   * The arithmetic lives in label-fit.ts so it is testable without a DOM;
+   * this only supplies the measurement closure.
+   */
+  private fitToArc(
+    parent: Selection<SVGGElement, unknown, null, undefined>,
+    title: string,
+    fullLen: number,
+    arcLen: number,
+    fontSize: number,
+  ): string | null {
+    return fitLabel(title, fullLen, arcLen, (str) => {
+      const t = parent.append('text')
+        .attr('font-size', fontSize)
+        .attr('font-family', FONT_FAMILY)
+        .attr('font-weight', '500')
+        .style('visibility', 'hidden')
+        .text(str);
+      const len = (t.node() as SVGTextElement).getComputedTextLength();
+      t.remove();
+      return len;
+    });
+  }
+
+  /**
    * The one place a label's colour is decided.
    *
    * Both label paths — activity titles on arcs and lane names on the border
@@ -882,8 +921,19 @@ export class Renderer {
     // Top half: path goes clockwise (start→end) so text reads outward-up.
     // Bottom half: path goes counter-clockwise (end→start) so text still reads
     // right-side up to a viewer outside the disc.
-    const fontSize = Math.max(7, Math.min(9, Math.floor(subHeight * 0.6)));
-    if (subHeight >= fontSize + 3) {
+    // Type size and the draw/drop decision are deliberately INDEPENDENT.
+    //
+    // These used to be coupled: the gate read `subHeight >= fontSize + 3` while
+    // fontSize was itself clamped from below. Raising the clamp therefore raised
+    // the drop threshold with it — measured, moving the floor 7 -> 10 silently
+    // erases every label on bands of height 10, 11 and 12, which is the exact
+    // opposite of what the truncation below exists to do.
+    //
+    // So the gate is now a fixed physical constant, and only the CEILING moved
+    // (9 -> 13). Nothing that renders a label today loses one; bands with room
+    // to spare get bigger type.
+    const fontSize = Math.max(LABEL_MIN_SIZE, Math.min(LABEL_MAX_SIZE, Math.floor(subHeight * 0.6)));
+    if (subHeight >= MIN_BAND_FOR_LABEL) {
       const midAngle = (startAngle + endAngle) / 2;
       const textR = (subInnerR + subOuterR) / 2;
       // Match the lane-label tolerance at line ~551. Without the -0.1 margin,
@@ -914,7 +964,13 @@ export class Renderer {
 
       const arcLen = (endAngle - startAngle) * pathRadius - 4; // 4px padding
 
-      if (textLen <= arcLen) {
+      // Truncate rather than drop. A title longer than its arc used to render
+      // nothing at all, leaving a coloured band that identifies nothing — and
+      // on the mouseless surfaces (print, PNG, SVG, flyover, wall display)
+      // there is no tooltip to recover it from.
+      const shown = this.fitToArc(actGroup, activity.title, textLen, arcLen, fontSize);
+
+      if (shown !== null) {
         const pathId = `cp-act-text-${this.textPathSeq++}`;
         actGroup.append('path')
           .attr('id', pathId)
@@ -938,7 +994,7 @@ export class Renderer {
             .attr('href', `#${pathId}`)
             .attr('startOffset', '50%')
             .attr('text-anchor', 'middle')
-            .text(activity.title);
+            .text(shown);
       }
 
       // Done: small checkmark near the start of the arc
