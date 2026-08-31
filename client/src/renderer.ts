@@ -5,6 +5,7 @@ import { createAngleScale, parseDate, formatDate, xyToAngle, FONT_FAMILY, expand
 import { PlannerConfig, PlannerData, Lane, Activity, DiscGeometry, Viewport, ZoomLevel, GridSpec, FilterState } from './types';
 import { getGridSpec, viewportLabel } from './viewport';
 import { now } from './clock';
+import { labelStyle, LabelStyle } from './label-contrast';
 
 const VIEWBOX_SIZE = 800;
 const CX = 400;
@@ -536,7 +537,6 @@ export class Renderer {
   private renderLanes(g: Selection<SVGGElement, unknown, null, undefined>): void {
     const sorted = [...this.data.lanes].sort((a, b) => a.order - b.order);
     const defaultBorder = this.cssVar('--cp-lane-border', '#ffffff');
-    const labelColor = this.cssVar('--cp-lane-border-text', '#1a2332');
 
     sorted.forEach((lane) => {
       const isHidden = this.filterState.hiddenLaneIds.has(lane.id);
@@ -621,9 +621,12 @@ export class Renderer {
             .attr('font-size', fontSize)
             .attr('font-family', FONT_FAMILY)
             .attr('font-weight', '600')
-            .attr('fill', labelColor)
             .attr('dominant-baseline', 'central')
             .style('pointer-events', 'none');
+          // The band is opaque and painted with defaultBorder, so it IS the
+          // backdrop — the lane's own colour never shows through here.
+          this.applyInk(text, this.inkFor(defaultBorder, 1, null));
+          text.attr('stroke-width', Math.max(1.5, fontSize * 0.2));
 
           text.append('textPath')
             .attr('href', `#${pathId}`)
@@ -728,6 +731,42 @@ export class Renderer {
           activity.status && activity.status !== 'planned' ? `Status: ${activity.status}` : '',
         ].filter(Boolean).join('\n'));
     }
+  }
+
+  /**
+   * The one place a label's colour is decided.
+   *
+   * Both label paths — activity titles on arcs and lane names on the border
+   * band — used to hard-code their ink (`'white'` in two places, a CSS token in
+   * a third), so a contrast fix had to be made three times and was in practice
+   * made zero times. Everything that draws text on the disc goes through here.
+   *
+   * `laneBand` is the lane's own colour when the text sits on an arc drawn over
+   * the band, and null when it sits on an opaque band of its own.
+   */
+  private inkFor(fillColor: string, fillOpacity: number, laneBand: string | null): LabelStyle {
+    const discBg = this.cssVar('--cp-disc-bg-outer', '#f4f5f7');
+    return labelStyle(discBg, laneBand, fillColor, fillOpacity);
+  }
+
+  /**
+   * Apply ink + halo to a text selection.
+   *
+   * The halo is set as ATTRIBUTES, not CSS. serializeSVGWithStyles inlines a
+   * fixed whitelist that contains neither `paint-order` nor `stroke-linejoin`,
+   * so a stylesheet halo would vanish in PNG, SVG, print and the flyover —
+   * precisely the mouseless surfaces this design exists to fix, where there is
+   * no tooltip to fall back on.
+   */
+  private applyInk(
+    sel: Selection<SVGTextElement, unknown, null, undefined>,
+    ink: LabelStyle,
+  ): void {
+    sel.attr('fill', ink.color)
+      .attr('stroke', ink.haloColor)
+      .attr('stroke-width', ink.haloWidth)
+      .attr('stroke-linejoin', 'round')
+      .attr('paint-order', 'stroke fill');
   }
 
   private fillFor(activity: Activity, lane: Lane): string {
@@ -883,13 +922,18 @@ export class Renderer {
           .attr('fill', 'none')
           .attr('stroke', 'none');
 
-        actGroup.append('text')
+        const titleText = actGroup.append('text')
           .attr('font-size', fontSize)
           .attr('font-family', FONT_FAMILY)
           .attr('font-weight', '500')
-          .attr('fill', 'white')
           .attr('dominant-baseline', 'central')
-          .style('pointer-events', 'none')
+          .style('pointer-events', 'none');
+        // Halo scales with type size so it stays proportional as the clamp moves.
+        this.applyInk(titleText, this.inkFor(
+          fillColor, isCancelled ? 0.35 : 0.88, lane?.color ?? null,
+        ));
+        titleText.attr('stroke-width', Math.max(1.5, fontSize * 0.22));
+        titleText
           .append('textPath')
             .attr('href', `#${pathId}`)
             .attr('startOffset', '50%')
@@ -901,15 +945,18 @@ export class Renderer {
       if (isDone) {
         const checkR = textR;
         const checkAngle = startAngle + 0.04;
-        actGroup.append('text')
+        const checkText = actGroup.append('text')
           .attr('x', Math.sin(checkAngle) * checkR)
           .attr('y', -Math.cos(checkAngle) * checkR)
           .attr('font-size', Math.min(fontSize + 1, subHeight * 0.7))
-          .attr('fill', 'white')
           .attr('text-anchor', 'middle')
           .attr('dominant-baseline', 'central')
           .style('pointer-events', 'none')
           .text('✓');
+        // The second unconditional 'white', on the glyph that signals done.
+        this.applyInk(checkText, this.inkFor(
+          fillColor, isCancelled ? 0.35 : 0.88, lane?.color ?? null,
+        ));
       }
     }
 
