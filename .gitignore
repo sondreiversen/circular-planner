@@ -13,3 +13,10 @@ data/
 
 # Playwright MCP browser test output (transient debug logs)
 .playwright-mcp/
+
+# Air-gap deployment bundles — build artifacts (~6MB each), produced by
+# package-airgap.sh and carried to the target machine by hand, never by git.
+# The second pattern catches the staging directory an interrupted run leaves
+# behind; a completed run removes it via its own EXIT trap.
+circular-planner-airgap-*.tar.gz
+circular-planner-airgap-*/
