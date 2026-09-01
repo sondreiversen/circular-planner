@@ -136,13 +136,23 @@ describe('render determinism under a pinned clock', () => {
     expect(then2026.windowStart.getTime()).not.toBe(then1998.windowStart.getTime());
   });
 
-  test('Week zoom lands on the Monday of the pinned date\'s week', () => {
-    // 2026-03-14 is a Saturday; its Monday is 2026-03-09.
-    setNow(new Date(2026, 2, 14, 12, 0, 0));
+  test('Week zoom centres the pinned date rather than snapping to Monday', () => {
+    // BEHAVIOUR CHANGE. This test previously asserted that Week zoom landed on
+    // the Monday of the pinned date's week (2026-03-09 for a Saturday the 14th).
+    // Snapping to Monday is precisely what put today at the very left edge of
+    // the window — 0% of the span — which is the "Today doesn't centre"
+    // complaint. Today is now placed in the middle of a still-7-day window.
+    setNow(new Date(2026, 2, 14, 12, 0, 0)); // Saturday
     const vp = navigateToToday(ZoomLevel.Week, config);
+
+    // 3 days before the 14th, so the 14th is the 4th of 7 days.
     expect(vp.windowStart.getFullYear()).toBe(2026);
     expect(vp.windowStart.getMonth()).toBe(2);
-    expect(vp.windowStart.getDate()).toBe(9);
+    expect(vp.windowStart.getDate()).toBe(11);
+
+    const days = Math.round(
+      (vp.windowEnd.getTime() - vp.windowStart.getTime()) / 86400000);
+    expect(days).toBe(7);
   });
 });
 

@@ -56,6 +56,55 @@ function viewportForLevel(center: Date, level: ZoomLevel, _config: PlannerConfig
   return { windowStart: start, windowEnd: end, zoomLevel: level };
 }
 
+/**
+ * Whole days from `a` to `b`, DST-safe.
+ *
+ * Dividing a millisecond difference by 86400000 is wrong twice a year: a window
+ * crossing a DST boundary is 23 or 25 hours long on that day, so the division
+ * lands on x.96 or x.04 and floors to the wrong day count. Normalising both
+ * ends to a UTC midnight index removes local time from the arithmetic entirely.
+ */
+function daySpan(a: Date, b: Date): number {
+  const DAY_MS = 86400000;
+  const ua = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  const ub = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((ub - ua) / DAY_MS);
+}
+
+function startOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/**
+ * A window of the same length as `level`'s window, centred on `center`.
+ *
+ * viewportForLevel takes a parameter named `center` and never centres — it
+ * snaps to calendar boundaries. Measured for 2026-08-31 that put today at 97%
+ * of a Month window (hard against the right edge) and 0% of a Week window (the
+ * very first day), which is what "Today doesn't centre" actually is.
+ *
+ * This keeps the level's span in whole days and places today's day in the
+ * middle of it. The span is taken FROM the snapped window so a centred month
+ * stays month-length (28-31 days) rather than becoming a fixed 30.
+ */
+function centerWindowOn(center: Date, level: ZoomLevel, config: PlannerConfig): Viewport {
+  const snapped = viewportForLevel(center, level, config);
+  const span = daySpan(snapped.windowStart, snapped.windowEnd);
+  const before = Math.floor((span - 1) / 2);
+  const start = addDays(startOfDay(center), -before);
+  return { windowStart: start, windowEnd: addDays(start, span), zoomLevel: level };
+}
+
+/**
+ * Is this window flush with calendar month boundaries?
+ *
+ * Decides how the window is labelled. A snapped month window is "August 2026";
+ * a centred one spans two months and must say so.
+ */
+function isMonthAligned(windowStart: Date, windowEnd: Date): boolean {
+  return windowStart.getDate() === 1 && windowEnd.getDate() === 1;
+}
+
 const ZOOM_ORDER: ZoomLevel[] = [ZoomLevel.Year, ZoomLevel.Quarter, ZoomLevel.Month, ZoomLevel.Week];
 
 /** Zoom in to the next finer level, centered on the current window midpoint */
@@ -242,10 +291,19 @@ export function viewportLabel(viewport: Viewport): string {
       return `${formatYearMonth(windowStart)} – ${formatYearMonth(endDisplay)}`;
     }
     case ZoomLevel.Quarter: {
+      // Both labels below are derived from windowStart alone, which is only
+      // right for a calendar-snapped window. A centred window spans parts of
+      // four months, so it gets an explicit day range instead.
+      if (!isMonthAligned(windowStart, windowEnd)) {
+        return `${formatMonthDay(windowStart)} – ${formatMonthDay(addDays(windowEnd, -1))}`;
+      }
       const endMonth = addMonths(windowStart, 2);
       return `${formatYearMonth(windowStart)} – ${formatYearMonth(endMonth)}`;
     }
     case ZoomLevel.Month:
+      if (!isMonthAligned(windowStart, windowEnd)) {
+        return `${formatMonthDay(windowStart)} – ${formatMonthDay(addDays(windowEnd, -1))}`;
+      }
       return formatYearMonth(windowStart);
     case ZoomLevel.Week: {
       const end = addDays(windowStart, 6);
@@ -270,7 +328,18 @@ export function navigateToRange(start: Date, end: Date, zoomLevel: ZoomLevel): V
 
 /** Jump to a viewport that includes today, preserving the current zoom level */
 export function navigateToToday(zoomLevel: ZoomLevel, config: PlannerConfig): Viewport {
-  return viewportForLevel(now(), zoomLevel, config);
+  const today = now();
+
+  // Year deliberately keeps the calendar year rather than centring. The disc is
+  // a year clock: January sits at 12 o'clock and the today hand points at the
+  // real position in the year. A rolling twelve months centred on today would
+  // put January at an arbitrary angle and break the thing the disc is for.
+  // Today at 66% of a calendar year is correct; today at 97% of a month is not.
+  if (zoomLevel === ZoomLevel.Year) {
+    return viewportForLevel(today, zoomLevel, config);
+  }
+
+  return centerWindowOn(today, zoomLevel, config);
 }
 
 /**
