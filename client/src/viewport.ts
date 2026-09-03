@@ -1,5 +1,5 @@
 import { PlannerConfig, Viewport, ZoomLevel, GridSpec } from './types';
-import { parseDate, addDays, addMonths, getMonday, getMonthStart, formatDate } from './utils';
+import { parseDate, addDays, addMonths, getMonday, getMonthStart, formatDate, daysBetween } from './utils';
 import { now } from './clock';
 
 const MONTHS_FULL = [
@@ -56,21 +56,6 @@ function viewportForLevel(center: Date, level: ZoomLevel, _config: PlannerConfig
   return { windowStart: start, windowEnd: end, zoomLevel: level };
 }
 
-/**
- * Whole days from `a` to `b`, DST-safe.
- *
- * Dividing a millisecond difference by 86400000 is wrong twice a year: a window
- * crossing a DST boundary is 23 or 25 hours long on that day, so the division
- * lands on x.96 or x.04 and floors to the wrong day count. Normalising both
- * ends to a UTC midnight index removes local time from the arithmetic entirely.
- */
-function daySpan(a: Date, b: Date): number {
-  const DAY_MS = 86400000;
-  const ua = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
-  const ub = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
-  return Math.round((ub - ua) / DAY_MS);
-}
-
 function startOfDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
@@ -89,7 +74,7 @@ function startOfDay(d: Date): Date {
  */
 function centerWindowOn(center: Date, level: ZoomLevel, config: PlannerConfig): Viewport {
   const snapped = viewportForLevel(center, level, config);
-  const span = daySpan(snapped.windowStart, snapped.windowEnd);
+  const span = daysBetween(snapped.windowStart, snapped.windowEnd);
   const before = Math.floor((span - 1) / 2);
   const start = addDays(startOfDay(center), -before);
   return { windowStart: start, windowEnd: addDays(start, span), zoomLevel: level };

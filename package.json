@@ -7,7 +7,7 @@
     "dev:client": "esbuild planner=client/src/index.ts auth=client/src/auth.ts dashboard=client/src/dashboard.ts groups=client/src/groups.ts admin=client/src/admin.ts planner-public=client/src/index-public.ts --bundle --outdir=public/js --entry-names=[name]-bundle --sourcemap=inline --target=es2020 --watch",
     "start:go": "go run .",
     "build:go": "npm run build:client && go build -o planner .",
-    "test": "jest"
+    "test": "TZ=Europe/Oslo jest"
   },
   "devDependencies": {
     "@types/d3-color": "^3.1.3",

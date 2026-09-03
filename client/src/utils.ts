@@ -60,6 +60,21 @@ export function addDays(d: Date, n: number): Date {
   return result;
 }
 
+/**
+ * Whole calendar days from `a` to `b`. Negative when `b` precedes `a`.
+ *
+ * Do NOT compute this as (b - a) / 86400000. A span crossing a DST boundary is
+ * 23 or 25 hours long on that day, so the division lands on x.96 or x.04 and
+ * truncates to the wrong day count. Normalising both ends to a UTC-midnight
+ * index removes local time from the arithmetic entirely.
+ */
+export function daysBetween(a: Date, b: Date): number {
+  const DAY_MS = 86400000;
+  const ua = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  const ub = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((ub - ua) / DAY_MS);
+}
+
 /** Add n months to a date, clamping to last day of month if needed */
 export function addMonths(d: Date, n: number): Date {
   const result = new Date(d.getTime());
@@ -231,7 +246,16 @@ export function expandOccurrences(
 ): Array<{ start: Date; end: Date }> {
   const actStart = parseDate(activity.startDate);
   const actEnd = parseDate(activity.endDate);
-  const durationMs = actEnd.getTime() - actStart.getTime();
+  // Duration in whole DAYS, not milliseconds.
+  //
+  // This used to be `actEnd.getTime() - actStart.getTime()`, added to every
+  // occurrence start. When the base duration spans a DST change that count is
+  // short by an hour, so every later occurrence landed at 23:00 the previous
+  // day — permanently, not twice a year. A five-day activity created across the
+  // spring change was drawn as four days for the rest of its life, everywhere
+  // occurrences are rendered. addDays uses setDate, which is calendar-based and
+  // keeps local midnight across a transition.
+  const durationDays = daysBetween(actStart, actEnd);
 
   if (!activity.recurrence) {
     if (actEnd < rangeStart || actStart > rangeEnd) return [];
@@ -251,7 +275,7 @@ export function expandOccurrences(
     const step = rec.interval;
     let cur = new Date(actStart.getTime());
     while (cur <= hardEnd && results.length < MAX_OCCURRENCES) {
-      const occEnd = new Date(cur.getTime() + durationMs);
+      const occEnd = addDays(cur, durationDays);
       if (occEnd >= rangeStart && !exceptionSet.has(formatDate(cur))) {
         results.push(applyOverride(activity, new Date(cur.getTime()), occEnd));
       }
@@ -277,7 +301,7 @@ export function expandOccurrences(
         if (occStart < actStart) continue;
         if (occStart > hardEnd) continue;
         if (occStart > rangeEnd) continue;
-        const occEnd = new Date(occStart.getTime() + durationMs);
+        const occEnd = addDays(occStart, durationDays);
         if (occEnd < rangeStart) continue;
         if (exceptionSet.has(formatDate(occStart))) continue;
         results.push(applyOverride(activity, new Date(occStart.getTime()), occEnd));
@@ -302,7 +326,7 @@ export function expandOccurrences(
         // Enforce lower bound (actStart) and upper bound (hardEnd / rangeEnd).
         if (occStart > hardEnd) break;
         if (occStart >= actStart && occStart <= rangeEnd) {
-          const occEnd = new Date(occStart.getTime() + durationMs);
+          const occEnd = addDays(occStart, durationDays);
           if (occEnd >= rangeStart && !exceptionSet.has(formatDate(occStart))) {
             results.push(applyOverride(activity, new Date(occStart.getTime()), occEnd));
           }
@@ -339,7 +363,7 @@ export function expandOccurrences(
       if (d < actStart) continue;
 
       if (d <= rangeEnd) {
-        const occEnd = new Date(d.getTime() + durationMs);
+        const occEnd = addDays(d, durationDays);
         if (occEnd >= rangeStart && !exceptionSet.has(formatDate(d))) {
           results.push(applyOverride(activity, new Date(d.getTime()), occEnd));
         }
