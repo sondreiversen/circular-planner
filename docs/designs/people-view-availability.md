@@ -60,8 +60,25 @@ as good as whoever happened to reply.
 **The user is a coworker who needs a specific set of people in the same window** — a
 workshop, a review, a shared task — and currently has to ask them.
 
-**The wedge:** pick the people who must attend, see the stretches where none of them has
-anything scheduled, and create the activity in that stretch without leaving the view.
+**The wedge:** pick the people who must attend, see **how many of them are free each day**,
+and create the activity in a good stretch without leaving the view.
+
+**REVISED BY ENG REVIEW.** This was originally a strict boolean — stretches where *none* of
+them has anything scheduled. Simulated on block-structured schedules over a 92-day window,
+asking for three consecutive days:
+
+| People | Occupancy | All-free run found |
+|---|---|---|
+| 3 | 60% | 10% |
+| 4 | 60% | **2%** |
+| 6 | 40% | 3% |
+| 6 | 60% | **0%** |
+
+For workshop-sized groups the strict band is empty almost always, so the empty result is the
+normal case rather than an edge case. The boolean also discards the information the real
+conversation runs on: "can we do it when five of the six are free and catch Bo up after?" A
+count band answers that, can never come back empty, and contains the strict answer as its
+full-height case.
 
 Explicitly excluded from this pass: capacity/load heatmaps, a constraint-query bar,
 ranking of near-miss windows, and any integration with an external calendar.
@@ -139,8 +156,11 @@ part a user cannot check by eye.
      `expandOccurrences`, keep activities where the person is in `taggedUsers`, drop
      cancelled and milestones, clip to the window.
    - `mergeIntervals(intervals): Interval[]` — coalesce overlapping and adjacent days.
-   - `freeWindows(perPersonBusy, window, minDays): Interval[]` — invert the union, keep
-     runs of at least `minDays`.
+   - `overlaps(a, b): boolean` — inclusive at BOTH ends, because `endDate` is inclusive.
+     Shared with `assignSubRows` (see item 8).
+   - `freeCounts(perPersonBusy, window): number[]` — how many of the selected people are
+     free on each day. `freeWindows(counts, threshold, minDays)` then extracts runs where
+     the count meets a threshold, so the all-free band is just `threshold === people.length`.
    - Day granularity throughout, inclusive of both end dates. No `Date` mutation.
 
 2. **Its test before its renderer wiring.** The matrix that matters: window boundaries
@@ -171,18 +191,52 @@ part a user cannot check by eye.
 7. **A minimum-duration control** on the free row ("≥ N days"), because a one-day gap
    between two projects is not a workshop slot.
 
+8. **One inclusive `overlaps` predicate, shared with the layout.** `assignSubRows`
+   (`people-renderer.ts:196`) decides overlap with `end <= occ.start`, which treats an end
+   equal to a start as non-overlapping. Verified: for A = Aug 5-10 and B = Aug 10-15 that is
+   `true`, so both land in one sub-row and their boxes overlap by a day on screen. Harmless
+   for layout, fatal for availability — Aug 10 would report FREE with two activities drawn
+   on it. Both paths use one predicate so they cannot drift.
+
+9. **`expandOccurrences` reports truncation.** It stops silently at `MAX_OCCURRENCES = 1000`
+   (`utils.ts:253`). Measured: a daily recurrence over a 4017-day custom range returns
+   exactly 1000 occurrences, the last on 2022-09-25, and every day after reads as FREE. The
+   filter panel's custom date range makes that reachable today. It must return a
+   `truncated` flag, and availability must refuse to draw a band rather than show a wrong
+   one: "range too large to compute — narrow the date range."
+
+10. **`expandOccurrences` gets tests first.** It currently has none, and it has four
+    recurrence types plus `exceptions` and `overrides`. Those last two decide availability
+    directly: an exception means the person IS free that day, and an override moves the busy
+    interval somewhere the base recurrence does not predict. Testing the new module against
+    fixtures while trusting an untested input layer proves the arithmetic and nothing else.
+
+**Performance, measured, so nobody optimises this by reflex:** adding a second expansion
+pass to the render costs **19ms** on 300 activities / 12 people / a one-year window. A
+shared expansion cache measured **48ms** — slower, because building the map costs more than
+the redundant expansions save at this scale. Do not add the cache.
+
 ## Open Questions
 
-1. **Does "everyone free" mean everyone selected, or everyone required?** A workshop often
-   has two essential people and four optional ones. Strict intersection may return nothing
-   on a set of six. Ranking near-misses (Approach C's good idea) is the answer if so, but
-   it should be driven by watching the strict version fail first.
-2. **What happens when the answer is "no window exists"?** An empty band is the most
-   likely outcome for a large set over a short horizon, and it is the moment the feature
-   either helps or gets abandoned. It needs a designed empty state, not a blank row.
-3. **Does the free row belong in the List view too?** The maths is view-agnostic by
+1. ~~**Does "everyone free" mean everyone selected, or everyone required?**~~ **Resolved by
+   the count band** (see the wedge). The question dissolves: the band shows every threshold
+   at once, so the user makes the trade-off instead of the code guessing. What remains open
+   is the *interaction* — clicking a partial-coverage window must decide who gets tagged.
+
+2. **Clicking a partial-coverage window: who gets tagged?** If four of six are free and the
+   user picks that window, the created activity could tag all six (honest about intent, but
+   two people are double-booked), only the four who are free (accurate, but silently drops
+   people the user selected), or ask. This is the one genuinely open interaction question
+   the count band creates, and it did not exist under the strict boolean.
+
+3. ~~**What happens when the answer is "no window exists"?**~~ **Largely dissolved.** A
+   count band always has something to show, even if that something is a row of zeroes. The
+   remaining case is narrower: every day at zero, which now reads as a real answer rather
+   than a blank row.
+
+4. **Does the free row belong in the List view too?** The maths is view-agnostic by
    construction. Whether the List view wants it is a separate question.
-4. **Discipline risk.** Premise 4 holds only while teams keep logging absence. One team
+5. **Discipline risk.** Premise 4 holds only while teams keep logging absence. One team
    quietly stopping degrades the feature silently, and nothing currently detects that.
 
 ## Success Criteria
@@ -192,7 +246,14 @@ part a user cannot check by eye.
 - The free band never contradicts what the rows draw — the same recurrence expansion feeds
   both, and cancelled activities are visually distinct from blocking ones.
 - Selecting a set of people and reading off a candidate window takes one interaction and no
-  Slack message.
+  Slack message. **The band is never empty** — a count always has a value, so the feature
+  always has something to say on first contact.
+- No band is drawn from a truncated expansion. A range too large to compute says so rather
+  than showing green.
+- `expandOccurrences` has test coverage for all four recurrence types, exceptions,
+  overrides, and the truncation flag, before availability is built on it.
+- One `overlaps` predicate serves both the availability maths and the sub-row layout, and a
+  regression test proves existing sub-row assignment did not shift.
 - An activity can be created from a free window without retyping dates or people, and its
   lane is visible before saving.
 - Pressing Today puts today at the centre of the window at Week, Month and Quarter zoom,
@@ -210,16 +271,20 @@ part a user cannot check by eye.
 
 ## The Assignment
 
-**Ask three people who have scheduled something recently to describe the last time they
-did it — and specifically whether the set of people was fixed or negotiable.**
+**Ask three people who have scheduled something recently what they did about the person who
+could not make it.**
 
-Open Question 1 is the one that decides whether this feature works in practice. A strict
-intersection across six people is likely to return nothing, and if the real behaviour is
-"we moved it because Bo could not make it", then near-miss ranking is not a later step —
-it is the feature, and the strict version will look broken on first contact.
+The original assignment asked whether the set of people was fixed or negotiable. The
+simulation answered the quantitative half before anyone had to: strict intersection returns
+nothing for four or more people at realistic occupancy, so the set is negotiable in practice
+whether or not anyone says so.
 
-It costs three conversations and it is the difference between building the wedge and
-building the wedge that gets used.
+What is still unknown is the *resolution*: did they move the event, drop the person, run it
+without them and catch them up, or split it in two? That answer decides Open Question 2 —
+what clicking a partial-coverage window should tag — which is now the last undecided
+interaction in the design.
+
+It costs three conversations.
 
 ## What I noticed about how you think
 
@@ -237,3 +302,42 @@ building the wedge that gets used.
 - On absence data you answered from what is in the database rather than what is intended.
   That answer is what makes a free/busy calculation defensible instead of a guess, and it
   was the single most load-bearing answer in the session.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | not installed |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 6 issues, 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+**Findings, all folded into this document:**
+
+1. **[P1]** `utils.ts:253` — `MAX_OCCURRENCES` truncates silently; missing occurrences read
+   as FREE. Measured: 4017-day range → 1000 occurrences, last 2022-09-25. → item 9.
+2. **[P1]** Strict intersection returns nothing for realistic groups (2% for 4 people at 60%
+   occupancy, 0% for 6). Wedge changed to a count band. → wedge, item 1.
+3. **[P2]** Today centring on the disc puts the hand at 6 o'clock. Kept: the disc's window
+   boundary is the seam at 12 o'clock, so 50% is the furthest point from it. → item 6.
+4. **[P2]** `people-renderer.ts:196` — `end <= start` treats touching intervals as
+   non-overlapping; one shared inclusive predicate. → item 8.
+5. **[P2]** Cancelled drawn solid but excluded from busy; fade to match `renderer.ts:812`.
+   → item 5.
+6. **[P1]** `expandOccurrences` has zero test coverage and the module trusts it. → item 10.
+
+**Measured, not assumed:** the truncation cliff, the 2%/0% hit rates, the boundary overlap,
+and the 19ms/48ms performance numbers were all produced by running code, not by reading it.
+
+**Test coverage:** 1/27 paths (4%) before this work. The gap list and the coverage diagram
+are in the test plan artifact under `~/.gstack/projects/`.
+
+**Performance:** no issues. The obvious optimisation measured slower and is explicitly
+ruled out in the plan.
+
+**VERDICT:** ENG CLEARED — ready to implement, in the order T1/T2 → T3 → T4/T5 → T6.
+
+**UNRESOLVED DECISIONS:**
+- Open Question 2: clicking a partial-coverage window must decide who gets tagged (all
+  selected, only the free ones, or ask). The assignment is designed to settle it.
