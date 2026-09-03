@@ -191,25 +191,87 @@ part a user cannot check by eye.
 7. **A minimum-duration control** on the free row ("≥ N days"), because a one-day gap
    between two projects is not a workshop slot.
 
-8. **One inclusive `overlaps` predicate, shared with the layout.** `assignSubRows`
-   (`people-renderer.ts:196`) decides overlap with `end <= occ.start`, which treats an end
-   equal to a start as non-overlapping. Verified: for A = Aug 5-10 and B = Aug 10-15 that is
-   `true`, so both land in one sub-row and their boxes overlap by a day on screen. Harmless
-   for layout, fatal for availability — Aug 10 would report FREE with two activities drawn
-   on it. Both paths use one predicate so they cannot drift.
+8. **Inclusive `overlaps` in availability ONLY. The layout keeps its own model.**
 
-9. **`expandOccurrences` reports truncation.** It stops silently at `MAX_OCCURRENCES = 1000`
+   **RETRACTED AND CORRECTED.** An earlier round of this review claimed `assignSubRows`
+   (`people-renderer.ts:196`) caused boxes to overlap visually by a day, and recommended one
+   shared predicate. That was wrong. Measured on a 1000px timeline: A (Aug 5-10) renders to
+   x=300 and B (Aug 10-15) starts at x=300. The overlap is **0px**. They abut.
+
+   The two subsystems use different, internally consistent models:
+
+   - **Rendering treats dates as INSTANTS.** A box runs from `dateToX(start)` to
+     `dateToX(end)`, so an activity ending Aug 10 stops at the start of Aug 10.
+   - **Availability treats dates as INCLUSIVE DAYS**, because `endDate` is inclusive: an
+     activity ending Aug 10 owns the whole of Aug 10.
+
+   Forcing the layout onto the availability model pushes B to a second sub-row and grows row
+   heights across the whole view, to fix a defect that measurably does not exist. So
+   `availability.ts` gets an inclusive predicate and `assignSubRows` is left alone. **Do not
+   "unify" these later without re-reading this paragraph** — the divergence is deliberate.
+
+   One visible consequence remains, unfixed and accepted for now: a single-day activity has
+   zero geometric width and is drawn at the `Math.max(4, …)` floor
+   (`people-renderer.ts:363`), so it appears as a 4px sliver while blocking a full day in
+   the band. Logged as a follow-up rather than changed here, because it alters how every
+   short activity is drawn in every planner.
+
+9. **The band ignores filters, and says so.** `passesFilter` (`people-renderer.ts:173`)
+   removes activities from the view by search term, label, hidden lane or tagged-user
+   filter. Availability must be computed over **all** activities regardless: a filter is a
+   viewing preference, not a statement about what exists. Honouring filters would mean
+   typing "workshop" into the search box marks everyone free, which is a confident wrong
+   answer produced by an ordinary UI action. The band therefore disagrees with the rows on
+   purpose whenever a filter is active, and must say so: "availability includes N hidden
+   activities." This is the one sanctioned exception to the band-never-contradicts-the-rows
+   criterion, and it exists because the alternative is a wrong answer rather than a
+   confusing one.
+
+10. **`expandOccurrences` reports truncation.** It stops silently at `MAX_OCCURRENCES = 1000`
    (`utils.ts:253`). Measured: a daily recurrence over a 4017-day custom range returns
    exactly 1000 occurrences, the last on 2022-09-25, and every day after reads as FREE. The
    filter panel's custom date range makes that reachable today. It must return a
    `truncated` flag, and availability must refuse to draw a band rather than show a wrong
    one: "range too large to compute — narrow the date range."
 
-10. **`expandOccurrences` gets tests first.** It currently has none, and it has four
+11. **`expandOccurrences` gets tests first.** It currently has none, and it has four
     recurrence types plus `exceptions` and `overrides`. Those last two decide availability
     directly: an exception means the person IS free that day, and an override moves the busy
     interval somewhere the base recurrence does not predict. Testing the new module against
     fixtures while trusting an untested input layer proves the arithmetic and nothing else.
+
+12. **Fix the DST bug in `expandOccurrences` first. It is live in production now.**
+
+    `utils.ts:234` computes `durationMs = actEnd - actStart` once, then every occurrence is
+    built as `new Date(occStart.getTime() + durationMs)` (`:254`, `:280`, `:305`, `:342`).
+    When the BASE duration spans a DST change, that millisecond count is short by an hour,
+    and every later occurrence lands at 23:00 the previous day. Measured, Europe/Oslo, an
+    activity 2026-03-27 to 2026-03-31 recurring weekly:
+
+        Fri Mar 27 -> Tue Mar 31 00h   correct
+        Fri Apr 03 -> Mon Apr 06 23h   <-- a day early
+        Fri Apr 10 -> Mon Apr 13 23h   <-- a day early
+        ... every subsequent occurrence, indefinitely
+
+    This is not "twice a year". One activity created across a DST boundary is drawn a day
+    short forever, and `formatDate` on that end date returns the wrong day. It already
+    affects the disc, the List view and the People view today; availability would inherit it.
+
+    `viewport.ts:67` already carries a `daySpan` helper written for exactly this class of
+    bug (UTC-midnight indices instead of millisecond division). The same technique applies:
+    add whole days by calendar arithmetic, not by adding a millisecond duration.
+
+    **This is a pre-existing bug found while reviewing the plan, not work the feature
+    creates.** It is listed here because item 11's test suite is where it will be caught,
+    and because building availability on top of it would make a visible drawing bug into a
+    silent scheduling error.
+
+13. **Availability is not offered in the public view, and creation stays permission-gated.**
+    `viewMode` is restored from the URL (`planner.ts:170`) and localStorage (`:177`), and
+    `PeopleRenderer` skips `loadMembers()` on a public view (`people-renderer.ts:59`), so a
+    public visitor can land in the People view with rows scraped from tags and no picker.
+    Dragging is already gated on `permission !== 'view'` (`people-renderer.ts:384`);
+    click-to-create must carry the same gate. Reading a band is fine; creating from it is not.
 
 **Performance, measured, so nobody optimises this by reflex:** adding a second expansion
 pass to the render costs **19ms** on 300 activities / 12 people / a one-year window. A
@@ -236,7 +298,29 @@ the redundant expansions save at this scale. Do not add the cache.
 
 4. **Does the free row belong in the List view too?** The maths is view-agnostic by
    construction. Whether the List view wants it is a separate question.
-5. **Discipline risk.** Premise 4 holds only while teams keep logging absence. One team
+5. **Auto mode makes the count meaningless.** With `selectedPeopleIds` empty the view shows
+   every member plus every tagged user (`people-renderer.ts:111`), so the count's denominator
+   becomes the whole organisation and anyone never tagged is permanently free. The band
+   probably needs an explicit selection before it appears at all. Undecided.
+
+6. **A shared link can silently shrink the denominator.** `selectedPeopleIds` round-trips
+   through the URL as `sp=` (`url-state.ts:183`), and on open any id matching neither a
+   member nor a tagged user is dropped with no error (`people-renderer.ts:125-134`). The
+   recipient reads "3 of 3 free" for a link that selected five people. Sharing is the
+   primary path for this feature, so this needs an answer before it ships.
+
+7. **The min-duration control has nowhere to live.** `FilterState` has no such field, and
+   the doc's claim that `FilterState` is ephemeral is stale — `url-state.ts:79` round-trips
+   it. Either the control is URL state (and appears in shared links and saved views) or it
+   resets on every reload.
+
+8. **`navigate()` at Year zoom breaks the January-at-12-o'clock rationale.** Item 6 keeps
+   the calendar year for the Today button, but `viewport.ts:132` steps Year by ±1 month, so
+   one arrow press yields a Feb-Jan window and January is no longer at the top. Either the
+   invariant applies to navigation too, or it was never the real reason and the honest
+   rationale is just that a calendar year is what people expect from a year view.
+
+9. **Discipline risk.** Premise 4 holds only while teams keep logging absence. One team
    quietly stopping degrades the feature silently, and nothing currently detects that.
 
 ## Success Criteria
@@ -308,36 +392,38 @@ It costs three conversations.
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
-| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | not installed |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 6 issues, 0 critical gaps |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | codex not installed |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 6 issues + 20 outside-voice findings |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
 
-**Findings, all folded into this document:**
+**Review findings, all folded in:** truncation cliff (item 10), strict intersection replaced
+by a count band (wedge), Today centring on the disc (item 6), cancelled fading (item 5),
+`expandOccurrences` test coverage (item 11).
 
-1. **[P1]** `utils.ts:253` — `MAX_OCCURRENCES` truncates silently; missing occurrences read
-   as FREE. Measured: 4017-day range → 1000 occurrences, last 2022-09-25. → item 9.
-2. **[P1]** Strict intersection returns nothing for realistic groups (2% for 4 people at 60%
-   occupancy, 0% for 6). Wedge changed to a count band. → wedge, item 1.
-3. **[P2]** Today centring on the disc puts the hand at 6 o'clock. Kept: the disc's window
-   boundary is the seam at 12 o'clock, so 50% is the furthest point from it. → item 6.
-4. **[P2]** `people-renderer.ts:196` — `end <= start` treats touching intervals as
-   non-overlapping; one shared inclusive predicate. → item 8.
-5. **[P2]** Cancelled drawn solid but excluded from busy; fade to match `renderer.ts:812`.
-   → item 5.
-6. **[P1]** `expandOccurrences` has zero test coverage and the module trusts it. → item 10.
+**CROSS-MODEL:** an independent reviewer with fresh context returned 20 findings. Seven were
+verified by running code; six held, one disproved a review decision.
 
-**Measured, not assumed:** the truncation cliff, the 2%/0% hit rates, the boundary overlap,
-and the 19ms/48ms performance numbers were all produced by running code, not by reading it.
+| Finding | Verified | Outcome |
+|---|---|---|
+| Filters fabricate availability | confirmed | item 9, band ignores filters and says so |
+| No boundary overlap bug | **confirmed — review was WRONG** | item 8 retracted |
+| DST breaks every later occurrence | confirmed, worse than reported | item 12, live production bug |
+| Single-day activity draws 4px | confirmed | noted in item 8, follow-up |
+| Shared links drop selected people | confirmed | open question 6 |
+| Public view can reach People | confirmed | item 13 |
+| Year `navigate()` inconsistency | confirmed | open question 8 |
 
-**Test coverage:** 1/27 paths (4%) before this work. The gap list and the coverage diagram
-are in the test plan artifact under `~/.gstack/projects/`.
+The retraction matters most. This review claimed `assignSubRows` caused a one-day visual
+overlap and recommended a shared predicate; measurement showed the overlap is 0px. Rendering
+uses instants, availability uses inclusive days, and both are right for their job. The
+outside voice was correct and the review was not.
 
-**Performance:** no issues. The obvious optimisation measured slower and is explicitly
-ruled out in the plan.
-
-**VERDICT:** ENG CLEARED — ready to implement, in the order T1/T2 → T3 → T4/T5 → T6.
+**VERDICT:** ENG CLEARED — implement in the order T0 (DST) → T1/T2 → T3 → T5 → T6.
 
 **UNRESOLVED DECISIONS:**
-- Open Question 2: clicking a partial-coverage window must decide who gets tagged (all
-  selected, only the free ones, or ask). The assignment is designed to settle it.
+- Open question 2: clicking a partial-coverage window must decide who gets tagged.
+- Open question 5: whether the band requires an explicit people selection to appear.
+- Open question 6: shared links silently dropping selected people, which changes the count.
+- Open question 7: whether min-duration is URL state.
+- Open question 8: whether the January-at-12-o'clock invariant applies to navigation.
