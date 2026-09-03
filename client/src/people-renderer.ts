@@ -298,7 +298,7 @@ export class PeopleRenderer {
       // Expand occurrences for each activity
       const expandedOccs: Array<{ start: Date; end: Date; activity: Activity; occIdx: number }> = [];
       personActivities.forEach(activity => {
-        const occs = expandOccurrences(activity, this.viewport.windowStart, this.viewport.windowEnd);
+        const { occurrences: occs } = expandOccurrences(activity, this.viewport.windowStart, this.viewport.windowEnd);
         occs.forEach((occ, occIdx) => {
           expandedOccs.push({ start: occ.start, end: occ.end, activity, occIdx });
         });

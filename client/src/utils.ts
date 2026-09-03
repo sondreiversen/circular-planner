@@ -212,6 +212,32 @@ export function laneColor(index: number): string {
 
 const MAX_OCCURRENCES = 1000;
 
+/** One expanded occurrence. Both ends are local midnights; `end` is INCLUSIVE. */
+export interface Occurrence {
+  start: Date;
+  end: Date;
+}
+
+/**
+ * The result of expanding an activity.
+ *
+ * `truncated` is the important half. The expansion stops at MAX_OCCURRENCES as a
+ * safety guard, and for DRAWING that is harmless — you lose some boxes off the
+ * end of a very long view. For anything that reasons about the gaps, it inverts
+ * the answer: the occurrences that were never emitted do not read as "unknown",
+ * they read as "nothing scheduled". A free/busy calculation over a truncated
+ * expansion reports a busy person as available, confidently and silently.
+ *
+ * So the flag is part of the return type rather than an optional extra: a caller
+ * has to look at it to get at the occurrences, and can then decide whether a
+ * partial answer is acceptable for its purpose.
+ */
+export interface OccurrenceExpansion {
+  occurrences: Occurrence[];
+  /** True when the cap stopped the walk before the range was exhausted. */
+  truncated: boolean;
+}
+
 /**
  * Expand an activity into concrete {start, end} occurrence pairs within [rangeStart, rangeEnd].
  *
@@ -224,7 +250,9 @@ const MAX_OCCURRENCES = 1000;
  * Weekly: for each week-anchor (every interval weeks from the week containing startDate),
  * emits one occurrence for each selected weekday that falls >= startDate and <= until/rangeEnd.
  *
- * Output is capped at MAX_OCCURRENCES as a safety guard.
+ * Monthly / yearly: walk by interval months/years from the activity's start.
+ *
+ * Output is capped at MAX_OCCURRENCES; see OccurrenceExpansion.truncated.
  */
 /** Apply any recurrence override for the given occurrence start date. */
 function applyOverride(
@@ -243,7 +271,7 @@ export function expandOccurrences(
   activity: Activity,
   rangeStart: Date,
   rangeEnd: Date
-): Array<{ start: Date; end: Date }> {
+): OccurrenceExpansion {
   const actStart = parseDate(activity.startDate);
   const actEnd = parseDate(activity.endDate);
   // Duration in whole DAYS, not milliseconds.
@@ -258,15 +286,16 @@ export function expandOccurrences(
   const durationDays = daysBetween(actStart, actEnd);
 
   if (!activity.recurrence) {
-    if (actEnd < rangeStart || actStart > rangeEnd) return [];
-    return [{ start: actStart, end: actEnd }];
+    if (actEnd < rangeStart || actStart > rangeEnd) return { occurrences: [], truncated: false };
+    return { occurrences: [{ start: actStart, end: actEnd }], truncated: false };
   }
 
   const rec = activity.recurrence;
   const until = rec.until ? parseDate(rec.until) : null;
   const hardEnd = until && until < rangeEnd ? until : rangeEnd;
 
-  const results: Array<{ start: Date; end: Date }> = [];
+  const results: Occurrence[] = [];
+  let truncated = false;
 
   // Build a set of exception dates (YYYY-MM-DD) for O(1) lookup.
   const exceptionSet = new Set(rec.exceptions ?? []);
@@ -274,26 +303,28 @@ export function expandOccurrences(
   if (rec.type === 'daily') {
     const step = rec.interval;
     let cur = new Date(actStart.getTime());
-    while (cur <= hardEnd && results.length < MAX_OCCURRENCES) {
+    while (cur <= hardEnd) {
+      if (results.length >= MAX_OCCURRENCES) { truncated = true; break; }
       const occEnd = addDays(cur, durationDays);
       if (occEnd >= rangeStart && !exceptionSet.has(formatDate(cur))) {
         results.push(applyOverride(activity, new Date(cur.getTime()), occEnd));
       }
       cur = addDays(cur, step);
     }
-    return results;
+    return { occurrences: results, truncated };
   }
 
   if (rec.type === 'weekly') {
     const weekdays = rec.weekdays ?? [];
-    if (weekdays.length === 0) return [];
+    if (weekdays.length === 0) return { occurrences: [], truncated: false };
 
     const weekStepDays = rec.interval * 7;
     // Anchor to the Monday of the week containing actStart so that week-stepping is uniform.
     const anchorMonday = getMonday(actStart);
     let weekAnchor = new Date(anchorMonday.getTime());
 
-    while (weekAnchor <= hardEnd && results.length < MAX_OCCURRENCES) {
+    while (weekAnchor <= hardEnd) {
+      if (results.length >= MAX_OCCURRENCES) { truncated = true; break; }
       for (const wd of weekdays) {
         // Sunday=0 in JS; anchor is Monday (day 1), so offset = wd === 0 ? 6 : wd - 1
         const dayOffset = wd === 0 ? 6 : wd - 1;
@@ -305,22 +336,23 @@ export function expandOccurrences(
         if (occEnd < rangeStart) continue;
         if (exceptionSet.has(formatDate(occStart))) continue;
         results.push(applyOverride(activity, new Date(occStart.getTime()), occEnd));
-        if (results.length >= MAX_OCCURRENCES) break;
+        if (results.length >= MAX_OCCURRENCES) { truncated = true; break; }
       }
       weekAnchor = addDays(weekAnchor, weekStepDays);
     }
-    return results;
+    return { occurrences: results, truncated };
   }
 
   if (rec.type === 'monthly') {
     const rule = rec.monthlyRule;
-    if (!rule) return [];
+    if (!rule) return { occurrences: [], truncated: false };
 
     // Walk month-by-month from actStart's month, stepping by rec.interval months.
     let year = actStart.getFullYear();
     let month = actStart.getMonth(); // 0-indexed
 
-    while (results.length < MAX_OCCURRENCES) {
+    for (;;) {
+      if (results.length >= MAX_OCCURRENCES) { truncated = true; break; }
       const occStart = applyMonthlyRule(rule, year, month);
       if (occStart !== null) {
         // Enforce lower bound (actStart) and upper bound (hardEnd / rangeEnd).
@@ -339,7 +371,7 @@ export function expandOccurrences(
       // Safety: stop if we've gone far past hardEnd (handles months with no valid dom).
       if (new Date(year, month, 1) > hardEnd) break;
     }
-    return results;
+    return { occurrences: results, truncated };
   }
 
   if (rec.type === 'yearly') {
@@ -347,11 +379,8 @@ export function expandOccurrences(
     const anchorMonth = actStart.getMonth();
     const anchorDay   = actStart.getDate();
 
-    for (
-      let y = actStart.getFullYear();
-      results.length < MAX_OCCURRENCES;
-      y += rec.interval
-    ) {
+    for (let y = actStart.getFullYear(); ; y += rec.interval) {
+      if (results.length >= MAX_OCCURRENCES) { truncated = true; break; }
       // Handle Feb 29 → fall back to Feb 28 in non-leap years.
       let d = new Date(y, anchorMonth, anchorDay);
       if (d.getMonth() !== anchorMonth) {
@@ -369,8 +398,9 @@ export function expandOccurrences(
         }
       }
     }
-    return results;
+    return { occurrences: results, truncated };
   }
 
-  return [];
+  // Unknown recurrence type: no occurrences, and nothing was cut short.
+  return { occurrences: [], truncated: false };
 }

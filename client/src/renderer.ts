@@ -685,7 +685,7 @@ export class Renderer {
       type Occurrence = { start: Date; end: Date; master: typeof visibleActivities[0] };
       const allOccurrences: Occurrence[] = [];
       for (const activity of visibleActivities) {
-        const occ = expandOccurrences(activity, this.viewport.windowStart, this.viewport.windowEnd);
+        const { occurrences: occ } = expandOccurrences(activity, this.viewport.windowStart, this.viewport.windowEnd);
         for (const o of occ) {
           allOccurrences.push({ start: o.start, end: o.end, master: activity });
         }

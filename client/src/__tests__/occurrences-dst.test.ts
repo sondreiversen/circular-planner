@@ -1,4 +1,4 @@
-import { expandOccurrences, parseDate, formatDate, daysBetween } from '../utils';
+import { expandOccurrences, parseDate, formatDate, daysBetween, Occurrence } from '../utils';
 import { Activity } from '../types';
 
 /**
@@ -36,8 +36,13 @@ const act = (o: Partial<Activity>): Activity => ({
   ...o,
 } as Activity);
 
+/** expandOccurrences returns { occurrences, truncated }; these tests only need the list. */
+function occurrencesOf(a: Activity, from: string, to: string): Occurrence[] {
+  return expandOccurrences(a, parseDate(from), parseDate(to)).occurrences;
+}
+
 /** Every occurrence must keep the same duration in whole days. */
-function durationsInDays(occs: Array<{ start: Date; end: Date }>): number[] {
+function durationsInDays(occs: Occurrence[]): number[] {
   return occs.map(o => daysBetween(o.start, o.end));
 }
 
@@ -58,7 +63,7 @@ describe('expandOccurrences keeps its duration across DST', () => {
       startDate: '2026-03-27', endDate: '2026-03-31',
       recurrence: { type: 'weekly', interval: 1, weekdays: [5] } as never,
     });
-    const occs = expandOccurrences(a, parseDate('2026-03-01'), parseDate('2026-05-10'));
+    const occs = occurrencesOf(a, '2026-03-01', '2026-05-10');
 
     expect(occs.length).toBeGreaterThan(3);
     // Every occurrence keeps the full four-day span...
@@ -76,7 +81,7 @@ describe('expandOccurrences keeps its duration across DST', () => {
       startDate: '2026-10-23', endDate: '2026-10-27',
       recurrence: { type: 'weekly', interval: 1, weekdays: [5] } as never,
     });
-    const occs = expandOccurrences(a, parseDate('2026-10-01'), parseDate('2026-12-10'));
+    const occs = occurrencesOf(a, '2026-10-01', '2026-12-10');
     expect(occs.length).toBeGreaterThan(3);
     expect(durationsInDays(occs)).toEqual(occs.map(() => 4));
     occs.forEach(o => expect(o.end.getHours()).toBe(0));
@@ -87,7 +92,7 @@ describe('expandOccurrences keeps its duration across DST', () => {
       startDate: '2026-03-25', endDate: '2026-03-27',
       recurrence: { type: 'daily', interval: 1 } as never,
     });
-    const occs = expandOccurrences(a, parseDate('2026-03-20'), parseDate('2026-04-10'));
+    const occs = occurrencesOf(a, '2026-03-20', '2026-04-10');
     expect(durationsInDays(occs)).toEqual(occs.map(() => 2));
     occs.forEach(o => expect(o.end.getHours()).toBe(0));
   });
@@ -97,7 +102,7 @@ describe('expandOccurrences keeps its duration across DST', () => {
       startDate: '2026-03-27', endDate: '2026-03-31',
       recurrence: { type: 'monthly', interval: 1, monthlyRule: { kind: 'dom', day: 27 } } as never,
     });
-    const occs = expandOccurrences(a, parseDate('2026-03-01'), parseDate('2026-07-01'));
+    const occs = occurrencesOf(a, '2026-03-01', '2026-07-01');
     expect(occs.length).toBeGreaterThan(1);
     expect(durationsInDays(occs)).toEqual(occs.map(() => 4));
     occs.forEach(o => expect(o.end.getHours()).toBe(0));
@@ -108,7 +113,7 @@ describe('expandOccurrences keeps its duration across DST', () => {
       startDate: '2026-03-27', endDate: '2026-03-31',
       recurrence: { type: 'yearly', interval: 1 } as never,
     });
-    const occs = expandOccurrences(a, parseDate('2026-01-01'), parseDate('2029-12-31'));
+    const occs = occurrencesOf(a, '2026-01-01', '2029-12-31');
     expect(occs.length).toBeGreaterThan(1);
     expect(durationsInDays(occs)).toEqual(occs.map(() => 4));
     occs.forEach(o => expect(o.end.getHours()).toBe(0));
@@ -116,7 +121,7 @@ describe('expandOccurrences keeps its duration across DST', () => {
 
   it('non-recurring activities are returned untouched', () => {
     const a = act({ startDate: '2026-03-27', endDate: '2026-03-31' });
-    const occs = expandOccurrences(a, parseDate('2026-01-01'), parseDate('2026-12-31'));
+    const occs = occurrencesOf(a, '2026-01-01', '2026-12-31');
     expect(occs).toHaveLength(1);
     expect(formatDate(occs[0].start)).toBe('2026-03-27');
     expect(formatDate(occs[0].end)).toBe('2026-03-31');
@@ -127,7 +132,7 @@ describe('expandOccurrences keeps its duration across DST', () => {
       startDate: '2026-03-29', endDate: '2026-03-29', // the change day itself
       recurrence: { type: 'weekly', interval: 1, weekdays: [0] } as never,
     });
-    const occs = expandOccurrences(a, parseDate('2026-03-01'), parseDate('2026-05-01'));
+    const occs = occurrencesOf(a, '2026-03-01', '2026-05-01');
     expect(durationsInDays(occs)).toEqual(occs.map(() => 0));
     occs.forEach(o => expect(formatDate(o.start)).toBe(formatDate(o.end)));
   });
