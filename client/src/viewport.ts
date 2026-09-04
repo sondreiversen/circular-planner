@@ -271,9 +271,22 @@ export function viewportLabel(viewport: Viewport): string {
           windowStart.getFullYear() === windowEnd.getFullYear()) {
         return String(windowStart.getFullYear());
       }
-      // Sliding window: ISO month range
-      const endDisplay = addMonths(windowEnd, -1);
-      return `${formatYearMonth(windowStart)} – ${formatYearMonth(endDisplay)}`;
+      // Anything else: the ISO month range the window actually covers.
+      //
+      // windowEnd is INCLUSIVE at this zoom level, unlike Month, Quarter and
+      // Week, whose windows run to the first day of the following period. Every
+      // Year constructor produces an inclusive end: viewportForLevel and
+      // navigateToYear give Dec 31, defaultViewport uses the planner's own end
+      // date, and navigateToRange takes whatever the date pickers returned.
+      //
+      // This used to subtract a month here, as if the end were exclusive. That
+      // understated every slid window by a month (Feb 1 2026 – Jan 31 2027 was
+      // labelled "2026-02 – 2026-12"), and on any window shorter than two
+      // months it ran off the front and printed a BACKWARDS range: a planner
+      // configured 2026-04-01 to 2026-04-30 showed "2026-04 – 2026-03".
+      const startLabel = formatYearMonth(windowStart);
+      const endLabel = formatYearMonth(windowEnd);
+      return startLabel === endLabel ? startLabel : `${startLabel} – ${endLabel}`;
     }
     case ZoomLevel.Quarter: {
       // Both labels below are derived from windowStart alone, which is only
