@@ -1,9 +1,10 @@
 import { PlannerData, Activity, Viewport, FilterState, TaggedUser, PlannerConfig } from './types';
-import { parseDate, formatDate, expandOccurrences, displayName } from './utils';
+import { parseDate, formatDate, expandOccurrences, displayName, addDays } from './utils';
 import { getGridSpec } from './viewport';
 import { api } from './api-client';
 import { attachLinearDrag } from './pointer-drag';
 import { now } from './clock';
+import { availabilityFor, hiddenBlockingActivities, freeWindows } from './availability';
 
 export type DragCommitHandler = (activity: Activity, newStart: Date, newEnd: Date, newLaneId: string) => void;
 
@@ -22,6 +23,7 @@ const LANE_COL_WIDTH = 200;
 const SUB_ROW_HEIGHT = 26;
 const ROW_PADDING_Y = 6;
 const HEADER_ROW_HEIGHT = 32; // height of a single header row
+const BAND_HEIGHT = 34;       // the availability summary row under the people
 
 export class PeopleRenderer {
   private container: HTMLElement;
@@ -459,5 +461,118 @@ export class PeopleRenderer {
       row.appendChild(timeline);
       body.appendChild(row);
     });
+
+    this.renderAvailabilityBand(body, persons, allActivities, timelineWidth, dateToX);
+  }
+
+  /**
+   * The availability summary row: how many of the people above are free each day.
+   *
+   * A COUNT rather than a boolean. Simulated on block-structured schedules over a
+   * 92-day window, "everyone free for three days" succeeds 2% of the time for
+   * four people at 60% occupancy and 0% for six, so a strict band would be empty
+   * almost always for the group sizes this exists for. It also throws away what
+   * the real conversation runs on: "can we do it when five of the six are free
+   * and catch Bo up after?"
+   *
+   * The denominator is exactly the rows drawn above, so the viewer can always
+   * see what the count is out of.
+   */
+  private renderAvailabilityBand(
+    body: HTMLElement,
+    persons: PersonRow[],
+    allActivities: Activity[],
+    timelineWidth: number,
+    dateToX: (d: Date) => number,
+  ): void {
+    if (persons.length === 0) return;
+
+    const window = { start: this.viewport.windowStart, end: this.viewport.windowEnd };
+    const personIds = persons.map(p => p.id);
+
+    // UNFILTERED on purpose. passesFilter drops activities by search term, label,
+    // hidden lane and tagged user, so honouring it here would mean typing
+    // "workshop" into the search box marks everyone free. A filter is a viewing
+    // preference, not a statement about what exists.
+    const free = availabilityFor(allActivities, personIds, window);
+
+    const row = document.createElement('div');
+    // cp-list-lane-row carries the flex layout the timeline needs a height from.
+    row.className = 'cp-list-lane-row cp-availability-row';
+    row.style.height = `${BAND_HEIGHT}px`;
+
+    const labelCell = document.createElement('div');
+    labelCell.className = 'cp-list-lane-cell cp-availability-label';
+    labelCell.style.width = `${LANE_COL_WIDTH}px`;
+    labelCell.textContent = free.truncated ? 'Availability —' : `Free of ${persons.length}`;
+    row.appendChild(labelCell);
+
+    const timeline = document.createElement('div');
+    timeline.className = 'cp-list-timeline cp-availability-timeline';
+    timeline.style.width = `${timelineWidth}px`;
+
+    if (free.truncated) {
+      // Refusing to answer is the whole point. The occurrences the expansion
+      // never emitted do not read as "unknown" downstream, they read as
+      // "nothing scheduled", so a band drawn from truncated counts would show a
+      // confidently wrong stretch of green.
+      const warn = document.createElement('div');
+      warn.className = 'cp-availability-warning';
+      warn.textContent = 'Range too large to compute availability — narrow the date range.';
+      timeline.appendChild(warn);
+      row.appendChild(timeline);
+      body.appendChild(row);
+      return;
+    }
+
+    // All-free stretches, highlighted behind the per-day cells.
+    freeWindows(free, window, persons.length, 1).forEach(w => {
+      const seg = document.createElement('div');
+      seg.className = 'cp-availability-allfree';
+      const left = dateToX(w.start);
+      seg.style.left = `${left}px`;
+      seg.style.width = `${Math.max(2, dateToX(addDays(w.end, 1)) - left)}px`;
+      seg.title = `Everyone free: ${formatDate(w.start)} → ${formatDate(w.end)}`;
+      timeline.appendChild(seg);
+    });
+
+    // One cell per day, shaded by how many people are free.
+    free.counts.forEach((count, i) => {
+      const dayStart = addDays(this.viewport.windowStart, i);
+      const left = dateToX(dayStart);
+      const width = dateToX(addDays(dayStart, 1)) - left;
+      if (width <= 0) return;
+
+      const cell = document.createElement('div');
+      cell.className = 'cp-availability-cell';
+      cell.style.left = `${left}px`;
+      cell.style.width = `${Math.max(1, width)}px`;
+      // Opacity carries the count so the eye reads density rather than digits;
+      // the number is drawn too whenever the cell is wide enough for it.
+      const ratio = persons.length > 0 ? count / persons.length : 0;
+      cell.style.setProperty('--cp-free-ratio', String(ratio));
+      if (count === persons.length) cell.classList.add('cp-availability-cell--all');
+      if (count === 0) cell.classList.add('cp-availability-cell--none');
+      if (width >= 14) cell.textContent = String(count);
+      cell.title = `${formatDate(dayStart)}: ${count} of ${persons.length} free`;
+      timeline.appendChild(cell);
+    });
+
+    row.appendChild(timeline);
+    body.appendChild(row);
+
+    // The band is computed over everything, so it disagrees with the rows
+    // whenever a filter is active. Say so rather than leaving the viewer to
+    // notice a contradiction and distrust both.
+    const hidden = hiddenBlockingActivities(
+      allActivities, a => this.passesFilter(a), personIds, window,
+    );
+    if (hidden.length > 0) {
+      const note = document.createElement('div');
+      note.className = 'cp-availability-note';
+      note.textContent = `Availability includes ${hidden.length} activit${hidden.length === 1 ? 'y' : 'ies'} hidden by the current filter.`;
+      note.title = hidden.map(a => a.title).join('\n');
+      body.appendChild(note);
+    }
   }
 }

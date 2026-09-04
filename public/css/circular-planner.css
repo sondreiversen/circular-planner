@@ -604,6 +604,82 @@
   text-decoration: line-through;
 }
 .cp-list-activity--cancelled:hover { opacity: 0.75; }
+
+/* ---- Availability band (People view) ----
+   A per-day count of how many of the people above are free, drawn under the
+   rows. Reads as density first and digits second: opacity carries the shape of
+   the week at a glance, the number is only drawn when the cell is wide enough
+   to hold it legibly. */
+.cp-availability-row {
+  border-top: 2px solid var(--cp-border-strong, #d0d4db);
+  background: var(--cp-surface, #fff) !important; /* beats the odd/even striping */
+  align-items: stretch;
+}
+.cp-availability-row .cp-list-timeline { height: 100%; }
+.cp-availability-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cp-text-muted, #5f6b7a);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cp-availability-timeline { position: relative; }
+
+.cp-availability-cell {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  /* The count drives the fill through --cp-free-ratio (0..1), set inline by the
+     renderer. Text stays at full strength so a low-count cell is still readable
+     — the legibility work on the disc learned that dimming the glyph along with
+     the fill is what makes small labels unreadable. */
+  background: rgba(52, 168, 83, calc(var(--cp-free-ratio, 0) * 0.55));
+  color: var(--cp-text, #1a2332);
+  overflow: hidden;
+}
+.cp-availability-cell--none {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent, transparent 3px,
+    var(--cp-border, #e4e7ed) 3px, var(--cp-border, #e4e7ed) 4px
+  );
+  color: var(--cp-text-muted, #5f6b7a);
+}
+/* Everyone free: a solid band behind the cells, so the strict answer is still
+   findable at a glance inside the count. */
+.cp-availability-allfree {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border: 1px solid rgba(52, 168, 83, 0.85);
+  border-radius: 3px;
+  background: rgba(52, 168, 83, 0.10);
+  pointer-events: none;
+}
+.cp-availability-warning {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--cp-danger, #c62828);
+}
+.cp-availability-note {
+  padding: 6px 12px 8px;
+  font-size: 11px;
+  color: var(--cp-text-muted, #5f6b7a);
+  font-style: italic;
+}
+
+[data-theme="dark"] .cp-availability-cell {
+  background: rgba(90, 200, 120, calc(var(--cp-free-ratio, 0) * 0.5));
+}
+[data-theme="dark"] .cp-availability-allfree {
+  border-color: rgba(90, 200, 120, 0.8);
+  background: rgba(90, 200, 120, 0.12);
+}
 .cp-list-activity--milestone {
   width: 14px !important;
   height: 14px !important;
