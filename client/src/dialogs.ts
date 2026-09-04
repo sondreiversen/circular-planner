@@ -133,8 +133,7 @@ export function showActivityDialog(
   // Show occurrence-scope radio only when editing a specific occurrence of a recurring activity.
   const showOccurrenceRadio = isEdit &&
     !!occurrenceDate &&
-    !!existingActivity?.recurrence &&
-    existingActivity.recurrence.type !== 'none';
+    !!existingActivity?.recurrence;
   const defaultColor = existingActivity?.color || COLOR_PALETTE[0];
   const defaultStart = existingActivity ? existingActivity.startDate : formatDate(initialDate);
   const defaultEnd   = existingActivity ? existingActivity.endDate

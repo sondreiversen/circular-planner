@@ -34,6 +34,12 @@ export class PeopleRenderer {
   private plannerId: number;
   private members: Member[] = [];
   private membersLoaded = false;
+  private publicView = false;
+  /**
+   * Selected person ids that matched neither a planner member nor a tagged
+   * user, so no row could be drawn for them. Recomputed on every render.
+   */
+  private unresolvedPersonIds: number[] = [];
   private onClickActivity?: (a: Activity) => void;
   private onDragCommit: DragCommitHandler | null = null;
   private onCreateFromBand:
@@ -57,6 +63,7 @@ export class PeopleRenderer {
     this.filterState = filterState;
     this.config = config;
     this.plannerId = plannerId;
+    this.publicView = publicView;
     this.mount();
     // /members is authenticated. On the public view it 401s, and api-client
     // turns a 401 into a full-page redirect to login. See Planner.publicView.
@@ -133,22 +140,29 @@ export class PeopleRenderer {
       });
 
       const rows: PersonRow[] = [];
+      const unresolved: number[] = [];
       this.filterState.selectedPeopleIds.forEach(id => {
         // Prefer the member record (has the authoritative display name); fall back to tagged.
         const member = this.members.find(m => m.id === id);
         if (member) {
           rows.push({ id: member.id, username: member.username, fullName: member.fullName });
-        } else {
-          const tagged = taggedById.get(id);
-          if (tagged) rows.push(tagged);
+          return;
         }
+        const tagged = taggedById.get(id);
+        if (tagged) { rows.push(tagged); return; }
+        // Neither a member nor tagged anywhere: there is no name to draw. Record
+        // it so the view can say so instead of quietly shrinking the selection.
+        unresolved.push(id);
       });
+      this.unresolvedPersonIds = unresolved;
 
       rows.sort((a, b) => displayName(a).localeCompare(displayName(b)));
       return rows;
     }
 
     // Default behaviour: union of tagged users across activities + members.
+    // Nothing can be unresolved here — the rows ARE the union.
+    this.unresolvedPersonIds = [];
     const allActivities = this.data.lanes.flatMap(l => l.activities);
 
     const seenIds = new Set<number>();
@@ -294,6 +308,7 @@ export class PeopleRenderer {
         ? 'No selected people to display. Open "Visible people" in the sidebar to add some, or Clear to fall back to auto mode.'
         : 'No people to display. Use the "Visible people" picker in the sidebar to choose who appears here, or tag users in activities.';
       body.appendChild(empty);
+      this.renderUnresolvedNote(body);
       return;
     }
 
@@ -400,7 +415,7 @@ export class PeopleRenderer {
 
         const isDraggable =
           !activity.isMilestone &&
-          !(activity.recurrence && activity.recurrence.type !== 'none') &&
+          !activity.recurrence &&
           this.config.permission !== 'view' &&
           this.onDragCommit !== null;
 
@@ -472,6 +487,39 @@ export class PeopleRenderer {
     });
 
     this.renderAvailabilityBand(body, persons, allActivities, timelineWidth, dateToX);
+    this.renderUnresolvedNote(body);
+  }
+
+  /**
+   * Say when a selected person could not be shown, instead of quietly dropping them.
+   *
+   * selectedPeopleIds round-trips through the URL as `sp=` (url-state.ts), so a
+   * shared link carries a selection made against a different set of people. Any
+   * id that matches neither a planner member nor a tagged user used to be
+   * discarded with no signal at all: the recipient saw "Free of 3" for a link
+   * that selected five, with nothing to suggest the answer was about a smaller
+   * group than the sender meant. That is the availability band's denominator
+   * being silently wrong on the feature's primary sharing path.
+   *
+   * The message waits for the member list. Before it arrives, an id that will
+   * resolve perfectly well looks unresolvable, and saying so would be a
+   * transient lie on every single load. On the public view the list never
+   * arrives at all — /members is authenticated — so there the shortfall is
+   * reported without claiming to know why.
+   */
+  private renderUnresolvedNote(body: HTMLElement): void {
+    const n = this.unresolvedPersonIds.length;
+    if (n === 0) return;
+    if (!this.publicView && !this.membersLoaded) return; // still loading; not yet a fact
+
+    const note = document.createElement('div');
+    note.className = 'cp-availability-note cp-unresolved-note';
+    const people = `${n} selected ${n === 1 ? 'person' : 'people'}`;
+    note.textContent = this.publicView
+      ? `${people} from this link could not be shown here, so any availability below covers the rest.`
+      : `${people} from this link ${n === 1 ? 'is' : 'are'} not in this planner and ${n === 1 ? 'is' : 'are'} not shown. Availability covers the rest.`;
+    note.title = `Unresolved ids: ${this.unresolvedPersonIds.join(', ')}`;
+    body.appendChild(note);
   }
 
   /**

@@ -674,6 +674,7 @@
   font-size: 12px;
   color: var(--cp-danger, #c62828);
 }
+.cp-unresolved-note { color: var(--cp-warning-text, #8a6d3b); font-style: normal; }
 .cp-availability-note {
   padding: 6px 12px 8px;
   font-size: 11px;

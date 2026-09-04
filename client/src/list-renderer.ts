@@ -250,7 +250,7 @@ export class ListRenderer {
 
         const isDraggable =
           !activity.isMilestone &&
-          !(activity.recurrence && activity.recurrence.type !== 'none') &&
+          !activity.recurrence &&
           this.config.permission !== 'view' &&
           this.onDragCommit !== null;
 

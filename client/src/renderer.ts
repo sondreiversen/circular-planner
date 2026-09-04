@@ -1035,7 +1035,7 @@ export class Renderer {
     // Base fill arc
     const fillColor = this.fillFor(activity, lane ?? { id: '', name: '', color: '', order: 0, activities: [] });
     const isDraggable = !activity.isMilestone &&
-      !(activity.recurrence && activity.recurrence.type !== 'none') &&
+      !activity.recurrence &&
       this.onDragCommit !== null &&
       this.config.permission !== 'view';
 

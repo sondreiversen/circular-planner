@@ -9,7 +9,7 @@
     "sourceMap": true,
     "outDir": "./dist",
     "baseUrl": ".",
-    "lib": ["ES2017", "DOM"]
+    "lib": ["ES2017", "DOM", "DOM.Iterable"]
   },
   "include": ["client/src/**/*"],
   "exclude": ["node_modules", "dist", "server"]

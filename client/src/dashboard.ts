@@ -499,8 +499,12 @@ function renderGroups(groups: GroupSummary[]): void {
 
 function bindGlobalSearch(): void {
   const input = document.getElementById('global-search-input') as HTMLInputElement | null;
-  const resultsEl = document.getElementById('global-search-results') as HTMLElement | null;
-  if (!input || !resultsEl) return;
+  const resultsElOrNull = document.getElementById('global-search-results') as HTMLElement | null;
+  if (!input || !resultsElOrNull) return;
+  // Bound after the guard so the nested helpers below see a non-null type. The
+  // guard above already proves it; TypeScript just cannot carry that narrowing
+  // across a function boundary, since it cannot know when they are called.
+  const resultsEl: HTMLElement = resultsElOrNull;
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 

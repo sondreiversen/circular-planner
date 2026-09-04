@@ -35,5 +35,9 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - run: ./scripts/check-clock-usage.sh
+      # Type-check explicitly. esbuild STRIPS types without checking them, so
+      # `build:client` succeeding proves nothing about type correctness — a real
+      # type error would ship silently without this step.
+      - run: npm run typecheck
       - run: npm run build:client
       - run: npm test

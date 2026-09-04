@@ -2140,7 +2140,7 @@ export class Planner {
     this.lastSelectedActivity = activity;
     // Find the base activity (occurrences share the base's id).
     const base = this.data.lanes.flatMap(l => l.activities).find(a => a.id === activity.id) ?? activity;
-    const isRecurring = !!base.recurrence && base.recurrence.type !== 'none';
+    const isRecurring = !!base.recurrence;
     const occurrenceDate = isRecurring ? activity.startDate : undefined;
     showActivityDialog(base.laneId, this.data.lanes, parseDate(base.startDate), base,
       (updated) => this.updateActivity(updated), (id) => this.deleteActivity(id),
