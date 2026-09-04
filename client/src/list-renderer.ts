@@ -230,13 +230,22 @@ export class ListRenderer {
 
         const box = document.createElement('div');
         box.className = 'cp-list-activity';
+        // Cancelled work does not block a window (see availability.ts), so it
+        // must not LOOK like it does. Without this a cancelled box sits at full
+        // strength inside a stretch the availability band calls free.
+        if (activity.status === 'cancelled') box.classList.add('cp-list-activity--cancelled');
         box.style.left = `${left}px`;
         box.style.width = `${width}px`;
         box.style.top = `${ROW_PADDING_Y + subRow * SUB_ROW_HEIGHT}px`;
         box.style.height = `${SUB_ROW_HEIGHT - 4}px`;
         box.style.background = activity.color || '#4c8bf5';
         const recurBadge = activity.recurrence ? ' ↻' : '';
-        box.title = `${activity.title}${recurBadge}\n${formatDate(start)} → ${formatDate(end)}${activity.description ? '\n' + activity.description : ''}`;
+        // Status only when it is not the default, matching the disc's tooltip.
+        // Without this a cancelled activity carries no textual sign that it is
+        // cancelled — the styling alone is not readable on a four-pixel box.
+        const statusNote = activity.status && activity.status !== 'planned'
+          ? `\nStatus: ${activity.status}` : '';
+        box.title = `${activity.title}${recurBadge}\n${formatDate(start)} → ${formatDate(end)}${statusNote}${activity.description ? '\n' + activity.description : ''}`;
         box.textContent = activity.title + recurBadge;
 
         const isDraggable =

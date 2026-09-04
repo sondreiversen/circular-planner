@@ -580,6 +580,30 @@
    (rules out view-only planners, recurring activities, and milestones). */
 .cp-list-activity--draggable { cursor: grab; touch-action: none; }
 .cp-list-activity--draggable:active { cursor: grabbing; }
+
+/* Cancelled work, in the list and people timelines.
+   The disc already draws cancelled arcs at fill-opacity 0.35 (renderer.ts) and
+   these views had no equivalent, so the same planner looked different depending
+   on which view you opened. It matters more than consistency now: availability
+   treats cancelled work as NOT blocking, so a cancelled box drawn at full
+   strength would sit inside a free stretch and read as a contradiction.
+
+   Three signals rather than one, because a box can be four pixels wide:
+   opacity carries it at normal sizes, the dashed border survives when the box
+   is too narrow to show any fill, and the strikethrough is unambiguous when
+   there is room for text.
+
+   The left edge stays solid: both renderers set `borderLeft` inline to the lane
+   colour, and an inline style beats this rule. That is the outcome we want, so
+   the computed style reads "dashed dashed dashed solid" — the lane stripe keeps
+   identifying the lane while the other three sides carry the cancelled signal.
+   Verified in the running app, in both themes. */
+.cp-list-activity--cancelled {
+  opacity: 0.5;
+  border-style: dashed;
+  text-decoration: line-through;
+}
+.cp-list-activity--cancelled:hover { opacity: 0.75; }
 .cp-list-activity--milestone {
   width: 14px !important;
   height: 14px !important;
