@@ -95,7 +95,7 @@ function day(d: Date): Date {
  * look broken. A tag with no id is a pending invitation for someone who has not
  * registered — it cannot be matched to a person, so it cannot make one busy.
  */
-function blocksPerson(activity: Activity, personId: number): boolean {
+export function blocksPerson(activity: Activity, personId: number): boolean {
   if (activity.status === 'cancelled') return false;
   if (activity.isMilestone) return false;
   return (activity.taggedUsers ?? []).some(u => u.id != null && u.id === personId);
@@ -253,6 +253,48 @@ export function availabilityFor(
     personIds.map(id => busyIntervals(activities, id, window)),
     window,
   );
+}
+
+/**
+ * Activities that block someone in the selection but are hidden by the view's
+ * filter, and so are counted in the band while absent from the rows.
+ *
+ * This is the number behind the note the band has to carry. The band is computed
+ * over ALL activities on purpose — honouring the filter would mean typing
+ * "workshop" into the search box marks everyone free, which is a wrong answer
+ * produced by an ordinary UI action rather than a confusing one. The cost of
+ * that choice is that band and rows disagree whenever a filter is active, and
+ * the only honest way to spend it is to say so: "availability includes N hidden
+ * activities."
+ *
+ * The filter predicate is injected rather than imported. This module has no
+ * business knowing what a search term or a hidden lane is, and the renderer
+ * already owns that rule in passesFilter.
+ *
+ * An activity is only counted when it would actually have changed something: it
+ * has to block a selected person AND land inside the window. A hidden activity
+ * for somebody else, or one that falls outside the view, is not a discrepancy
+ * the viewer can see.
+ */
+export function hiddenBlockingActivities(
+  activities: Activity[],
+  isVisible: (a: Activity) => boolean,
+  personIds: number[],
+  window: Interval,
+): Activity[] {
+  if (personIds.length === 0) return [];
+  const winStart = day(window.start);
+  const winEnd = day(window.end);
+
+  return activities.filter(a => {
+    if (isVisible(a)) return false;
+    if (!personIds.some(id => blocksPerson(a, id))) return false;
+
+    // Does it actually fall in view? Overrides can move an occurrence outside
+    // the requested range, so check the occurrences rather than the base dates.
+    const { occurrences } = expandOccurrences(a, winStart, winEnd);
+    return occurrences.some(o => day(o.end) >= winStart && day(o.start) <= winEnd);
+  });
 }
 
 /** Parse a YYYY-MM-DD pair into an inclusive-day Interval. */

@@ -227,6 +227,18 @@ part a user cannot check by eye.
    criterion, and it exists because the alternative is a wrong answer rather than a
    confusing one.
 
+   **Implemented ahead of the band** as `hiddenBlockingActivities(activities, isVisible,
+   personIds, window)` in `availability.ts`. The filter predicate is injected rather than
+   imported: this module has no business knowing what a search term or a hidden lane is,
+   and `passesFilter` already owns that rule in the renderer. An activity only counts when
+   it would actually have changed something — it must block a selected person AND land in
+   the window, so a hidden activity belonging to someone else, or one outside the view, is
+   not reported as a discrepancy the viewer cannot see.
+
+   **T6 must call this with the UNFILTERED list.** Passing `personActivities` (the already
+   filtered array at `people-renderer.ts:292`) would reintroduce the bug: the band would
+   agree with the rows and be wrong.
+
 10. **`expandOccurrences` reports truncation.** It stops silently at `MAX_OCCURRENCES = 1000`
    (`utils.ts:253`). Measured: a daily recurrence over a 4017-day custom range returns
    exactly 1000 occurrences, the last on 2022-09-25, and every day after reads as FREE. The

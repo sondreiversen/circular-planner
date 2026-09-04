@@ -1,6 +1,7 @@
 import {
   overlaps, mergeIntervals, busyIntervals, freeCounts, freeWindows,
-  availabilityFor, intervalFromStrings, Interval, PersonBusy,
+  availabilityFor, intervalFromStrings, hiddenBlockingActivities, blocksPerson,
+  Interval, PersonBusy,
 } from '../availability';
 import { parseDate, formatDate } from '../utils';
 import { Activity } from '../types';
@@ -327,5 +328,87 @@ describe('availabilityFor — end to end', () => {
     ];
     const f = availabilityFor(activities, [1], win);
     expect(f.counts).toEqual([1, 0, 0, 1, 0, 0, 1, 1, 1, 1]);
+  });
+});
+
+describe('hiddenBlockingActivities — the number behind the note', () => {
+  const win = iv('2026-01-01', '2026-01-31');
+  const visibleOnly = (a: Activity) => a.laneId !== 'HIDDEN';
+
+  it('counts an activity the filter hides that blocks a selected person', () => {
+    const acts = [
+      tagged([1], { id: 'v', laneId: 'VISIBLE', startDate: '2026-01-05', endDate: '2026-01-07' }),
+      tagged([1], { id: 'h', laneId: 'HIDDEN', startDate: '2026-01-10', endDate: '2026-01-12' }),
+    ];
+    expect(hiddenBlockingActivities(acts, visibleOnly, [1], win).map(a => a.id)).toEqual(['h']);
+  });
+
+  it('ignores hidden activities that block nobody in the selection', () => {
+    const acts = [tagged([9], { id: 'h', laneId: 'HIDDEN', startDate: '2026-01-10', endDate: '2026-01-12' })];
+    expect(hiddenBlockingActivities(acts, visibleOnly, [1, 2], win)).toEqual([]);
+  });
+
+  it('ignores hidden activities outside the window', () => {
+    const acts = [tagged([1], { id: 'h', laneId: 'HIDDEN', startDate: '2027-06-01', endDate: '2027-06-05' })];
+    expect(hiddenBlockingActivities(acts, visibleOnly, [1], win)).toEqual([]);
+  });
+
+  it('ignores hidden activities that would not have blocked anyway', () => {
+    // Cancelled and milestones do not block, so hiding them changes nothing and
+    // the note must not claim a discrepancy that does not exist.
+    const acts = [
+      tagged([1], { id: 'c', laneId: 'HIDDEN', startDate: '2026-01-05', endDate: '2026-01-07', status: 'cancelled' }),
+      tagged([1], { id: 'm', laneId: 'HIDDEN', startDate: '2026-01-09', endDate: '2026-01-09', isMilestone: true }),
+    ];
+    expect(hiddenBlockingActivities(acts, visibleOnly, [1], win)).toEqual([]);
+  });
+
+  it('is empty when nothing is filtered out', () => {
+    const acts = [tagged([1], { id: 'v', laneId: 'VISIBLE', startDate: '2026-01-05', endDate: '2026-01-07' })];
+    expect(hiddenBlockingActivities(acts, () => true, [1], win)).toEqual([]);
+  });
+
+  it('is empty with no people selected', () => {
+    const acts = [tagged([1], { id: 'h', laneId: 'HIDDEN', startDate: '2026-01-05', endDate: '2026-01-07' })];
+    expect(hiddenBlockingActivities(acts, visibleOnly, [], win)).toEqual([]);
+  });
+
+  it('catches a recurring activity whose only in-window occurrence is hidden', () => {
+    const acts = [tagged([1], {
+      id: 'h', laneId: 'HIDDEN',
+      startDate: '2026-01-05', endDate: '2026-01-05',
+      recurrence: { type: 'weekly', interval: 1, weekdays: [1] } as never,
+    })];
+    expect(hiddenBlockingActivities(acts, visibleOnly, [1], win).map(a => a.id)).toEqual(['h']);
+  });
+
+  it('models the search-box failure the band exists to avoid', () => {
+    // The user types "workshop". Only the workshop stays visible, so the ROWS
+    // show person 1 free all week. The band, computed over everything, still
+    // knows about the other commitment — and this is the count that explains
+    // the difference to the viewer.
+    const acts = [
+      tagged([1], { id: 'w', title: 'workshop', startDate: '2026-01-20', endDate: '2026-01-21' }),
+      tagged([1], { id: 'o', title: 'other work', startDate: '2026-01-05', endDate: '2026-01-09' }),
+    ];
+    const search = (a: Activity) => a.title.includes('workshop');
+
+    const hidden = hiddenBlockingActivities(acts, search, [1], win);
+    expect(hidden.map(a => a.id)).toEqual(['o']);
+
+    // And the band itself is unmoved by the filter: the 5th to the 9th is busy.
+    const f = availabilityFor(acts, [1], win);
+    expect(f.counts[4]).toBe(0);
+    expect(f.counts[8]).toBe(0);
+  });
+});
+
+describe('blocksPerson', () => {
+  it('is the single rule both the band and the note use', () => {
+    expect(blocksPerson(tagged([1], {}), 1)).toBe(true);
+    expect(blocksPerson(tagged([1], {}), 2)).toBe(false);
+    expect(blocksPerson(tagged([1], { status: 'cancelled' }), 1)).toBe(false);
+    expect(blocksPerson(tagged([1], { isMilestone: true }), 1)).toBe(false);
+    expect(blocksPerson(act({ taggedUsers: [{ id: null, username: 'p', pending: true }] }), 1)).toBe(false);
   });
 });
