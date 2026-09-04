@@ -253,6 +253,14 @@ export interface OccurrenceExpansion {
  * Monthly / yearly: walk by interval months/years from the activity's start.
  *
  * Output is capped at MAX_OCCURRENCES; see OccurrenceExpansion.truncated.
+ *
+ * CALLERS BEWARE: occurrences are not guaranteed to fall inside [rangeStart,
+ * rangeEnd]. Overrides are applied AFTER each branch's range check, so an
+ * override that moves an occurrence's dates can hand back something far outside
+ * the window you asked for. Verified: an activity recurring daily from
+ * 2026-01-05 with an override moving 2026-01-06 to 2027-06-01 returns that
+ * 2027 occurrence from a query for 2026-01-05..2026-01-07. Clip the results
+ * yourself if you are doing arithmetic rather than drawing.
  */
 /** Apply any recurrence override for the given occurrence start date. */
 function applyOverride(
