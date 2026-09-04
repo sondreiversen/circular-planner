@@ -661,6 +661,14 @@
   background: rgba(52, 168, 83, 0.10);
   pointer-events: none;
 }
+.cp-availability-clickable { cursor: pointer; }
+.cp-availability-cell.cp-availability-clickable:hover {
+  outline: 1px solid var(--cp-accent, #1a73e8);
+  outline-offset: -1px;
+}
+.cp-availability-allfree.cp-availability-clickable:hover {
+  background: rgba(52, 168, 83, 0.22);
+}
 .cp-availability-warning {
   padding: 8px 12px;
   font-size: 12px;

@@ -1,6 +1,7 @@
 import {
   overlaps, mergeIntervals, busyIntervals, freeCounts, freeWindows,
   availabilityFor, intervalFromStrings, hiddenBlockingActivities, blocksPerson,
+  partitionBySpan,
   Interval, PersonBusy,
 } from '../availability';
 import { parseDate, formatDate } from '../utils';
@@ -410,5 +411,61 @@ describe('blocksPerson', () => {
     expect(blocksPerson(tagged([1], { status: 'cancelled' }), 1)).toBe(false);
     expect(blocksPerson(tagged([1], { isMilestone: true }), 1)).toBe(false);
     expect(blocksPerson(act({ taggedUsers: [{ id: null, username: 'p', pending: true }] }), 1)).toBe(false);
+  });
+});
+
+describe('partitionBySpan — who to tag when only some are free', () => {
+  it('separates free from busy and names the clash', () => {
+    const acts = [
+      tagged([2], { id: 'mig', title: 'Migration', startDate: '2026-01-10', endDate: '2026-01-15' }),
+    ];
+    const out = partitionBySpan(acts, [1, 2, 3], iv('2026-01-12', '2026-01-14'));
+    expect(out.map(p => [p.personId, p.free])).toEqual([[1, true], [2, false], [3, true]]);
+    expect(out[1].clashes.map(a => a.title)).toEqual(['Migration']);
+  });
+
+  it('counts a clash that merely touches the span at an edge', () => {
+    const acts = [tagged([1], { startDate: '2026-01-14', endDate: '2026-01-20' })];
+    // The span ends on the 14th; the activity starts on it. Both own that day.
+    expect(partitionBySpan(acts, [1], iv('2026-01-10', '2026-01-14'))[0].free).toBe(false);
+  });
+
+  it('does not count an activity that stops the day before', () => {
+    const acts = [tagged([1], { startDate: '2026-01-05', endDate: '2026-01-09' })];
+    expect(partitionBySpan(acts, [1], iv('2026-01-10', '2026-01-14'))[0].free).toBe(true);
+  });
+
+  it('ignores cancelled work and milestones, as the band does', () => {
+    const acts = [
+      tagged([1], { id: 'c', startDate: '2026-01-12', endDate: '2026-01-13', status: 'cancelled' }),
+      tagged([1], { id: 'm', startDate: '2026-01-12', endDate: '2026-01-12', isMilestone: true }),
+    ];
+    expect(partitionBySpan(acts, [1], iv('2026-01-10', '2026-01-14'))[0].free).toBe(true);
+  });
+
+  it('finds a clash from a recurring occurrence', () => {
+    const acts = [tagged([1], {
+      title: 'Standup',
+      startDate: '2026-01-05', endDate: '2026-01-05',
+      recurrence: { type: 'weekly', interval: 1, weekdays: [1] } as never,
+    })];
+    // 2026-01-19 is a Monday inside the span.
+    const out = partitionBySpan(acts, [1], iv('2026-01-18', '2026-01-20'));
+    expect(out[0].free).toBe(false);
+    expect(out[0].clashes.map(a => a.title)).toEqual(['Standup']);
+  });
+
+  it('reports every clashing activity, not just the first', () => {
+    const acts = [
+      tagged([1], { id: 'x', title: 'One', startDate: '2026-01-10', endDate: '2026-01-12' }),
+      tagged([1], { id: 'y', title: 'Two', startDate: '2026-01-13', endDate: '2026-01-15' }),
+    ];
+    expect(partitionBySpan(acts, [1], iv('2026-01-10', '2026-01-15'))[0].clashes.map(a => a.title))
+      .toEqual(['One', 'Two']);
+  });
+
+  it('returns an entry per person even with no activities at all', () => {
+    expect(partitionBySpan([], [7, 8], iv('2026-01-10', '2026-01-14')))
+      .toEqual([{ personId: 7, free: true, clashes: [] }, { personId: 8, free: true, clashes: [] }]);
   });
 });

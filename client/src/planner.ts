@@ -18,7 +18,7 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 import { DataManager } from './data-manager';
 import { showActivityDialog, showLaneDialog, showOutlookImportDialog } from './dialogs';
-import { randomId, laneColor, parseDate, formatDate, addDays, addMonths, getMonthStart, ColorBy, STATUS_COLORS, colorForString } from './utils';
+import { randomId, laneColor, parseDate, formatDate, addDays, addMonths, getMonthStart, ColorBy, STATUS_COLORS, colorForString, displayName } from './utils';
 import { buildFlyoverSVG, FlyoverLabel } from './flyover';
 import { defaultViewport, zoomIn, zoomOut, navigate, canZoomIn, canZoomOut, viewportLabel, navigateToYear, navigateToRange, navigateToToday, dateAtFraction, fractionOfDate } from './viewport';
 import { ZoomLevel } from './types';
@@ -529,6 +529,9 @@ export class Planner {
         );
         this.peopleRenderer.setDragCommitHandler((act, newStart, newEnd, newLaneId) =>
           this.handleDragCommit(act, newStart, newEnd, newLaneId)
+        );
+        this.peopleRenderer.setCreateFromBandHandler((start, end, freeIds, busyIds) =>
+          this.handleCreateFromBand(start, end, freeIds, busyIds)
         );
       } else {
         this.peopleRenderer.update(this.data, this.filterState);
@@ -2062,6 +2065,64 @@ export class Planner {
     if (!lane) return;
     showActivityDialog(laneId, this.data.lanes, date, null,
       (activity) => this.addActivity(activity), () => {}, this.config.endDate);
+  }
+
+  /**
+   * Create an activity from a stretch of the availability band.
+   *
+   * The people who are free on those dates are pre-tagged; the ones who are not
+   * are named in a toast rather than added silently. Tagging everyone would
+   * knowingly double-book them and make the planner assert something false;
+   * dropping them without a word is the kind of quiet surprise that stops people
+   * trusting a tool. Both stay visible, and the user decides.
+   *
+   * The lane is prefilled and editable, never silently chosen: a People row is a
+   * person, not a lane, so the click says who and when and nothing about where
+   * the activity lives. Hidden lanes are excluded — an activity created into one
+   * would vanish the moment it was saved.
+   */
+  private handleCreateFromBand(
+    start: Date,
+    end: Date,
+    freeIds: number[],
+    busyIds: number[],
+  ): void {
+    const lane = this.data.lanes.find(l => !this.filterState.hiddenLaneIds.has(l.id))
+      ?? this.data.lanes[0];
+    if (!lane) { this.handleAddLane(); return; }
+
+    const nameFor = (id: number): string => {
+      const m = this.members.find(x => x.id === id);
+      if (m) return displayName(m);
+      const tag = this.data.lanes
+        .flatMap(l => l.activities)
+        .flatMap(a => a.taggedUsers ?? [])
+        .find(u => u.id === id);
+      return tag ? displayName(tag) : `#${id}`;
+    };
+
+    const seed: Activity = {
+      id: '',
+      laneId: lane.id,
+      title: '',
+      startDate: formatDate(start),
+      endDate: formatDate(end),
+      taggedUsers: freeIds.map(id => ({ id, username: nameFor(id) })),
+    } as Activity;
+
+    if (busyIds.length > 0) {
+      toast.info(
+        `${busyIds.map(nameFor).join(', ')} ${busyIds.length === 1 ? 'is' : 'are'} busy then — not tagged. Add them in the dialog if you want them anyway.`,
+      );
+    }
+
+    // forceNew keeps this a CREATE despite passing a seed activity: the dialog
+    // reads dates, lane and tags from it but stays in create mode.
+    showActivityDialog(
+      lane.id, this.data.lanes, start, seed,
+      (activity) => this.addActivity(activity), () => {},
+      this.config.endDate, undefined, true,
+    );
   }
 
   private handleAddEvent(): void {

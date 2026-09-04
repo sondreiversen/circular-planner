@@ -297,11 +297,15 @@ the redundant expansions save at this scale. Do not add the cache.
    at once, so the user makes the trade-off instead of the code guessing. What remains open
    is the *interaction* — clicking a partial-coverage window must decide who gets tagged.
 
-2. **Clicking a partial-coverage window: who gets tagged?** If four of six are free and the
-   user picks that window, the created activity could tag all six (honest about intent, but
-   two people are double-booked), only the four who are free (accurate, but silently drops
-   people the user selected), or ask. This is the one genuinely open interaction question
-   the count band creates, and it did not exist under the strict boolean.
+2. ~~**Clicking a partial-coverage window: who gets tagged?**~~ **RESOLVED: prefill the
+   free ones, surface the rest.** The created activity pre-tags everyone free on those
+   dates; anyone busy is named with what they clash with, and can be added in the dialog.
+   Tagging all would knowingly double-book and make the planner assert something false;
+   tagging only the free ones would silently drop people the user deliberately selected.
+   Both stay visible and the user decides. Implemented as `partitionBySpan` in
+   `availability.ts` — it returns the clashing ACTIVITIES rather than a bare boolean,
+   because "Bo is busy with the migration, 10-15 Oct" is the information the Slack thread
+   was gathering, while "Bo is busy" only invites a blind override.
 
 3. ~~**What happens when the answer is "no window exists"?**~~ **Largely dissolved.** A
    count band always has something to show, even if that something is a row of zeroes. The

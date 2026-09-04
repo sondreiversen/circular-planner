@@ -4,7 +4,7 @@ import { getGridSpec } from './viewport';
 import { api } from './api-client';
 import { attachLinearDrag } from './pointer-drag';
 import { now } from './clock';
-import { availabilityFor, hiddenBlockingActivities, freeWindows } from './availability';
+import { availabilityFor, hiddenBlockingActivities, freeWindows, partitionBySpan } from './availability';
 
 export type DragCommitHandler = (activity: Activity, newStart: Date, newEnd: Date, newLaneId: string) => void;
 
@@ -36,6 +36,8 @@ export class PeopleRenderer {
   private membersLoaded = false;
   private onClickActivity?: (a: Activity) => void;
   private onDragCommit: DragCommitHandler | null = null;
+  private onCreateFromBand:
+    ((start: Date, end: Date, freeIds: number[], busyIds: number[]) => void) | null = null;
 
   private root!: HTMLElement;
   private resizeObs: ResizeObserver | null = null;
@@ -63,6 +65,13 @@ export class PeopleRenderer {
 
   setHandlers(onClickActivity: (a: Activity) => void): void {
     this.onClickActivity = onClickActivity;
+  }
+
+  /** Create from a stretch of the availability band: (start, end, freeIds, busyIds). */
+  setCreateFromBandHandler(
+    fn: ((start: Date, end: Date, freeIds: number[], busyIds: number[]) => void) | null,
+  ): void {
+    this.onCreateFromBand = fn;
   }
 
   setDragCommitHandler(fn: DragCommitHandler | null): void {
@@ -466,6 +475,30 @@ export class PeopleRenderer {
   }
 
   /**
+   * Hand a clicked stretch up to the planner, split into who is free and who is not.
+   *
+   * The split is the whole point. Tagging everyone would knowingly double-book
+   * the busy ones and make the planner assert something false; tagging only the
+   * free ones would silently drop people the user deliberately selected. The
+   * caller prefills the free ones and offers the rest with their clashes named.
+   */
+  private createFromBand(
+    start: Date,
+    end: Date,
+    personIds: number[],
+    allActivities: Activity[],
+  ): void {
+    if (!this.onCreateFromBand) return;
+    const split = partitionBySpan(allActivities, personIds, { start, end });
+    this.onCreateFromBand(
+      start,
+      end,
+      split.filter(p => p.free).map(p => p.personId),
+      split.filter(p => !p.free).map(p => p.personId),
+    );
+  }
+
+  /**
    * The availability summary row: how many of the people above are free each day.
    *
    * A COUNT rather than a boolean. Simulated on block-structured schedules over a
@@ -495,6 +528,10 @@ export class PeopleRenderer {
     // "workshop" into the search box marks everyone free. A filter is a viewing
     // preference, not a statement about what exists.
     const free = availabilityFor(allActivities, personIds, window);
+
+    // Same gate the drag affordance uses: reading the band is useful in a
+    // view-only planner, creating from it is not.
+    const canCreate = this.config.permission !== 'view' && this.onCreateFromBand !== null;
 
     const row = document.createElement('div');
     // cp-list-lane-row carries the flex layout the timeline needs a height from.
@@ -533,6 +570,13 @@ export class PeopleRenderer {
       seg.style.left = `${left}px`;
       seg.style.width = `${Math.max(2, dateToX(addDays(w.end, 1)) - left)}px`;
       seg.title = `Everyone free: ${formatDate(w.start)} → ${formatDate(w.end)}`;
+      if (canCreate) {
+        // pointer-events is off by default so the segment does not swallow the
+        // per-day cells underneath; turn it on only when it is actionable.
+        seg.style.pointerEvents = 'auto';
+        seg.classList.add('cp-availability-clickable');
+        seg.addEventListener('click', () => this.createFromBand(w.start, w.end, personIds, allActivities));
+      }
       timeline.appendChild(seg);
     });
 
@@ -554,7 +598,13 @@ export class PeopleRenderer {
       if (count === persons.length) cell.classList.add('cp-availability-cell--all');
       if (count === 0) cell.classList.add('cp-availability-cell--none');
       if (width >= 14) cell.textContent = String(count);
-      cell.title = `${formatDate(dayStart)}: ${count} of ${persons.length} free`;
+      cell.title = canCreate
+        ? `${formatDate(dayStart)}: ${count} of ${persons.length} free — click to create here`
+        : `${formatDate(dayStart)}: ${count} of ${persons.length} free`;
+      if (canCreate) {
+        cell.classList.add('cp-availability-clickable');
+        cell.addEventListener('click', () => this.createFromBand(dayStart, dayStart, personIds, allActivities));
+      }
       timeline.appendChild(cell);
     });
 
