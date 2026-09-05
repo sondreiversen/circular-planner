@@ -409,6 +409,31 @@ export function expandOccurrences(
     return { occurrences: results, truncated };
   }
 
-  // Unknown recurrence type: no occurrences, and nothing was cut short.
-  return { occurrences: [], truncated: false };
+  // ---- Unhandled recurrence type: two layers, because the failure is silent ----
+  //
+  // Returning [] here is the dangerous option, and it is what this used to do.
+  // An activity with a type no branch handles would vanish from every view AND
+  // make everyone tagged on it look FREE, because downstream a missing
+  // occurrence is indistinguishable from nothing scheduled. That is the exact
+  // silent-wrong-answer class availability.ts is built to avoid, and nothing
+  // would have pointed at this line.
+
+  // Layer 1, compile time. All four members of RecurrenceType are handled above,
+  // so `rec.type` narrows to `never` and this assignment compiles today. Add a
+  // fifth member without giving it a branch and THIS LINE FAILS THE BUILD —
+  // which, with `npm run typecheck` gating CI, is where that mistake gets caught
+  // instead of in a quietly empty availability band months later.
+  const unhandled: never = rec.type;
+
+  // Layer 2, run time. The compile-time guard cannot help with data this build
+  // never saw: a newer server, an import, a hand-edited row. Fall back to
+  // treating the activity as non-recurring, so it stays visible and keeps
+  // blocking rather than disappearing. It will be wrong about the repeats; it
+  // will not be wrong about whether the person is busy.
+  console.warn(
+    `expandOccurrences: unhandled recurrence type ${JSON.stringify(unhandled)} ` +
+    `on activity ${activity.id}; treating it as non-recurring`,
+  );
+  if (actEnd < rangeStart || actStart > rangeEnd) return { occurrences: [], truncated: false };
+  return { occurrences: [{ start: actStart, end: actEnd }], truncated: false };
 }

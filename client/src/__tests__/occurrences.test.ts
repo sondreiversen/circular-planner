@@ -1,4 +1,5 @@
 import { expandOccurrences, parseDate, formatDate, Occurrence } from '../utils';
+import { availabilityFor } from '../availability';
 import { Activity } from '../types';
 
 /**
@@ -311,5 +312,62 @@ describe('truncation — the flag that stops a wrong availability answer', () =>
     const { occurrences, truncated } = expand(a, '2027-01-01', '2027-12-31');
     expect(occurrences).toEqual([]);
     expect(truncated).toBe(false);
+  });
+});
+
+describe('unhandled recurrence type — the silent-wrong-answer guard', () => {
+  /**
+   * The compile-time half of this guard is an exhaustiveness check in
+   * expandOccurrences: adding a fifth RecurrenceType without a branch fails
+   * `npm run typecheck`, which gates CI. Verified by doing it — esbuild builds
+   * such a change happily, so the type gate is the only thing that catches it.
+   *
+   * These cover the runtime half, for data a build never saw: a newer server, an
+   * import, a hand-edited row. The cast is deliberate — it is the only way to
+   * construct the state the guard exists for.
+   */
+  const withBadType = (o: Partial<Activity> = {}) => act({
+    startDate: '2026-03-10', endDate: '2026-03-14',
+    recurrence: { type: 'biweekly', interval: 1 } as never,
+    ...o,
+  });
+
+  it('keeps the activity visible instead of dropping it', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const { occurrences, truncated } = expand(withBadType(), '2026-03-01', '2026-03-31');
+    // Returning [] here would make the activity vanish AND make everyone tagged
+    // on it look free. It falls back to the base dates instead.
+    expect(starts(occurrences)).toEqual(['2026-03-10']);
+    expect(formatDate(occurrences[0].end)).toBe('2026-03-14');
+    expect(truncated).toBe(false);
+    warn.mockRestore();
+  });
+
+  it('warns, so the mismatch is visible to a developer', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    expand(withBadType({ id: 'odd-one' }), '2026-03-01', '2026-03-31');
+    expect(warn).toHaveBeenCalledTimes(1);
+    const msg = String(warn.mock.calls[0][0]);
+    expect(msg).toContain('biweekly');
+    expect(msg).toContain('odd-one');
+    warn.mockRestore();
+  });
+
+  it('still respects the requested range', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(expand(withBadType(), '2027-01-01', '2027-12-31').occurrences).toEqual([]);
+    warn.mockRestore();
+  });
+
+  it('the fallback activity still blocks availability', () => {
+    // The point of the whole guard: an unrecognised type must not quietly free
+    // somebody up. Exercised through the real availability path.
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const a = withBadType({ taggedUsers: [{ id: 1, username: 'u1' }] });
+    const { counts } = availabilityFor([a], [1],
+      { start: parseDate('2026-03-09'), end: parseDate('2026-03-15') });
+    //                 Mar 9  10 11 12 13 14 15
+    expect(counts).toEqual([1, 0, 0, 0, 0, 0, 1]);
+    warn.mockRestore();
   });
 });
